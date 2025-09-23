@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+import prisma from "@/lib/prisma";
 
 // POST /api/daily-sales → add a sale
 export async function POST(req: Request) {
@@ -11,7 +11,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
     }
 
-    // Get product price
+    // ✅ Get product price
     const product = await prisma.product.findUnique({ where: { id: productId } });
     if (!product) {
       return NextResponse.json({ error: "Product not found" }, { status: 404 });
@@ -19,15 +19,22 @@ export async function POST(req: Request) {
 
     const amount = product.price * quantity;
 
+    // ✅ Create Sale + SaleItem
     const sale = await prisma.sale.create({
       data: {
-        productId,
-        quantity,
         amount,
         customerId: customerId || null,
+        saleItems: {
+          create: {
+            productId,
+            quantity,
+            price: product.price,
+            total: amount,
+          },
+        },
       },
       include: {
-        product: true,
+        saleItems: { include: { product: true } },
         customer: true,
       },
     });
@@ -44,7 +51,10 @@ export async function GET() {
   try {
     const sales = await prisma.sale.findMany({
       orderBy: { createdAt: "desc" },
-      include: { product: true, customer: true },
+      include: {
+        saleItems: { include: { product: true } },
+        customer: true,
+      },
     });
     return NextResponse.json(sales);
   } catch (error) {

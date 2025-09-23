@@ -1,29 +1,44 @@
 // /src/app/api/manual-messages/[id]/route.ts
-import { NextResponse } from 'next/server';
-import prisma from '@/lib/prisma';
+import { NextRequest, NextResponse } from "next/server";
+import prisma from "@/lib/prisma";
 
-interface Params { params: { id: string } }
+export async function PATCH(
+  request: NextRequest,
+  context: { params: Promise<{ id: string }> }
+) {
+  const { id } = await context.params; // ✅ must await
+  const messageId = Number(id);
 
-export async function PATCH(request: Request, { params }: Params) {
-  const id = Number(params.id);
+  if (isNaN(messageId)) {
+    return NextResponse.json({ error: "Invalid id" }, { status: 400 });
+  }
+
   const body = await request.json();
-  const { action } = body; // expect { action: 'mark_sent' } or 'cancel'
+  const { action } = body; // expect { action: "mark_sent" } or "cancel"
 
-  if (action === 'mark_sent') {
-    const updated = await prisma.manualMessageTask.update({
-      where: { id },
-      data: { status: 'SENT', sentAt: new Date() },
-    });
-    return NextResponse.json(updated);
+  try {
+    if (action === "mark_sent") {
+      const updated = await prisma.manualMessageTask.update({
+        where: { id: messageId },
+        data: { status: "SENT", sentAt: new Date() },
+      });
+      return NextResponse.json(updated);
+    }
+
+    if (action === "cancel") {
+      const updated = await prisma.manualMessageTask.update({
+        where: { id: messageId },
+        data: { status: "CANCELED" },
+      });
+      return NextResponse.json(updated);
+    }
+
+    return NextResponse.json({ error: "Unknown action" }, { status: 400 });
+  } catch (error) {
+    console.error("PATCH /manual-messages/[id] error:", error);
+    return NextResponse.json(
+      { error: "Failed to update manual message" },
+      { status: 500 }
+    );
   }
-
-  if (action === 'cancel') {
-    const updated = await prisma.manualMessageTask.update({
-      where: { id },
-      data: { status: 'CANCELED' },
-    });
-    return NextResponse.json(updated);
-  }
-
-  return NextResponse.json({ error: 'Unknown action' }, { status: 400 });
 }

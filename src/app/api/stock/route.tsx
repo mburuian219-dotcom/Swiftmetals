@@ -6,6 +6,7 @@ export async function GET() {
   try {
     const stock = await prisma.stock.findMany({
       orderBy: { createdAt: "desc" },
+      include: { product: true }, // ✅ include product details
     });
     return NextResponse.json(stock);
   } catch (error) {
@@ -18,6 +19,11 @@ export async function GET() {
 export async function POST(req: Request) {
   try {
     const body = await req.json();
+
+    if (!body.productId) {
+      return NextResponse.json({ error: "Product ID is required" }, { status: 400 });
+    }
+
     const stock = await prisma.stock.create({
       data: {
         name: body.name,
@@ -26,12 +32,17 @@ export async function POST(req: Request) {
         sellingPrice: parseFloat(body.sellingPrice),
         supplier: body.supplier || null,
         notes: body.notes || null,
+        product: {
+          connect: { id: Number(body.productId) }, // ✅ connect to Product
+        },
       },
+      include: { product: true },
     });
+
     return NextResponse.json(stock);
   } catch (error) {
     console.error("Error creating stock item:", error);
-    return NextResponse.json({ error: "Failed to create stock item" }, { status: 500 });
+    return NextResponse.json({ error: "Failed to create stock" }, { status: 500 });
   }
 }
 
@@ -39,9 +50,11 @@ export async function POST(req: Request) {
 export async function PUT(req: Request) {
   try {
     const body = await req.json();
+
     if (!body.id) {
       return NextResponse.json({ error: "Stock ID required" }, { status: 400 });
     }
+
     const stock = await prisma.stock.update({
       where: { id: Number(body.id) },
       data: {
@@ -51,8 +64,13 @@ export async function PUT(req: Request) {
         sellingPrice: parseFloat(body.sellingPrice),
         supplier: body.supplier || null,
         notes: body.notes || null,
+        ...(body.productId && {
+          product: { connect: { id: Number(body.productId) } }, // ✅ allow product change
+        }),
       },
+      include: { product: true },
     });
+
     return NextResponse.json(stock);
   } catch (error) {
     console.error("Error updating stock:", error);
@@ -64,10 +82,13 @@ export async function PUT(req: Request) {
 export async function DELETE(req: Request) {
   try {
     const body = await req.json();
+
     if (!body.id) {
       return NextResponse.json({ error: "Stock ID required" }, { status: 400 });
     }
+
     await prisma.stock.delete({ where: { id: Number(body.id) } });
+
     return NextResponse.json({ message: "Stock item deleted" });
   } catch (error) {
     console.error("Error deleting stock item:", error);

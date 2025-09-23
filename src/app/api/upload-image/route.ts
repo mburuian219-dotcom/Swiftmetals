@@ -1,8 +1,13 @@
 // src/app/api/upload-image/route.ts
 import { NextResponse } from "next/server";
-import { writeFile } from "fs/promises";
-import path from "path";
-import { v4 as uuidv4 } from "uuid";
+import { v2 as cloudinary } from "cloudinary";
+
+// Configure Cloudinary from env
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET,
+});
 
 export async function POST(req: Request) {
   try {
@@ -13,19 +18,18 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "No file uploaded" }, { status: 400 });
     }
 
-    const bytes = await file.arrayBuffer();
-    const buffer = Buffer.from(bytes);
+    // Convert file to base64
+    const arrayBuffer = await file.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
+    const base64 = buffer.toString("base64");
+    const dataURI = `data:${file.type};base64,${base64}`;
 
-    // Save in /public/uploads
-    const fileName = `${uuidv4()}-${file.name}`;
-    const filePath = path.join(process.cwd(), "public/uploads", fileName);
+    // Upload to Cloudinary
+    const uploadResponse = await cloudinary.uploader.upload(dataURI, {
+      folder: "catalog-products",
+    });
 
-    await writeFile(filePath, buffer);
-
-    // Return a URL accessible by the browser
-    const fileUrl = `/uploads/${fileName}`;
-
-    return NextResponse.json({ url: fileUrl }, { status: 201 });
+    return NextResponse.json({ url: uploadResponse.secure_url }, { status: 201 });
   } catch (error) {
     console.error("Upload error:", error);
     return NextResponse.json({ error: "Failed to upload image" }, { status: 500 });

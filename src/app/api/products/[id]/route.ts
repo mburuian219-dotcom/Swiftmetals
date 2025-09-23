@@ -1,10 +1,13 @@
-import { NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+import { NextRequest, NextResponse } from "next/server";
+import prisma from "@/lib/prisma";
 
 // GET /api/products/:id
-export async function GET(_req: Request, { params }: { params: { id: string } }) {
-  const id = Number(params.id);
-  const product = await prisma.product.findUnique({ where: { id } });
+export async function GET(
+  _req: NextRequest,
+  context: { params: Promise<{ id: string }> }
+) {
+  const { id } = await context.params; // ✅ must await
+  const product = await prisma.product.findUnique({ where: { id: Number(id) } });
 
   if (!product) {
     return NextResponse.json({ error: "Product not found" }, { status: 404 });
@@ -13,22 +16,34 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
 }
 
 // PUT /api/products/:id
-export async function PUT(req: Request, { params }: { params: { id: string } }) {
-  const id = Number(params.id);
+export async function PUT(
+  req: NextRequest,
+  context: { params: Promise<{ id: string }> }
+) {
+  const { id } = await context.params;
   const body = await req.json();
   const { name, description, price, stock, category } = body;
 
   const updatedProduct = await prisma.product.update({
-    where: { id },
-    data: { name, description, price: Number(price), stock: Number(stock), category },
+    where: { id: Number(id) },
+    data: {
+      name,
+      description,
+      price: Number(price),
+      stock: Number(stock),
+      category,
+    },
   });
 
   return NextResponse.json(updatedProduct);
 }
 
 // DELETE /api/products/:id
-export async function DELETE(_req: Request, { params }: { params: { id: string } }) {
-  const id = Number(params.id);
-  await prisma.product.delete({ where: { id } });
+export async function DELETE(
+  _req: NextRequest,
+  context: { params: Promise<{ id: string }> }
+) {
+  const { id } = await context.params;
+  await prisma.product.delete({ where: { id: Number(id) } });
   return NextResponse.json({ message: "Product deleted successfully" });
 }

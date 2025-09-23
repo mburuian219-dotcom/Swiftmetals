@@ -1,13 +1,15 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 
-// DELETE /api/payments/[id]?saleId=123
+// DELETE /api/payment/[id]?saleId=123
 export async function DELETE(
-  req: Request,
-  { params }: { params: { id: string } }
+  req: NextRequest,
+  context: { params: Promise<{ id: string }> }
 ) {
   try {
-    const paymentId = Number(params.id);
+    const { id } = await context.params; // ✅ must await in Next.js 15
+    const paymentId = Number(id);
+
     const { searchParams } = new URL(req.url);
     const saleId = Number(searchParams.get("saleId"));
 
@@ -38,8 +40,9 @@ export async function DELETE(
     }
 
     const totalPaid = sale.payments
-      .filter((p) => p.id !== paymentId) // ensure deleted payment isn't counted
+      .filter((p) => p.id !== paymentId) // don’t count deleted payment
       .reduce((sum, p) => sum + Number(p.amount), 0);
+
     const balance = sale.amount - totalPaid;
 
     let status: "UNPAID" | "PARTIAL" | "PAID" = "UNPAID";
