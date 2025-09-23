@@ -1,0 +1,266 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+// ==================== CUSTOMERS ====================
+model Customer {
+  id          Int       @id @default(autoincrement())
+  name        String
+  email       String
+  phone       String?
+  totalCredit Float     @default(0)
+  createdAt   DateTime  @default(now())
+
+  // Relations
+  sales       Sale[]
+  orders      Order[]
+  // ✅ Back relation for reminders
+  smsReminders SmsReminder[]
+   manualTasks  ManualMessageTask[]  // 👈 add this line
+}
+
+// ==================== PRODUCTS ====================
+model Product {
+  id          Int        @id @default(autoincrement())
+  name        String
+  description String?
+  price       Float
+  stock       Int       @default(0)   // ✅ add this
+  inStock     Boolean  @default(true)
+  category    String?
+  image    String?     // ✅ New: image for public catalog
+  isPublic    Boolean     @default(false) // ✅ New: flag for frontend/visitors
+
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  // Relations
+  orders      Order[]
+  stockItems  Stock[]
+  saleItems   SaleItem[]
+}
+
+model CatalogProduct {
+  id          Int      @id @default(autoincrement())
+  name        String
+  description String?
+  price       Float
+  category    String?
+  image       String?   // store image URL or base64 string
+  inStock     Boolean   @default(true)
+  isPublic    Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+}
+
+
+// ==================== ORDERS ====================
+model Order {
+  id         Int      @id @default(autoincrement())
+  quantity   Int
+  amount     Float
+  status     String   @default("PENDING")
+  createdAt  DateTime @default(now())
+
+  // Relations
+  customer   Customer @relation(fields: [customerId], references: [id])
+  customerId Int
+
+  product    Product  @relation(fields: [productId], references: [id])
+  productId  Int
+}
+
+// ==================== SALES ====================
+model Sale {
+  id               Int        @id @default(autoincrement())
+  createdAt        DateTime   @default(now())
+  updatedAt        DateTime   @updatedAt
+  amount           Float
+  status           String     @default("UNPAID")
+  dueDate          DateTime?
+  date             DateTime   @default(now())
+  paymentMethod    String     @default("CASH")
+  checkDepositDate DateTime?  // ✅ keep it here if needed
+  isCheckDeposited Boolean    @default(false)
+  remindersSent    Int        @default(0)
+  lastReminderDate DateTime?
+
+  customerId Int
+  customer   Customer   @relation(fields: [customerId], references: [id])
+
+  payments   Payment[]
+  saleItems  SaleItem[]
+  smsReminders     SmsReminder[]
+  paymentSchedules PaymentSchedule[]
+
+  @@index([status])
+  @@index([paymentMethod])
+  @@index([dueDate])
+  @@index([checkDepositDate])
+}
+
+
+
+
+model SaleItem {
+  id        Int      @id @default(autoincrement())
+  quantity  Int
+  price     Float
+  total     Float
+
+  // Relations
+  saleId    Int
+  sale      Sale     @relation(fields: [saleId], references: [id], onDelete: Cascade)
+
+  productId Int
+  product   Product  @relation(fields: [productId], references: [id])
+
+  @@index([saleId]) // Index for sale item queries
+}
+
+// ==================== EXPENSES ====================
+model Expense {
+  id        Int      @id @default(autoincrement())
+  title     String
+  amount    Float
+  category  String?
+  notes     String?
+  date      DateTime @default(now())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ==================== STOCK ====================
+model Stock {
+  id           Int      @id @default(autoincrement())
+  name         String
+  quantity     Int      @default(0)
+  costPrice    Float
+  productId    Int
+  sellingPrice Float
+  supplier     String?
+  notes        String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  product      Product  @relation(fields: [productId], references: [id])
+
+  @@index([productId]) // Index for product stock queries
+}
+
+enum PaymentStatus {
+  PENDING
+  CLEARED
+  BOUNCED
+  COMPLETED
+}
+
+model Payment {
+  id          Int      @id @default(autoincrement())
+  saleId      Int
+  amount      Float
+  method      String   // CASH, MPESA, BANK, CHECK, CARD
+  note        String?
+
+  // Dates
+  paidAt      DateTime @default(now())
+  verifiedAt  DateTime?
+  checkDepositDate DateTime?
+
+  // References
+  referenceId String?
+  checkNumber String?
+  checkDate   DateTime?
+  bankName    String?
+
+  // Verification
+  isVerified  Boolean   @default(false)
+  status      PaymentStatus @default(PENDING)  // ✅ new field
+
+  // Relations
+  sale        Sale @relation(fields: [saleId], references: [id], onDelete: Cascade)
+
+  @@index([saleId])
+  @@index([method])
+  @@index([isVerified])
+  @@index([status])
+}
+
+
+
+
+// ==================== SMS REMINDERS ====================
+// ✨ NEW: Track SMS reminders sent
+model SmsReminder {
+  id          Int      @id @default(autoincrement())
+  saleId      Int
+  customerId  Int
+  phone       String
+  message     String
+  type        String   // "PAYMENT_DUE", "CHECK_DEPOSIT", "OVERDUE"
+  status      String   @default("SENT") // SENT, DELIVERED, FAILED
+  sentAt      DateTime @default(now())
+  deliveredAt DateTime?
+  
+  // Relations
+  sale        Sale     @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  customer    Customer @relation(fields: [customerId], references: [id])
+
+  @@index([saleId])
+  @@index([customerId])
+  @@index([type])
+  @@index([status])
+}
+
+// ==================== PAYMENT SCHEDULES ====================
+// ✨ NEW: For installment payments and scheduled reminders
+model PaymentSchedule {
+  id              Int      @id @default(autoincrement())
+  saleId          Int
+  installmentNumber Int    // 1st, 2nd, 3rd installment
+  dueAmount       Float
+  dueDate         DateTime
+  isPaid          Boolean  @default(false)
+  paidAmount      Float    @default(0)
+  paidAt          DateTime?
+  createdAt       DateTime @default(now())
+  
+  // Relations
+  sale            Sale     @relation(fields: [saleId], references: [id], onDelete: Cascade)
+
+  @@index([saleId])
+  @@index([dueDate])
+  @@index([isPaid])
+}
+
+// ==================== SYSTEM SETTINGS ====================
+// ✨ NEW: Store system-wide settings
+model SystemSetting {
+  id          Int      @id @default(autoincrement())
+  key         String   @unique // e.g. "reminder_days_before", "sms_enabled"
+  value       String   // Store as JSON string for complex values
+  description String?
+  updatedAt   DateTime @updatedAt
+
+  @@index([key])
+}
+model ManualMessageTask {
+  id            Int      @id @default(autoincrement())
+  customerId    Int
+  phone         String
+  message       String
+  failureReason String?
+  status        String   @default("PENDING") // PENDING | SENT | CANCELED
+  createdAt     DateTime @default(now())
+  sentAt        DateTime?
+
+  customer      Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@index([customerId])
+  @@index([status])
+}

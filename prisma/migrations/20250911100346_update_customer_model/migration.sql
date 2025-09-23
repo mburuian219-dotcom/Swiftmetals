@@ -1,0 +1,4 @@
+-- AlterTable
+ALTER TABLE `customer` ADD COLUMN `phone` VARCHAR(191) NULL,
+    ADD COLUMN `totalCredit` DOUBLE NOT NULL DEFAULT 0,
+    MODIFY `email` VARCHAR(191) NULL;

@@ -1,0 +1,3 @@
+-- AlterTable
+ALTER TABLE `sale` ADD COLUMN `dueDate` DATETIME(3) NULL,
+    ADD COLUMN `status` VARCHAR(191) NOT NULL DEFAULT 'PAID';
