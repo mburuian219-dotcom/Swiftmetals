@@ -166,59 +166,63 @@ export default function OrdersPage() {
     return orderItems.reduce((sum, item) => sum + item.total, 0);
   };
 
-  const handlePlaceOrder = async () => {
-    if (!selectedCustomerId || orderItems.length === 0) {
-      alert("Please select a customer and add at least one item");
-      return;
-    }
+ const handlePlaceOrder = async () => {
+  try {
+    // Prepare order data
+    const orderData = {
+      customerId: parseInt(selectedCustomerId),
+      items: orderItems.map((item) => ({
+        productId: Number(item.productId),
+        quantity: Number(item.quantity),
+        price: Number(item.price),
+      })),
+      status: orderStatus,
+      paymentMethod: "CASH",
+      dueDate: null, // add if needed
+    };
 
-    // Validate all items
-    const invalidItems = orderItems.some(
-      (item) => !item.productId || item.quantity <= 0 || !item.price
+    // Optional: client-side stock pre-check
+    const outOfStockItem = orderItems.find(
+      (item) =>
+        item.quantity >
+        (products.find((p) => p.id === Number(item.productId))?.stock || 0)
     );
-    if (invalidItems) {
-      alert("Please ensure all items have a product, valid quantity, and price");
+
+    if (outOfStockItem) {
+      alert(`Not enough stock for ${outOfStockItem.productName || "this item"}`);
       return;
     }
 
-    try {
-      const orderData = {
-        customerId: parseInt(selectedCustomerId),
-        items: orderItems.map((item) => ({
-          productId: Number(item.productId),
-          quantity: Number(item.quantity),
-          price: Number(item.price),
-        })),
-        status: orderStatus,
-        paymentMethod: "CASH",
-      };
+    // Send order to API
+    const response = await fetch("/api/orders", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(orderData),
+    });
 
-      const response = await fetch("/api/orders", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(orderData),
-      });
+    const result = await response.json();
 
-      if (response.ok) {
-        const newOrder = await response.json();
-        setOrders([newOrder, ...orders]);
+    if (response.ok) {
+      // Add new order to state
+      setOrders([result, ...orders]);
 
-        // Reset form
-        setOrderItems([]);
-        setSelectedCustomerId("");
-        setOrderStatus("PENDING");
-        setIsAddingOrder(false);
+      // Reset form
+      setOrderItems([]);
+      setSelectedCustomerId("");
+      setOrderStatus("PENDING");
+      setIsAddingOrder(false);
 
-        alert("Order placed successfully!");
-      } else {
-        const err = await response.json();
-        throw new Error(err.error || "Failed to place order");
-      }
-    } catch (error) {
-      console.error("Error placing order:", error);
-      alert("Error placing order. Please try again.");
+      alert("Order placed successfully!");
+    } else {
+      // Show API error (e.g., out-of-stock)
+      alert(result.error || "Error placing order");
     }
-  };
+  } catch (error: any) {
+    console.error("Error placing order:", error);
+    alert(error.message || "Error placing order. Please try again.");
+  }
+};
+
 
   // Update order status
   const updateOrderStatus = async (orderId: number, newStatus: string) => {

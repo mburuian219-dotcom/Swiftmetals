@@ -134,7 +134,7 @@ const Navbar: React.FC<NavbarProps> = ({ onMenuClick }) => {
         <div className="flex items-center space-x-4">
           <div className="relative">
             <Bell className="w-6 h-6 text-slate-600 cursor-pointer hover:text-slate-900" />
-            <span className="absolute -top-1 -right-1 bg-red-500 text-white text-xs rounded-full w-4 h-4 flex items-center justify-center">2</span>
+            <span className="absolute -top-1 -right-1 bg-red-500 text-white text-xs rounded-full w-4 h-4 flex items-center justify-center"></span>
           </div>
           <button
             className="bg-gradient-to-r from-red-500 to-red-600 text-white px-6 py-2 rounded-lg hover:shadow-lg transition-all duration-200 font-medium"
@@ -421,9 +421,7 @@ const ProfileSection: React.FC = () => (
 
     {/* Logout */}
     <div className="text-center">
-      <button className="px-6 py-3 rounded-xl font-semibold bg-gradient-to-r from-red-500 to-pink-600 text-white hover:shadow-lg transition-all duration-200">
-        Logout
-      </button>
+     
     </div>
   </div>
 );

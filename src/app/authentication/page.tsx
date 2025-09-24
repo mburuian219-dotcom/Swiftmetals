@@ -57,8 +57,11 @@ if (adminEmails.includes(email.toLowerCase())) {
 
       router.push("/dashboard/user");
     } catch (err: any) {
-      setError(err.message);
-    }
+      console.error("Signup error:", err);
+      if (err.code === "auth/email-already-in-use") {
+        setError("This email is already registered. Please log in.");
+        setIsLogin(true);
+      }}
   };
 
   return (

@@ -144,49 +144,63 @@ export default function ReportsPage() {
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 mb-8">
-          {/* Top Products */}
-          <div className="lg:col-span-2 bg-white rounded-xl shadow-lg p-6 border border-gray-100">
-            <div className="flex items-center gap-3 mb-6">
-              <div className="bg-gradient-to-r from-orange-500 to-red-500 p-2 rounded-lg">
-                <Star className="w-5 h-5 text-white" />
+         {/* Top Products */}
+<div className="lg:col-span-2 bg-white rounded-xl shadow-lg p-6 border border-gray-100">
+  <div className="flex items-center gap-3 mb-6">
+    <div className="bg-gradient-to-r from-orange-500 to-red-500 p-2 rounded-lg">
+      <Star className="w-5 h-5 text-white" />
+    </div>
+    <h2 className="text-xl font-bold text-gray-800">Top Selling Products</h2>
+  </div>
+
+  {topProducts.length > 0 ? (
+    <div className="space-y-4">
+      {topProducts.map(([name, qty], index) => {
+        // Ensure qty is always a number
+        const safeQty = isNaN(Number(qty)) ? 0 : Number(qty);
+
+        return (
+          <div
+            key={name}
+            className="flex items-center justify-between p-4 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors duration-200"
+          >
+            <div className="flex items-center gap-4">
+              <div className="flex-shrink-0">
+                <div
+                  className={`w-10 h-10 rounded-full flex items-center justify-center text-white font-bold text-sm ${
+                    index === 0
+                      ? 'bg-gradient-to-r from-yellow-400 to-yellow-500'
+                      : index === 1
+                      ? 'bg-gradient-to-r from-gray-400 to-gray-500'
+                      : index === 2
+                      ? 'bg-gradient-to-r from-amber-600 to-amber-700'
+                      : 'bg-gradient-to-r from-blue-400 to-blue-500'
+                  }`}
+                >
+                  #{index + 1}
+                </div>
               </div>
-              <h2 className="text-xl font-bold text-gray-800">Top Selling Products</h2>
+              <div>
+                <h3 className="font-semibold text-gray-800">{name}</h3>
+                <p className="text-sm text-gray-600">Product</p>
+              </div>
             </div>
-            
-            {topProducts.length > 0 ? (
-              <div className="space-y-4">
-                {topProducts.map(([name, qty], index) => (
-                  <div key={name} className="flex items-center justify-between p-4 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors duration-200">
-                    <div className="flex items-center gap-4">
-                      <div className="flex-shrink-0">
-                        <div className={`w-10 h-10 rounded-full flex items-center justify-center text-white font-bold text-sm ${
-                          index === 0 ? 'bg-gradient-to-r from-yellow-400 to-yellow-500' :
-                          index === 1 ? 'bg-gradient-to-r from-gray-400 to-gray-500' :
-                          index === 2 ? 'bg-gradient-to-r from-amber-600 to-amber-700' :
-                          'bg-gradient-to-r from-blue-400 to-blue-500'
-                        }`}>
-                          #{index + 1}
-                        </div>
-                      </div>
-                      <div>
-                        <h3 className="font-semibold text-gray-800">{name}</h3>
-                        <p className="text-sm text-gray-600">Product</p>
-                      </div>
-                    </div>
-                    <div className="text-right">
-                      <p className="text-lg font-bold text-gray-800">{qty}</p>
-                      <p className="text-sm text-gray-600">units sold</p>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <div className="text-center py-8 text-gray-500">
-                <ShoppingCart className="w-12 h-12 mx-auto mb-3 text-gray-300" />
-                <p>No products data available</p>
-              </div>
-            )}
+            <div className="text-right">
+              <p className="text-lg font-bold text-gray-800">{safeQty}</p>
+              <p className="text-sm text-gray-600">units sold</p>
+            </div>
           </div>
+        );
+      })}
+    </div>
+  ) : (
+    <div className="text-center py-8 text-gray-500">
+      <ShoppingCart className="w-12 h-12 mx-auto mb-3 text-gray-300" />
+      <p>No products data available</p>
+    </div>
+  )}
+</div>
+
 
           {/* Quick Actions */}
           <div className="bg-white rounded-xl shadow-lg p-6 border border-gray-100">
