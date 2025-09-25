@@ -41,7 +41,7 @@ model expense {
   notes     String?
   date      DateTime @default(now())
   createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt 
+  updatedAt DateTime @updatedAt
 }
 
 model invoice {
@@ -162,7 +162,6 @@ model stock {
   @@index([productId], map: "Stock_productId_idx")
 }
 
-
 model sale {
   id               Int               @id @default(autoincrement())
   customerId       Int
@@ -171,7 +170,7 @@ model sale {
   createdAt        DateTime          @default(now())
   dueDate          DateTime?
   status           String            @default("UNPAID")
-  updatedAt   DateTime  @updatedAt 
+  updatedAt        DateTime          @updatedAt
   checkDepositDate DateTime?
   isCheckDeposited Boolean           @default(false)
   lastReminderDate DateTime?
@@ -223,7 +222,6 @@ model smsreminder {
   @@index([status], map: "SmsReminder_status_idx")
   @@index([type], map: "SmsReminder_type_idx")
 }
-
 
 model systemsetting {
   id          Int      @id @default(autoincrement())
