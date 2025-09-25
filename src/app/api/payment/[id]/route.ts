@@ -4,10 +4,10 @@ import prisma from "@/lib/prisma";
 // DELETE /api/payment/[id]?saleId=123
 export async function DELETE(
   req: NextRequest,
-  context: { params: Promise<{ id: string }> }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const { id } = await context.params; // ✅ must await in Next.js 15
+    const { id } = await params; // ✅ must await in Next.js 15
     const paymentId = Number(id);
 
     const { searchParams } = new URL(req.url);

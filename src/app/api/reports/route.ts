@@ -1,16 +1,16 @@
 import { NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+import prisma from "@/lib/prisma";
 import ExcelJS from "exceljs";
 import fs from "fs";
 import path from "path";
 
 export async function GET() {
   try {
-    // ✅ Fetch sales with customer and products via saleItems
+    // ✅ Fetch sales with customer and products via saleitem (correct relation name)
     const sales = await prisma.sale.findMany({
       include: {
         customer: true,
-        saleItems: { include: { product: true } },
+        saleitem: { include: { product: true } },
       },
       orderBy: { createdAt: "desc" },
     });
@@ -35,14 +35,14 @@ export async function GET() {
 
     // ✅ Populate sales rows (with multiple products per sale)
     sales.forEach((s) => {
-      s.saleItems.forEach((item) => {
+      s.saleitem.forEach((item) => {
         sheet.addRow({
           id: `S-${s.id}`,
           type: "Sale",
           description: `${item.product?.name || "Product"} sold to ${
             s.customer?.name || "Unknown"
           }`,
-          amount: s.amount, // total sale amount (could also use item.price * item.quantity if needed)
+          amount: s.amount, // total sale amount
           date: s.createdAt.toISOString(),
         });
       });

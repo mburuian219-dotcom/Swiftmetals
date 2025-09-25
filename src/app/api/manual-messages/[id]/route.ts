@@ -6,7 +6,7 @@ export async function PATCH(
   request: NextRequest,
   context: { params: Promise<{ id: string }> }
 ) {
-  const { id } = await context.params; // ✅ must await
+  const { id } = await context.params;
   const messageId = Number(id);
 
   if (isNaN(messageId)) {
@@ -18,7 +18,7 @@ export async function PATCH(
 
   try {
     if (action === "mark_sent") {
-      const updated = await prisma.manualMessageTask.update({
+      const updated = await prisma.manualmessagetask.update({
         where: { id: messageId },
         data: { status: "SENT", sentAt: new Date() },
       });
@@ -26,7 +26,7 @@ export async function PATCH(
     }
 
     if (action === "cancel") {
-      const updated = await prisma.manualMessageTask.update({
+      const updated = await prisma.manualmessagetask.update({
         where: { id: messageId },
         data: { status: "CANCELED" },
       });
@@ -34,7 +34,7 @@ export async function PATCH(
     }
 
     return NextResponse.json({ error: "Unknown action" }, { status: 400 });
-  } catch (error) {
+  } catch (error: any) {
     console.error("PATCH /manual-messages/[id] error:", error);
     return NextResponse.json(
       { error: "Failed to update manual message" },

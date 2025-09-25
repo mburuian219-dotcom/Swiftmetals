@@ -7,12 +7,17 @@ export async function GET() {
     const orders = await prisma.sale.findMany({
       include: {
         customer: true,
-        saleitem: { include: { product: true } }, // updated to lowercase
+        saleitem: { include: { product: true } }, // ✅ correct relation
       },
       orderBy: { createdAt: "desc" },
     });
 
-    return NextResponse.json(orders);
+    return NextResponse.json(
+      orders.map((o) => ({
+        ...o,
+        saleitems: o.saleitem, // ✅ normalize for frontend
+      }))
+    );
   } catch (error: any) {
     console.error("GET /api/orders error:", error);
     return NextResponse.json({ error: error.message }, { status: 500 });
@@ -97,7 +102,10 @@ export async function POST(req: Request) {
       });
     }
 
-    return NextResponse.json(order);
+    return NextResponse.json({
+      ...order,
+      saleitems: order.saleitem, // ✅ normalize for frontend
+    });
   } catch (error: any) {
     console.error("POST /api/orders error:", error);
     return NextResponse.json({ error: error.message }, { status: 500 });

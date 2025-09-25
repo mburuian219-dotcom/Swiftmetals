@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+import prisma from "@/lib/prisma";
 
 export async function POST(req: Request) {
   try {
@@ -7,7 +7,10 @@ export async function POST(req: Request) {
 
     // Validation
     if (!data.saleId || !data.totalAmount || !data.invoiceNumber || !data.generatedBy) {
-      return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
+      return NextResponse.json(
+        { error: "Missing required fields" },
+        { status: 400 }
+      );
     }
 
     const newInvoice = await prisma.invoice.create({
@@ -17,14 +20,18 @@ export async function POST(req: Request) {
         totalAmount: Number(data.totalAmount),
         amountPaid: Number(data.amountPaid ?? 0),
         balance: Number(data.balance ?? data.totalAmount),
-        status: data.status?.toUpperCase() || "UNPAID",
+        status: (data.status?.toUpperCase() as "UNPAID" | "PAID" | "PARTIAL") || "UNPAID",
         generatedBy: Number(data.generatedBy),
+        updatedAt: new Date(), // ✅ required field
       },
     });
 
     return NextResponse.json(newInvoice, { status: 201 });
-  } catch (err) {
+  } catch (err: any) {
     console.error("❌ [API] Failed to create invoice:", err);
-    return NextResponse.json({ error: "Failed to create invoice" }, { status: 500 });
+    return NextResponse.json(
+      { error: err.message || "Failed to create invoice" },
+      { status: 500 }
+    );
   }
 }

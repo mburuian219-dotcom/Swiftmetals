@@ -7,11 +7,13 @@ export async function GET() {
     const payments = await prisma.payment.findMany({
       include: {
         sale: {
-          include: {
-            customer: true,
-            saleitem: { include: { product: true } },
-          },
-        },
+  include: {
+    customer: true,
+    saleitem: { include: { product: true } },
+    payment: true, // ✅ so recalculation works consistently
+  },
+},
+
       },
       orderBy: { paidAt: "desc" },
     });

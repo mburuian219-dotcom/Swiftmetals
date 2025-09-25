@@ -1,12 +1,44 @@
 import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 
-export async function PUT(
+// ---------------- GET /api/sales/[id] ----------------
+export async function GET(
   req: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const { id } = params; // ✅ no need to await
+    const { id } = await params;
+
+    const sale = await prisma.sale.findUnique({
+      where: { id: Number(id) },
+      include: {
+        customer: true,
+        saleitem: { include: { product: true } },
+        payment: true,
+      },
+    });
+
+    if (!sale) {
+      return NextResponse.json({ error: "Sale not found" }, { status: 404 });
+    }
+
+    return NextResponse.json(sale);
+  } catch (error: any) {
+    console.error("❌ GET Sale Error:", error);
+    return NextResponse.json(
+      { error: error.message || "Failed to fetch sale" },
+      { status: 500 }
+    );
+  }
+}
+
+// ---------------- PUT /api/sales/[id] ----------------
+export async function PUT(
+  req: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  try {
+    const { id } = await params;
     const body = await req.json();
 
     const sale = await prisma.sale.findUnique({
@@ -55,7 +87,6 @@ export async function PUT(
     if (balance <= 0 && pendingPayments.length === 0) status = "PAID";
     else if (totalPaid > 0 || pendingPayments.length > 0) status = "PARTIAL";
 
-    // ✅ Update sale with recalculated values
     const updatedSale = await prisma.sale.update({
       where: { id: sale.id },
       data: {
@@ -81,6 +112,28 @@ export async function PUT(
     console.error("❌ Update Sale Error:", error);
     return NextResponse.json(
       { error: error.message || "Failed to update sale" },
+      { status: 500 }
+    );
+  }
+}
+
+// ---------------- DELETE /api/sales/[id] ----------------
+export async function DELETE(
+  req: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  try {
+    const { id } = await params;
+
+    const sale = await prisma.sale.delete({
+      where: { id: Number(id) },
+    });
+
+    return NextResponse.json({ message: "Sale deleted successfully", sale });
+  } catch (error: any) {
+    console.error("❌ Delete Sale Error:", error);
+    return NextResponse.json(
+      { error: error.message || "Failed to delete sale" },
       { status: 500 }
     );
   }

@@ -20,7 +20,7 @@ export async function POST(req: NextRequest) {
       console.warn(`⚠️ User ${phone} is blacklisted`);
 
       if (taskId) {
-        await prisma.manualMessageTask.update({
+        await prisma.manualmessagetask.update({ // ✅ corrected
           where: { id: taskId },
           data: {
             status: "BLACKLISTED",
@@ -37,7 +37,7 @@ export async function POST(req: NextRequest) {
 
     // ✅ Success flow
     if (taskId) {
-      await prisma.manualMessageTask.update({
+      await prisma.manualmessagetask.update({ // ✅ corrected
         where: { id: taskId },
         data: {
           status: "SENT",
