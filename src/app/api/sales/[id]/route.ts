@@ -3,32 +3,33 @@ import prisma from "@/lib/prisma";
 
 export async function PUT(
   req: NextRequest,
-  context: { params: Promise<{ id: string }> }
+  { params }: { params: { id: string } }
 ) {
   try {
-    const { id } = await context.params; // ✅ must await in Next.js 15
-    if (!id) {
-      return NextResponse.json({ error: "Sale ID is required" }, { status: 400 });
-    }
-
+    const { id } = params; // ✅ no need to await
     const body = await req.json();
 
     const sale = await prisma.sale.findUnique({
       where: { id: Number(id) },
-      include: { payments: true },
+      include: { payment: true, saleitem: { include: { product: true } } },
     });
 
     if (!sale) {
       return NextResponse.json({ error: "Sale not found" }, { status: 404 });
     }
 
-    // ✅ Add new payment if provided (instead of overwriting all)
+    // ✅ Add new payment if provided
     if (body.payment) {
       await prisma.payment.create({
         data: {
           saleId: sale.id,
           amount: Number(body.payment.amount),
           method: body.payment.method,
+          status:
+            body.payment.method === "CHECK" &&
+            !body.payment.checkDepositDate
+              ? "PENDING"
+              : "CLEARED",
           referenceId: body.payment.referenceId || null,
           checkDate: body.payment.checkDepositDate
             ? new Date(body.payment.checkDepositDate)
@@ -38,19 +39,23 @@ export async function PUT(
       });
     }
 
-    // ✅ Recalculate totals
-    const totalPaid = await prisma.payment.aggregate({
+    // ✅ Recalculate totals & status
+    const allPayments = await prisma.payment.findMany({
       where: { saleId: sale.id },
-      _sum: { amount: true },
     });
 
-    const paid = totalPaid._sum.amount || 0;
-    const balance = sale.amount - paid;
+    const totalPaid = allPayments
+      .filter((p) => p.status === "CLEARED")
+      .reduce((sum, p) => sum + p.amount, 0);
+
+    const pendingPayments = allPayments.filter((p) => p.status === "PENDING");
+    const balance = sale.amount - totalPaid;
 
     let status: "UNPAID" | "PARTIAL" | "PAID" = "UNPAID";
-    if (balance <= 0) status = "PAID";
-    else if (paid > 0) status = "PARTIAL";
+    if (balance <= 0 && pendingPayments.length === 0) status = "PAID";
+    else if (totalPaid > 0 || pendingPayments.length > 0) status = "PARTIAL";
 
+    // ✅ Update sale with recalculated values
     const updatedSale = await prisma.sale.update({
       where: { id: sale.id },
       data: {
@@ -62,15 +67,15 @@ export async function PUT(
       },
       include: {
         customer: true,
-        saleItems: { include: { product: true } },
-        payments: true,
+        saleitem: { include: { product: true } },
+        payment: true,
       },
     });
 
     return NextResponse.json({
       ...updatedSale,
       balance,
-      totalPaid: paid,
+      totalPaid,
     });
   } catch (error: any) {
     console.error("❌ Update Sale Error:", error);

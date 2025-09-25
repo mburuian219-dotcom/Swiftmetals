@@ -5,7 +5,7 @@ import { prisma } from "@/lib/prisma";
 export async function GET() {
   try {
     const customers = await prisma.customer.findMany({
-      include: { sales: true },
+      include: { sale: true },
       orderBy: { createdAt: "desc" },
     });
     return NextResponse.json(customers);
@@ -27,8 +27,8 @@ export async function POST(req: Request) {
     const newCustomer = await prisma.customer.create({
       data: {
         name: data.name,
-        phone: data.phone ?? null,   // optional
-        email: data.email ?? null,   // optional
+        phone: data.phone ?? null,
+        email: data.email ?? null,
         totalCredit: data.totalCredit ?? 0,
       },
     });
@@ -53,8 +53,8 @@ export async function PUT(req: Request) {
       where: { id: Number(data.id) },
       data: {
         name: data.name,
-        phone: data.phone ?? null,   // optional
-        email: data.email ?? null,   // optional
+        phone: data.phone ?? null,
+        email: data.email ?? null,
         totalCredit: data.totalCredit ?? undefined,
       },
     });
@@ -69,7 +69,9 @@ export async function PUT(req: Request) {
 // ===================== DELETE =====================
 export async function DELETE(req: Request) {
   try {
-    const { id } = await req.json();
+    // Get ID from query parameter
+    const url = new URL(req.url);
+    const id = url.searchParams.get("id");
 
     if (!id) {
       return NextResponse.json({ error: "Customer ID is required" }, { status: 400 });

@@ -170,16 +170,20 @@ export default function OrdersPage() {
   try {
     // Prepare order data
     const orderData = {
-      customerId: parseInt(selectedCustomerId),
-      items: orderItems.map((item) => ({
-        productId: Number(item.productId),
-        quantity: Number(item.quantity),
-        price: Number(item.price),
-      })),
-      status: orderStatus,
-      paymentMethod: "CASH",
-      dueDate: null, // add if needed
-    };
+  customerId: parseInt(selectedCustomerId),
+  items: orderItems.map(item => ({
+    productId: Number(item.productId),
+    quantity: Number(item.quantity),
+    price: Number(item.price),
+  })),
+  status: orderStatus,
+};
+
+await fetch("/api/orders", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify(orderData),
+});
 
     // Optional: client-side stock pre-check
     const outOfStockItem = orderItems.find(
@@ -246,17 +250,21 @@ export default function OrdersPage() {
   };
 
   // Filter orders
-  const filteredOrders = orders.filter(order => {
-    const matchesSearch = order.customer.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                         order.orderNumber?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                         (order.items?.some(item => item.productName.toLowerCase().includes(searchTerm.toLowerCase())) ||
-                          order.saleItems?.some(item => item.product?.name.toLowerCase().includes(searchTerm.toLowerCase())));
-    
-    const matchesStatus = statusFilter === "ALL" || order.status === statusFilter;
-    const matchesDate = !dateFilter || order.date.includes(dateFilter);
-    
-    return matchesSearch && matchesStatus && matchesDate;
-  });
+  // Filter orders
+const filteredOrders = orders.filter(order => {
+  const matchesSearch =
+    (order.customer?.name?.toLowerCase().includes(searchTerm.toLowerCase()) || false) ||
+    (order.orderNumber?.toLowerCase().includes(searchTerm.toLowerCase()) || false) ||
+    (order.items?.some(item => item.productName?.toLowerCase().includes(searchTerm.toLowerCase())) || false) ||
+    (order.saleItems?.some(item => item.product?.name?.toLowerCase().includes(searchTerm.toLowerCase())) || false);
+
+  const matchesStatus = statusFilter === "ALL" || order.status === statusFilter;
+  const matchesDate = !dateFilter || order.date?.includes(dateFilter);
+
+  return matchesSearch && matchesStatus && matchesDate;
+});
+
+
 
   // Summary calculations - handle both amount and totalAmount
   const totalOrders = orders.length;
@@ -438,15 +446,15 @@ export default function OrdersPage() {
                     </div>
 
                     {/* Price (readonly) */}
-                    <div className="w-28">
-                      <input
-                        type="text"
-                        value={item.price ? `KSh ${item.price.toLocaleString()}` : ''}
-                        readOnly
-                        className="w-full p-3 bg-gray-100 border border-slate-300 rounded-lg text-slate-600"
-                        placeholder="Price"
-                      />
-                    </div>
+                   <div className="w-28">
+  <input
+    type="text"
+    value={item.price?.toLocaleString() || ''}
+    readOnly
+    className="w-full p-3 bg-gray-100 border border-slate-300 rounded-lg text-slate-600"
+  />
+</div>
+
 
                     {/* Total (readonly) */}
                     <div className="w-32">

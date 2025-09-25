@@ -28,6 +28,7 @@ interface Payment {
   date: string;
   referenceId?: string | null;
   checkDepositDate?: string | null;
+  status?: "PENDING" | "COMPLETED" | "BOUNCED"; // ✅ Added status property
 }
 
 interface NewPayment {
@@ -50,7 +51,7 @@ interface NewPayment {
 
 interface Sale {
   id: number;
-  saleItems: SaleItem[];
+  saleitems: SaleItem[];
   amount: number;
   date: string;
   status: "PAID" | "PARTIAL" | "UNPAID";
@@ -73,7 +74,18 @@ const EnhancedSalesPage = () => {
   const [sales, setSales] = useState<Sale[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
-  
+ 
+
+const fetchSales = async () => {
+  const res = await fetch("/api/sales");
+  const data = await res.json();
+  setSales(data);
+};
+
+useEffect(() => {
+  fetchSales();
+}, []);
+
   // New Sale State
   const [showAddSale, setShowAddSale] = useState(false);
   const [newSale, setNewSale] = useState({
@@ -120,30 +132,49 @@ const EnhancedSalesPage = () => {
   const [messagingLoading, setMessagingLoading] = useState(false);
 
   // Fixed function to calculate status and remaining amount correctly
-  const calculateSaleStatus = (sale: any): Sale => {
-    const totalPayments = sale.payments && sale.payments.length > 0
-      ? sale.payments.reduce((sum: number, p: Payment) => sum + Number(p.amount || 0), 0)
-      : 0;
+ const calculateSaleStatus = (sale: any): Sale => {
+  const totalPayments = sale.payments && sale.payments.length > 0
+    ? sale.payments.reduce((sum: number, p: Payment) => sum + Number(p.amount || 0), 0)
+    : 0;
+  
+  const remainingAmount = Math.max(0, Number(sale.amount) - totalPayments);
+  
+  // Check if there are any pending checks
+  const hasPendingChecks = sale.payments?.some((p: Payment) => {
+    if (p.method !== "CHECK") return false;
     
-    const remainingAmount = Math.max(0, Number(sale.amount) - totalPayments);
+    // Check is pending if:
+    // 1. No deposit date set, OR
+    // 2. Deposit date is in the future, OR  
+    // 3. Payment status is explicitly "PENDING"
+    const today = new Date().toISOString().split('T')[0];
+    const hasDepositDate = p.checkDepositDate;
+    const isDepositDateFuture = hasDepositDate && p.checkDepositDate! > today;
+    const isPendingStatus = p.status === "PENDING";
     
-    let status: "PAID" | "PARTIAL" | "UNPAID";
-    if (remainingAmount <= 0.01) { // Account for floating point precision
-      status = "PAID";
-    } else if (totalPayments > 0) {
-      status = "PARTIAL";
-    } else {
-      status = "UNPAID";
-    }
+    return !hasDepositDate || isDepositDateFuture || isPendingStatus;
+  }) || false;
 
-    return {
-      ...sale,
-      remainingAmount,
-      status,
-      payments: sale.payments || []
-    };
+  let status: "PAID" | "PARTIAL" | "UNPAID";
+  
+  // If there are pending checks, status cannot be "PAID" even if amount is covered
+  if (hasPendingChecks && remainingAmount <= 0.01) {
+    status = "PARTIAL"; // Has full payment amount but checks not cleared
+  } else if (remainingAmount <= 0.01) {
+    status = "PAID";
+  } else if (totalPayments > 0) {
+    status = "PARTIAL";
+  } else {
+    status = "UNPAID";
+  }
+
+  return {
+    ...sale,
+    remainingAmount,
+    status,
+    payments: sale.payments || []
   };
-
+};
   // Fetch all data from database
   useEffect(() => {
     const fetchData = async () => {
@@ -388,6 +419,7 @@ const EnhancedSalesPage = () => {
   const handleEditSale = (sale: Sale) => {
     setEditingSale(sale);
     setEditPayments(sale.payments.map(p => ({
+      id: p.id,
       amount: p.amount.toString(),
       method: p.method,
       referenceId: p.referenceId || "",
@@ -395,55 +427,82 @@ const EnhancedSalesPage = () => {
     })));
   };
 
+  // ✅ Fixed handleUpdateSale function with proper closing
   const handleUpdateSale = async () => {
-  if (!editingSale) return;
+    if (!editingSale) return;
 
-  setLoading(true);
-  try {
-    // ✅ Only take the last (newest) payment
-    const newPayment = editPayments[editPayments.length - 1];
+    setLoading(true);
+    try {
+      const newPayment = editPayments[editPayments.length - 1];
 
-    if (!newPayment || !newPayment.amount) {
-      setError("Please enter a valid payment before updating.");
+      if (!newPayment || !newPayment.amount) {
+        setError("Please enter a valid payment before updating.");
+        setLoading(false);
+        return;
+      }
+
+      const updateData = {
+        payment: {
+          amount: Number(newPayment.amount),
+          method: newPayment.method,
+          referenceId: newPayment.referenceId?.trim() || null,
+          checkDepositDate: newPayment.checkDepositDate || null,
+          date: new Date().toISOString(),
+        },
+      };
+
+      const response = await fetch(`/api/sales/${editingSale.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(updateData),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || "Failed to update sale");
+      }
+
+      const updatedSale = await response.json();
+      
+      // ✅ Process the updated sale with correct calculations
+      const processedSale = calculateSaleStatus(updatedSale);
+
+      // ✅ Update the sales list with the new data
+      setSales(prevSales => 
+        prevSales.map(s => s.id === processedSale.id ? processedSale : s)
+      );
+
+      // ✅ Update the editing modal with fresh data
+      setEditingSale(processedSale);
+      
+      // ✅ Update editPayments to show all payments (including the new one)
+      setEditPayments(
+        processedSale.payments.map((p: Payment) => ({
+          id: p.id,
+          amount: p.amount.toString(),
+          method: p.method,
+          referenceId: p.referenceId || "",
+          checkDepositDate: p.checkDepositDate || ""
+        }))
+      );
+
+      // Reset current payment input
+      setCurrentPayment({
+        amount: "",
+        method: "CASH",
+        referenceId: "",
+        checkDepositDate: ""
+      });
+
+      setSuccess("Sale updated successfully!");
+    } catch (err: any) {
+      setError(err.message || "Failed to update sale");
+      console.error("Error updating sale:", err);
+    } finally {
       setLoading(false);
-      return;
     }
+  }; // ✅ Added missing closing brace
 
-    const updateData = {
-      payment: {
-        amount: Number(newPayment.amount),
-        method: newPayment.method,
-        referenceId: newPayment.referenceId?.trim() || null,
-        checkDepositDate: newPayment.checkDepositDate || null,
-        date: new Date().toISOString(),
-      },
-    };
-
-    const response = await fetch(`/api/sales/${editingSale.id}`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(updateData),
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      throw new Error(errorData.error || "Failed to update sale");
-    }
-
-    const updatedSale = await response.json();
-    const processedSale = calculateSaleStatus(updatedSale);
-
-    setSales(sales.map(s => s.id === editingSale.id ? processedSale : s));
-    setEditingSale(null);
-    setEditPayments([]);
-    setSuccess("Sale updated successfully!");
-  } catch (err: any) {
-    setError(err.message || "Failed to update sale");
-    console.error("Error updating sale:", err);
-  } finally {
-    setLoading(false);
-  }
-};
 const handleDeletePayment = async (paymentId: number, saleId: number) => {
   try {
     const response = await fetch(`/api/payments/${paymentId}?saleId=${saleId}`, {
@@ -1028,7 +1087,7 @@ const sendPaymentReminder = async () => {
               <div>
                 <h3 className="text-lg font-semibold mb-3">Sale Items</h3>
                 <div className="space-y-2">
-                  {editingSale.saleItems?.map((item, index) => (
+                  {editingSale.saleitems?.map((item, index) => (
                     <div key={index} className="flex justify-between items-center bg-gray-50 p-3 rounded-lg">
                       <div>
                         <span className="font-medium">{item.product.name}</span>
@@ -1403,8 +1462,8 @@ const sendPaymentReminder = async () => {
                       </td>
                       <td className="p-3">
                         <div className="max-w-xs">
-                          {sale.saleItems && sale.saleItems.length > 0
-                            ? sale.saleItems.map((item, idx) => (
+                          {sale.saleitems && sale.saleitems.length > 0
+                            ? sale.saleitems.map((item, idx) => (
                                 <div key={idx} className="text-sm">
                                   <span className="font-medium">{item.product.name}</span>
                                   <span className="text-gray-500"> (×{item.quantity})</span>
@@ -1499,34 +1558,34 @@ const sendPaymentReminder = async () => {
 
     const phone = sale.customer.phone.replace(/\D/g, ""); // clean digits
 
-    // 🧾 Build product list summary
-    const productSummary = sale.saleItems
+    // Build product list summary
+    const productSummary = sale.saleitems
       ?.map(
         (item) =>
           `${item.product?.name || "Product"} (×${item.quantity}) - Ksh ${(item.quantity * item.price).toFixed(2)}`
       )
       .join(", ") || "your recent purchase";
 
-    // 🕒 Due date
+    // Due date
     const due =
       sale.dueDate && sale.status !== "PAID"
         ? ` Your payment is due on ${new Date(sale.dueDate).toLocaleDateString()}.`
         : "";
 
-    // 💰 Remaining balance
+    // Remaining balance
     const balance =
       sale.remainingAmount > 0
         ? ` You still have a balance of Ksh ${sale.remainingAmount.toFixed(2)}.We would request you clear at your earliest convinience `
-        : " Your balance is fully settled. Thankyou for shopping with Swift Metals  ✅";
+        : " Your balance is fully settled. Thankyou for shopping with Swift Metals";
 
-    // 📨 Final message
+    // Final message
     const message = encodeURIComponent(
       `Hi ${sale.customer.name}, thank you for your purchase of ${productSummary}.` +
         balance +
         due
     );
 
-    // 🔄 Choose platform (WhatsApp / SMS)
+    // Choose platform (WhatsApp / SMS)
     const useWhatsApp = true;
 
     if (useWhatsApp) {
@@ -1623,7 +1682,7 @@ const sendPaymentReminder = async () => {
     try {
       setMessagingLoading(true);
       const result = await sendPaymentReminder(); // no args needed now
-      alert(result.message); // ✅ works because API returns { message: "..." }
+      alert(result.message); // works because API returns { message: "..." }
     } catch (err) {
       alert("Failed to send reminders");
     } finally {

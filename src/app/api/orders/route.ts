@@ -7,7 +7,7 @@ export async function GET() {
     const orders = await prisma.sale.findMany({
       include: {
         customer: true,
-        saleItems: { include: { product: true } }, // ✅ fetch products inside saleItems
+        saleitem: { include: { product: true } }, // updated to lowercase
       },
       orderBy: { createdAt: "desc" },
     });
@@ -52,9 +52,9 @@ export async function POST(req: Request) {
         );
       }
 
-      if (product.stock < item.quantity) {
+      if (!product.inStock) {
         return NextResponse.json(
-          { error: `Not enough stock for ${product.name}` },
+          { error: `Product ${product.name} is out of stock` },
           { status: 400 }
         );
       }
@@ -66,7 +66,7 @@ export async function POST(req: Request) {
       0
     );
 
-    // ✅ Create order with multiple saleItems
+    // ✅ Create order with multiple saleitems
     const order = await prisma.sale.create({
       data: {
         customerId: Number(customerId),
@@ -74,7 +74,7 @@ export async function POST(req: Request) {
         status: status || "PENDING",
         paymentMethod: paymentMethod || "CASH",
         dueDate: dueDate ? new Date(dueDate) : null,
-        saleItems: {
+        saleitem: {
           create: items.map((item) => ({
             productId: Number(item.productId),
             quantity: Number(item.quantity),
@@ -85,7 +85,7 @@ export async function POST(req: Request) {
       },
       include: {
         customer: true,
-        saleItems: { include: { product: true } },
+        saleitem: { include: { product: true } },
       },
     });
 
@@ -93,7 +93,7 @@ export async function POST(req: Request) {
     for (const item of items) {
       await prisma.product.update({
         where: { id: Number(item.productId) },
-        data: { stock: { decrement: item.quantity } },
+        data: { inStock: item.quantity > 0 }, // simple boolean update
       });
     }
 

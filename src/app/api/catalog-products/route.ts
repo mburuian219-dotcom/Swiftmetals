@@ -1,9 +1,9 @@
 import { NextResponse } from "next/server";
-import prisma from "@/lib/prisma";
+import { prisma } from "@/lib/prisma";
 
 export async function GET() {
   try {
-    const products = await prisma.catalogProduct.findMany({
+    const products = await prisma.catalogproduct.findMany({
       orderBy: { createdAt: "desc" },
     });
     return NextResponse.json(products, { status: 200 });
@@ -22,7 +22,7 @@ export async function POST(req: Request) {
       description,
       price,
       category,
-      image, // frontend sends `image` from uploadImage()
+      image,
       inStock,
       isPublic,
     } = body;
@@ -34,15 +34,16 @@ export async function POST(req: Request) {
       );
     }
 
-    const created = await prisma.catalogProduct.create({
+    const created = await prisma.catalogproduct.create({
       data: {
         name,
         description,
         price: Number(price),
         category,
-        image: image || null, // ✅ save image url to DB
+        image: image || null,
         inStock: Boolean(inStock),
         isPublic: Boolean(isPublic),
+        updatedAt: new Date(),
       },
     });
 

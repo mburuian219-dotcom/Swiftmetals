@@ -1,9 +1,9 @@
 import { NextResponse } from "next/server";
-import prisma from "@/lib/prisma";
+import { prisma } from "@/lib/prisma";
 import type { NextRequest } from "next/server";
 
 export async function PUT(req: NextRequest, context: { params: Promise<{ id: string }> }) {
-  const { id } = await context.params; // ✅ now it's a promise
+  const { id } = await context.params;
   const productId = Number(id);
 
   if (isNaN(productId)) {
@@ -12,7 +12,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
 
   try {
     const data = await req.json();
-    const updated = await prisma.catalogProduct.update({
+    const updated = await prisma.catalogproduct.update({ // ✅ lowercase
       where: { id: productId },
       data,
     });
@@ -32,7 +32,7 @@ export async function DELETE(req: NextRequest, context: { params: Promise<{ id: 
   }
 
   try {
-    await prisma.catalogProduct.delete({ where: { id: productId } });
+    await prisma.catalogproduct.delete({ where: { id: productId } }); // ✅ lowercase
     return NextResponse.json({ message: "Product deleted" });
   } catch (error) {
     console.error(error);

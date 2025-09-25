@@ -1,5 +1,28 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
+
+// ================== Helper ==================
+function processSale(sale: any) {
+  const totalPaid = sale.payment
+    .filter((p: any) => p.status === "CLEARED")
+    .reduce((sum: number, p: any) => sum + p.amount, 0);
+
+  const pendingPayments = sale.payment.filter((p: any) => p.status === "PENDING");
+  const remainingAmount = sale.amount - totalPaid;
+
+  let status: "UNPAID" | "PARTIAL" | "PAID" = "UNPAID";
+  if (remainingAmount <= 0 && pendingPayments.length === 0) status = "PAID";
+  else if (totalPaid > 0 || pendingPayments.length > 0) status = "PARTIAL";
+
+  return {
+    ...sale,
+    saleitems: sale.saleitem, // ✅ frontend expects saleitems
+    payments: sale.payment,   // ✅ frontend expects payments
+    totalPaid,
+    remainingAmount,
+    status,
+  };
+}
 
 // ================== GET ALL SALES ==================
 export async function GET() {
@@ -7,14 +30,15 @@ export async function GET() {
     const sales = await prisma.sale.findMany({
       include: {
         customer: true,
-        saleItems: { include: { product: true } },
-        payments: true,
+        saleitem: { include: { product: true } },
+        payment: true,
       },
       orderBy: { createdAt: "desc" },
     });
-    return NextResponse.json(Array.isArray(sales) ? sales : []);
+
+    return NextResponse.json(sales.map(processSale));
   } catch (err) {
-    console.error("Fetch sales error:", err);
+    console.error("❌ Fetch sales error:", err);
     return NextResponse.json([], { status: 500 });
   }
 }
@@ -41,20 +65,16 @@ export async function POST(req: Request) {
       );
     }
 
-    // ✅ Validate stock before creating
+    // Validate stock
     for (const item of data.saleItems) {
-      const product = await prisma.product.findUnique({
-        where: { id: item.productId },
+      const stockItem = await prisma.stock.findFirst({
+        where: { productId: item.productId },
+        orderBy: { createdAt: "desc" },
       });
-      if (!product) {
+
+      if (!stockItem || stockItem.quantity < item.quantity) {
         return NextResponse.json(
-          { error: `Product with ID ${item.productId} not found` },
-          { status: 404 }
-        );
-      }
-      if (product.stock < item.quantity) {
-        return NextResponse.json(
-          { error: `Not enough stock for ${product.name}` },
+          { error: `Not enough stock for product ID ${item.productId}` },
           { status: 400 }
         );
       }
@@ -66,16 +86,10 @@ export async function POST(req: Request) {
         amount: Number(p.amount),
         method: p.method,
         referenceId: p.referenceId || null,
+        status: p.method === "CHECK" && !p.checkDate ? "PENDING" : "CLEARED",
         checkDate: p.checkDate ? new Date(p.checkDate) : null,
         paidAt: p.paidAt ? new Date(p.paidAt) : new Date(),
       })) || [];
-
-    const totalPaid = payments.reduce((sum: number, p: any) => sum + p.amount, 0);
-    const balance = amount - totalPaid;
-
-    let status = "UNPAID";
-    if (balance <= 0) status = "PAID";
-    else if (balance < amount) status = "PARTIAL";
 
     const newSale = await prisma.sale.create({
       data: {
@@ -83,9 +97,9 @@ export async function POST(req: Request) {
         amount,
         date: data.date ? new Date(data.date) : new Date(),
         paymentMethod: data.paymentMethod || "CASH",
-        status,
-        payments: { create: payments },
-        saleItems: {
+        status: "UNPAID",
+        payment: { create: payments },
+        saleitem: {
           create: data.saleItems.map((item: any) => ({
             productId: item.productId,
             quantity: item.quantity,
@@ -96,27 +110,32 @@ export async function POST(req: Request) {
       },
       include: {
         customer: true,
-        saleItems: { include: { product: true } },
-        payments: true,
+        saleitem: { include: { product: true } },
+        payment: true,
       },
     });
 
-    // ✅ Deduct stock
+    // Deduct stock
     for (const item of data.saleItems) {
-      await prisma.product.update({
-        where: { id: item.productId },
-        data: { stock: { decrement: item.quantity } },
+      const stockItem = await prisma.stock.findFirst({
+        where: { productId: item.productId },
+        orderBy: { createdAt: "desc" },
       });
+      if (stockItem) {
+        await prisma.stock.update({
+          where: { id: stockItem.id },
+          data: { quantity: stockItem.quantity - item.quantity },
+        });
+      }
     }
 
-    return NextResponse.json(newSale, { status: 201 });
+    return NextResponse.json(processSale(newSale), { status: 201 });
   } catch (err) {
-    console.error("Sale creation error:", err);
+    console.error("❌ Sale creation error:", err);
     return NextResponse.json({ error: "Failed to create sale" }, { status: 500 });
   }
 }
 
-// ================== UPDATE SALE ==================
 // ================== UPDATE SALE ==================
 export async function PUT(req: Request) {
   try {
@@ -129,51 +148,41 @@ export async function PUT(req: Request) {
 
     const existingSale = await prisma.sale.findUnique({
       where: { id },
-      include: { saleItems: true, payments: true },
+      include: { saleitem: true, payment: true },
     });
 
     if (!existingSale) {
       return NextResponse.json({ error: "Sale not found" }, { status: 404 });
     }
 
-    // ✅ Restore stock for old items
-    for (const oldItem of existingSale.saleItems) {
-      await prisma.product.update({
-        where: { id: oldItem.productId },
-        data: { stock: { increment: oldItem.quantity } },
-      });
-    }
-
-    // ✅ Recalculate total amount from new items
-    const newItems = data.saleItems || [];
+    // ✅ NEW: If updating only payments, don’t wipe out old items
+    let newItems = data.saleItems || existingSale.saleitem;
     const recalculatedAmount = newItems.reduce(
       (sum: number, item: any) => sum + item.price * item.quantity,
       0
     );
 
-    // Handle payments
-    const payments = data.payments || existingSale.payments;
-    const totalPaid = payments.reduce(
-      (sum: number, p: any) => sum + Number(p.amount),
-      0
-    );
-    const balance = recalculatedAmount - totalPaid;
+    // ✅ NEW: Append payments instead of deleting all
+    const newPayments = [
+      ...existingSale.payment,
+      ...(data.payments?.map((p: any) => ({
+        amount: Number(p.amount),
+        method: p.method,
+        status: p.method === "CHECK" && !p.checkDate ? "PENDING" : "CLEARED",
+        referenceId: p.referenceId || null,
+        checkDate: p.checkDate ? new Date(p.checkDate) : null,
+        paidAt: p.paidAt ? new Date(p.paidAt) : new Date(),
+      })) || []),
+    ];
 
-    let status = "UNPAID";
-    if (balance <= 0) status = "PAID";
-    else if (balance < recalculatedAmount) status = "PARTIAL";
-
-    // ✅ Update with recalculated amount
     const updated = await prisma.sale.update({
       where: { id },
       data: {
         customerId: data.customerId ?? existingSale.customerId,
         amount: recalculatedAmount,
-        status,
         date: data.date ? new Date(data.date) : existingSale.date,
         paymentMethod: data.paymentMethod ?? existingSale.paymentMethod,
-
-        saleItems: {
+        saleitem: {
           deleteMany: { saleId: id },
           create: newItems.map((item: any) => ({
             productId: item.productId,
@@ -182,40 +191,31 @@ export async function PUT(req: Request) {
             total: item.price * item.quantity,
           })),
         },
-
-        payments: {
+        payment: {
           deleteMany: { saleId: id },
-          create: payments.map((p: any) => ({
-            amount: Number(p.amount),
+          create: newPayments.map((p: any) => ({
+            amount: p.amount,
             method: p.method,
-            referenceId: p.referenceId || null,
-            checkDate: p.checkDate ? new Date(p.checkDate) : null,
-            paidAt: p.paidAt ? new Date(p.paidAt) : new Date(),
+            status: p.status,
+            referenceId: p.referenceId,
+            checkDate: p.checkDate,
+            paidAt: p.paidAt,
           })),
         },
       },
       include: {
         customer: true,
-        saleItems: { include: { product: true } },
-        payments: true,
+        saleitem: { include: { product: true } },
+        payment: true,
       },
     });
 
-    // ✅ Deduct stock for new items
-    for (const newItem of newItems) {
-      await prisma.product.update({
-        where: { id: newItem.productId },
-        data: { stock: { decrement: newItem.quantity } },
-      });
-    }
-
-    return NextResponse.json(updated);
+    return NextResponse.json(processSale(updated));
   } catch (err) {
-    console.error("Sale update error:", err);
+    console.error("❌ Sale update error:", err);
     return NextResponse.json({ error: "Failed to update sale" }, { status: 500 });
   }
 }
-
 
 // ================== DELETE SALE ==================
 export async function DELETE(req: Request) {
@@ -229,47 +229,30 @@ export async function DELETE(req: Request) {
 
     const sale = await prisma.sale.findUnique({
       where: { id },
-      include: { saleItems: true },
+      include: { saleitem: true },
     });
     if (!sale) {
       return NextResponse.json({ error: "Sale not found" }, { status: 404 });
     }
 
-    // ✅ Always restore stock for deleted sale items
-    for (const item of sale.saleItems) {
-      await prisma.product.update({
-        where: { id: item.productId },
-        data: { stock: { increment: item.quantity } },
+    // Restore stock
+    for (const item of sale.saleitem) {
+      const stockItem = await prisma.stock.findFirst({
+        where: { productId: item.productId },
+        orderBy: { createdAt: "desc" },
       });
+      if (stockItem) {
+        await prisma.stock.update({
+          where: { id: stockItem.id },
+          data: { quantity: stockItem.quantity + item.quantity },
+        });
+      }
     }
 
     await prisma.sale.delete({ where: { id } });
-
     return NextResponse.json({ success: true });
   } catch (err) {
-    console.error("Sale delete error:", err);
+    console.error("❌ Sale delete error:", err);
     return NextResponse.json({ error: "Failed to delete sale" }, { status: 500 });
-  }
-}
-
-// ================== BULK OPERATIONS ==================
-export async function PATCH(req: Request) {
-  try {
-    const data = await req.json();
-    const { action, saleIds } = data;
-
-    if (action === "markPaid" && Array.isArray(saleIds)) {
-      const updatedSales = await prisma.sale.updateMany({
-        where: { id: { in: saleIds } },
-        data: { status: "PAID" },
-      });
-
-      return NextResponse.json({ success: true, updated: updatedSales.count });
-    }
-
-    return NextResponse.json({ error: "Invalid action" }, { status: 400 });
-  } catch (err) {
-    console.error("Bulk operation error:", err);
-    return NextResponse.json({ error: "Bulk operation failed" }, { status: 500 });
   }
 }

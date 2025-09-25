@@ -1,10 +1,11 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 
-// GET /api/products → fetch all products
+// ---------------- GET all products ----------------
 export async function GET() {
   try {
     const products = await prisma.product.findMany({
+      include: { stock: true }, // include stock if needed
       orderBy: { createdAt: "desc" },
     });
     return NextResponse.json(products);
@@ -14,11 +15,11 @@ export async function GET() {
   }
 }
 
-// POST /api/products → create a new product
+// ---------------- CREATE a new product ----------------
 export async function POST(req: Request) {
   try {
     const body = await req.json();
-    const { name, description, price, stock, category } = body;
+    const { name, description, price, stockQuantity, costPrice, category } = body;
 
     if (!name || !price) {
       return NextResponse.json({ error: "Name and price are required" }, { status: 400 });
@@ -29,9 +30,17 @@ export async function POST(req: Request) {
         name,
         description,
         price: Number(price),
-        stock: Number(stock) || 0,
         category,
+        stock: {
+          create: {
+            name: `${name} initial stock`,
+            quantity: Number(stockQuantity) || 0,
+            costPrice: Number(costPrice) || 0,
+            sellingPrice: Number(price),
+          },
+        },
       },
+      include: { stock: true },
     });
 
     return NextResponse.json(newProduct, { status: 201 });

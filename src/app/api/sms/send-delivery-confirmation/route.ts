@@ -17,16 +17,22 @@ export async function POST(req: Request) {
 
     const sale = await prisma.sale.findUnique({
       where: { id: saleId },
-      include: { customer: true, saleItems: { include: { product: true } } },
+      include: {
+        customer: true,
+        saleitem: {   // ✅ corrected relation name
+          include: { product: true },
+        },
+      },
     });
+
     if (!sale) return NextResponse.json({ error: "Sale not found" }, { status: 404 });
 
     const phone = normalizePhone(sale.customer?.phone);
     if (!phone) return NextResponse.json({ error: "Invalid phone" }, { status: 400 });
 
     const productList =
-      sale.saleItems.length > 0
-        ? sale.saleItems.map((item) => `${item.product.name} (x${item.quantity})`).join(", ")
+      sale.saleitem.length > 0
+        ? sale.saleitem.map((item) => `${item.product.name} (x${item.quantity})`).join(", ")
         : "your order";
 
     const msg = `Dear ${sale.customer.name}, your order of ${productList} worth KES ${sale.amount.toFixed(
@@ -48,6 +54,12 @@ export async function POST(req: Request) {
         context: `Delivery confirmation for ${productList}`,
       });
     }
+
+    // ✅ Optionally update the sale status to DELIVERED
+    await prisma.sale.update({
+      where: { id: sale.id },
+      data: { status: "DELIVERED", updatedAt: new Date() },
+    });
 
     return NextResponse.json({
       message: `Delivery confirmation sent to ${sale.customer.name}`,

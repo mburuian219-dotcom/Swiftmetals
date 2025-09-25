@@ -17,17 +17,28 @@ export async function POST(req: Request) {
 
     const sale = await prisma.sale.findUnique({
       where: { id: saleId },
-      include: { customer: true, payments: true },
+      include: {
+        customer: true,
+        payment: true,           // ✅ corrected
+        paymentschedule: true,   // optional
+        saleitem: true,          // optional
+        smsreminder: true,       // optional
+        invoice: true,           // optional
+      },
     });
+
     if (!sale) return NextResponse.json({ error: "Sale not found" }, { status: 404 });
 
     const phone = normalizePhone(sale.customer?.phone);
     if (!phone) return NextResponse.json({ error: "Invalid phone" }, { status: 400 });
 
-    const amountPaid = sale.payments.reduce((sum, p) => sum + p.amount, 0);
+    // ✅ use `sale.payment` (singular)
+    const amountPaid = sale.payment.reduce((sum, p) => sum + p.amount, 0);
     const remaining = sale.amount - amountPaid;
 
-    const msg = `Dear ${sale.customer.name}, this is SWIFT Metals. Outstanding balance for your purchase of KES ${sale.amount} is KES ${remaining}, due on ${sale.dueDate ? new Date(sale.dueDate).toLocaleDateString() : "the due date"}. Kindly clear at your earliest convenience.`;
+    const msg = `Dear ${sale.customer.name}, this is SWIFT Metals. Outstanding balance for your purchase of KES ${sale.amount} is KES ${remaining}, due on ${
+      sale.dueDate ? new Date(sale.dueDate).toLocaleDateString() : "the due date"
+    }. Kindly clear at your earliest convenience.`;
 
     const response = await sendSMS(phone, msg);
 

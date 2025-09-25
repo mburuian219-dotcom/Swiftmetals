@@ -42,7 +42,6 @@ export default function ProductsPage() {
         setProducts([savedProduct, ...products]);
       }
 
-      // Reset form
       setForm({ name: "", description: "", price: "", stock: "", category: "" });
       setEditingId(null);
     }
@@ -54,7 +53,7 @@ export default function ProductsPage() {
       name: product.name,
       description: product.description || "",
       price: String(product.price),
-      stock: String(product.stock),
+      stock: String(product.stockQuantity || 0), // if using stockQuantity
       category: product.category || "",
     });
     setEditingId(product.id);
@@ -64,9 +63,18 @@ export default function ProductsPage() {
   const handleDelete = async (id: number) => {
     if (!confirm("Are you sure you want to delete this product?")) return;
 
-    const res = await fetch(`/api/products/${id}`, { method: "DELETE" });
-    if (res.ok) {
-      setProducts(products.filter((p) => p.id !== id));
+    try {
+      const res = await fetch(`/api/products/${id}`, { method: "DELETE" });
+      if (res.ok) {
+        // Remove product immediately from state
+        setProducts((prev) => prev.filter((p) => p.id !== id));
+      } else {
+        const data = await res.json();
+        alert(data.error || "Failed to delete product");
+      }
+    } catch (err) {
+      console.error(err);
+      alert("Error deleting product");
     }
   };
 
@@ -121,7 +129,7 @@ export default function ProductsPage() {
             <div>
               <h2 className="text-lg font-semibold">{p.name}</h2>
               <p>{p.description}</p>
-              <p className="text-sm">Price: ${p.price} | Stock: {p.stock}</p>
+              <p className="text-sm">Price: {p.price} | Stock: {p.stockQuantity || 0}</p>
               <p className="text-sm text-gray-500">{p.category}</p>
             </div>
             <div className="flex gap-2">

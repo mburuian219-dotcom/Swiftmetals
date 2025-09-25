@@ -20,18 +20,18 @@ export async function DELETE(
       );
     }
 
-    // Delete the payment
+    // 1. Delete the payment
     await prisma.payment.delete({
       where: { id: paymentId },
     });
 
-    // Recalculate totals after deletion
+    // 2. Recalculate totals after deletion
     const sale = await prisma.sale.findUnique({
       where: { id: saleId },
       include: {
-        payments: true,
+        payment: true,
         customer: true,
-        saleItems: { include: { product: true } },
+        saleitem: { include: { product: true } },
       },
     });
 
@@ -39,26 +39,30 @@ export async function DELETE(
       return NextResponse.json({ error: "Sale not found" }, { status: 404 });
     }
 
-    const totalPaid = sale.payments
-      .filter((p) => p.id !== paymentId) // don’t count deleted payment
+    // ✅ Only count cleared payments
+    const totalPaid = sale.payment
+      .filter((p) => p.status === "CLEARED")
       .reduce((sum, p) => sum + Number(p.amount), 0);
 
+    const pendingPayments = sale.payment.filter((p) => p.status === "PENDING");
     const balance = sale.amount - totalPaid;
 
     let status: "UNPAID" | "PARTIAL" | "PAID" = "UNPAID";
-    if (balance <= 0) status = "PAID";
-    else if (totalPaid > 0) status = "PARTIAL";
+    if (balance <= 0 && pendingPayments.length === 0) status = "PAID";
+    else if (totalPaid > 0 || pendingPayments.length > 0) status = "PARTIAL";
 
+    // 3. Update sale with new status
     const updatedSale = await prisma.sale.update({
       where: { id: sale.id },
       data: { status },
       include: {
-        payments: true,
         customer: true,
-        saleItems: { include: { product: true } },
+        saleitem: { include: { product: true } },
+        payment: true,
       },
     });
 
+    // 4. Return sale summary
     return NextResponse.json({
       ...updatedSale,
       balance,

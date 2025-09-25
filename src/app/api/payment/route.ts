@@ -6,9 +6,14 @@ export async function GET() {
   try {
     const payments = await prisma.payment.findMany({
       include: {
-        sale: true, // ✅ works because relation exists in schema
+        sale: {
+          include: {
+            customer: true,
+            saleitem: { include: { product: true } },
+          },
+        },
       },
-      orderBy: { paidAt: "desc" }, // ✅ replaced createdAt with paidAt
+      orderBy: { paidAt: "desc" },
     });
     return NextResponse.json(payments);
   } catch (err) {
@@ -36,39 +41,62 @@ export async function POST(req: Request) {
     const newPayment = await prisma.payment.create({
       data: {
         sale: { connect: { id: Number(data.saleId) } },
-        method: data.method, // ✅ method instead of paymentType
+        method: data.method,
         amount: Number(data.amount),
-        note: data.note || null, // ✅ note instead of reference
+        referenceId: data.referenceId || null,
+        status:
+          data.method === "CHECK" && !data.checkDepositDate
+            ? "PENDING"
+            : "CLEARED",
+        checkDate: data.checkDepositDate
+          ? new Date(data.checkDepositDate)
+          : null,
+        paidAt: data.date ? new Date(data.date) : new Date(),
+        note: data.note || null,
       },
       include: { sale: true },
     });
 
-    // 2. Recalculate sale payments total
-    const payments = await prisma.payment.findMany({
+    // 2. Recalculate sale totals
+    const allPayments = await prisma.payment.findMany({
       where: { saleId: Number(data.saleId) },
-      select: { amount: true },
     });
-    const totalPaid = payments.reduce(
-      (sum: number, p: { amount: number }) => sum + p.amount,
-      0
-    );
+
+    const totalPaid = allPayments
+      .filter((p) => p.status === "CLEARED")
+      .reduce((sum, p) => sum + p.amount, 0);
+
+    const pendingPayments = allPayments.filter((p) => p.status === "PENDING");
+    const balance = newPayment.sale.amount - totalPaid;
+
+    let status: "UNPAID" | "PARTIAL" | "PAID" = "UNPAID";
+    if (balance <= 0 && pendingPayments.length === 0) status = "PAID";
+    else if (totalPaid > 0 || pendingPayments.length > 0) status = "PARTIAL";
 
     // 3. Update sale status
-    let newStatus: "PENDING" | "PARTIAL" | "PAID" = "PENDING";
-    if (totalPaid === newPayment.sale.amount) newStatus = "PAID";
-    else if (totalPaid > 0 && totalPaid < newPayment.sale.amount)
-      newStatus = "PARTIAL";
-
-    await prisma.sale.update({
+    const updatedSale = await prisma.sale.update({
       where: { id: newPayment.saleId },
-      data: { status: newStatus },
+      data: { status },
+      include: {
+        customer: true,
+        saleitem: { include: { product: true } },
+        payment: true,
+      },
     });
 
-    return NextResponse.json(newPayment, { status: 201 });
-  } catch (err) {
+    // 4. Return updated sale + payment info
+    return NextResponse.json({
+      payment: newPayment,
+      sale: {
+        ...updatedSale,
+        balance,
+        totalPaid,
+      },
+    }, { status: 201 });
+  } catch (err: any) {
     console.error("POST /api/payment error:", err);
     return NextResponse.json(
-      { error: "Failed to create payment" },
+      { error: err.message || "Failed to create payment" },
       { status: 500 }
     );
   }
