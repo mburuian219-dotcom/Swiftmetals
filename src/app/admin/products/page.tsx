@@ -2,16 +2,43 @@
 
 import { useEffect, useState } from "react";
 
+interface Stock {
+  quantity: number;
+}
+
+interface Product {
+  id: number;
+  name: string;
+  description?: string;
+  price: number;
+  category?: string;
+  stock: Stock[];
+  stockQuantity?: number; // normalized for frontend
+}
+
 export default function ProductsPage() {
-  const [products, setProducts] = useState<any[]>([]);
-  const [form, setForm] = useState({ name: "", description: "", price: "", stock: "", category: "" });
+  const [products, setProducts] = useState<Product[]>([]);
+  const [form, setForm] = useState({
+    name: "",
+    description: "",
+    price: "",
+    stock: "",
+    category: "",
+  });
   const [editingId, setEditingId] = useState<number | null>(null);
 
-  // Fetch products
+  // Fetch products on mount
   useEffect(() => {
     fetch("/api/products")
       .then((res) => res.json())
-      .then(setProducts);
+      .then((data: Product[]) => {
+        const normalized = data.map((p) => ({
+          ...p,
+          stockQuantity: p.stock?.[0]?.quantity || 0,
+        }));
+        setProducts(normalized);
+      })
+      .catch((err) => console.error("Failed to fetch products:", err));
   }, []);
 
   // Add or update product
@@ -21,20 +48,26 @@ export default function ProductsPage() {
     const payload = {
       ...form,
       price: parseFloat(form.price),
-      stock: parseInt(form.stock),
+      stockQuantity: parseInt(form.stock),
     };
 
     const url = editingId ? `/api/products/${editingId}` : "/api/products";
     const method = editingId ? "PUT" : "POST";
 
-    const res = await fetch(url, {
-      method,
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
+    try {
+      const res = await fetch(url, {
+        method,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
 
-    if (res.ok) {
-      const savedProduct = await res.json();
+      if (!res.ok) {
+        const data = await res.json();
+        return alert(data.error || "Failed to save product");
+      }
+
+      const savedProduct: Product = await res.json();
+      savedProduct.stockQuantity = savedProduct.stock?.[0]?.quantity || 0;
 
       if (editingId) {
         setProducts(products.map((p) => (p.id === editingId ? savedProduct : p)));
@@ -44,34 +77,36 @@ export default function ProductsPage() {
 
       setForm({ name: "", description: "", price: "", stock: "", category: "" });
       setEditingId(null);
+    } catch (error) {
+      console.error("Error saving product:", error);
+      alert("Failed to save product");
     }
   };
 
-  // Handle edit
-  const handleEdit = (product: any) => {
+  // Populate form for editing
+  const handleEdit = (product: Product) => {
     setForm({
       name: product.name,
       description: product.description || "",
       price: String(product.price),
-      stock: String(product.stockQuantity || 0), // if using stockQuantity
+      stock: String(product.stockQuantity || 0),
       category: product.category || "",
     });
     setEditingId(product.id);
   };
 
-  // Handle delete
+  // Delete product
   const handleDelete = async (id: number) => {
     if (!confirm("Are you sure you want to delete this product?")) return;
 
     try {
       const res = await fetch(`/api/products/${id}`, { method: "DELETE" });
-      if (res.ok) {
-        // Remove product immediately from state
-        setProducts((prev) => prev.filter((p) => p.id !== id));
-      } else {
+      if (!res.ok) {
         const data = await res.json();
-        alert(data.error || "Failed to delete product");
+        return alert(data.error || "Failed to delete product");
       }
+
+      setProducts((prev) => prev.filter((p) => p.id !== id));
     } catch (err) {
       console.error(err);
       alert("Error deleting product");
@@ -129,7 +164,9 @@ export default function ProductsPage() {
             <div>
               <h2 className="text-lg font-semibold">{p.name}</h2>
               <p>{p.description}</p>
-              <p className="text-sm">Price: {p.price} | Stock: {p.stockQuantity || 0}</p>
+              <p className="text-sm">
+                Price: {p.price} | Stock: {p.stockQuantity}
+              </p>
               <p className="text-sm text-gray-500">{p.category}</p>
             </div>
             <div className="flex gap-2">

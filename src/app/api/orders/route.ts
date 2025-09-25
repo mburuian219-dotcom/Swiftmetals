@@ -7,15 +7,16 @@ export async function GET() {
     const orders = await prisma.sale.findMany({
       include: {
         customer: true,
-        saleitem: { include: { product: true } }, // ✅ correct relation
+        saleitem: { include: { product: true } },
       },
       orderBy: { createdAt: "desc" },
     });
 
+    // Normalize saleitems for frontend
     return NextResponse.json(
       orders.map((o) => ({
         ...o,
-        saleitems: o.saleitem, // ✅ normalize for frontend
+        saleitems: o.saleitem,
       }))
     );
   } catch (error: any) {
@@ -29,21 +30,15 @@ export async function POST(req: Request) {
   try {
     const { customerId, items, status, paymentMethod, dueDate } = await req.json();
 
-    // ✅ Validate input
+    // Validate input
     if (!customerId || !items || !Array.isArray(items) || items.length === 0) {
-      return NextResponse.json(
-        { error: "Missing required fields" },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
     }
 
-    // ✅ Validate products and stock
+    // Validate products and stock
     for (const item of items) {
       if (!item.productId || !item.quantity || !item.price) {
-        return NextResponse.json(
-          { error: "Invalid item data" },
-          { status: 400 }
-        );
+        return NextResponse.json({ error: "Invalid item data" }, { status: 400 });
       }
 
       const product = await prisma.product.findUnique({
@@ -65,13 +60,13 @@ export async function POST(req: Request) {
       }
     }
 
-    // ✅ Calculate total order amount
+    // Calculate total order amount
     const totalAmount = items.reduce(
-      (sum, item) => sum + item.price * item.quantity,
+      (sum, item) => sum + Number(item.price) * Number(item.quantity),
       0
     );
 
-    // ✅ Create order with multiple saleitems
+    // Create order with multiple saleitems
     const order = await prisma.sale.create({
       data: {
         customerId: Number(customerId),
@@ -84,7 +79,7 @@ export async function POST(req: Request) {
             productId: Number(item.productId),
             quantity: Number(item.quantity),
             price: Number(item.price),
-            total: item.price * item.quantity,
+            total: Number(item.price) * Number(item.quantity),
           })),
         },
       },
@@ -94,17 +89,42 @@ export async function POST(req: Request) {
       },
     });
 
-    // ✅ Update stock for all products
+    // Update stock properly
     for (const item of items) {
-      await prisma.product.update({
-        where: { id: Number(item.productId) },
-        data: { inStock: item.quantity > 0 }, // simple boolean update
+      const currentStock = await prisma.stock.findFirst({
+        where: { productId: Number(item.productId) },
+        orderBy: { createdAt: "desc" },
       });
+
+      if (currentStock) {
+        const newQuantity = currentStock.quantity - Number(item.quantity);
+        if (newQuantity < 0) {
+          return NextResponse.json(
+            { error: `Insufficient stock for product ID ${item.productId}` },
+            { status: 400 }
+          );
+        }
+
+        await prisma.stock.update({
+          where: { id: currentStock.id },
+          data: { quantity: newQuantity },
+        });
+
+        await prisma.product.update({
+          where: { id: Number(item.productId) },
+          data: { inStock: newQuantity > 0 },
+        });
+      } else {
+        await prisma.product.update({
+          where: { id: Number(item.productId) },
+          data: { inStock: false },
+        });
+      }
     }
 
     return NextResponse.json({
       ...order,
-      saleitems: order.saleitem, // ✅ normalize for frontend
+      saleitems: order.saleitem,
     });
   } catch (error: any) {
     console.error("POST /api/orders error:", error);

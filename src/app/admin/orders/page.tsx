@@ -18,6 +18,8 @@ import {
   Save,
   X
 } from "lucide-react";
+import { saleitem } from '@prisma/client';
+
 
 interface Customer {
   id: number;
@@ -605,25 +607,28 @@ const filteredOrders = orders.filter(order => {
                     </td>
 
                     {/* Show items - handle both items and saleItems */}
+                    
                     <td className="px-6 py-4">
-                      <div className="space-y-1">
-                        {order.saleItems && order.saleItems.length > 0 ? (
-                          order.saleItems.map((item, index) => (
-                            <div key={index} className="text-sm text-slate-600">
-                              {item.product?.name || 'Unknown Product'} × {item.quantity}
-                            </div>
-                          ))
-                        ) : order.items && order.items.length > 0 ? (
-                          order.items.map((item, index) => (
-                            <div key={index} className="text-sm text-slate-600">
-                              {item.productName} × {item.quantity}
-                            </div>
-                          ))
-                        ) : (
-                          <div className="text-sm text-slate-400 italic">No items</div>
-                        )}
-                      </div>
-                    </td>
+  <div className="space-y-1">
+    {order.saleItems && order.saleItems.length > 0 ? (
+  order.saleItems.map((item: any, index: number) => (
+    <div key={index} className="text-sm text-slate-600">
+      {item.product?.name || 'Unknown Product'} × {item.quantity}
+    </div>
+  ))
+) : order.items && order.items.length > 0 ? (
+  order.items.map((item: any, index: number) => (
+    <div key={index} className="text-sm text-slate-600">
+      {item.productName} × {item.quantity}
+    </div>
+  ))
+) : (
+  <div className="text-sm text-slate-400 italic">No items</div>
+)}
+
+  </div>
+</td>
+
 
                     {/* Show total - handle both amount and totalAmount */}
                     <td className="px-6 py-4">

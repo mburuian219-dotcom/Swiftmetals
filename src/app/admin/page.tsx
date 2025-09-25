@@ -108,60 +108,64 @@ export default function AdminDashboard() {
   },
   ];
 
-  useEffect(() => {
-    const fetchQuickStats = async () => {
-      try {
-        const ordersRes = await fetch("/api/orders");
-        const orders = await ordersRes.json();
+useEffect(() => {
+  const fetchQuickStats = async () => {
+    try {
+      const ordersRes = await fetch("/api/orders");
+      const ordersText = await ordersRes.text();
+      const orders = ordersText ? JSON.parse(ordersText) : [];
 
-        const productsRes = await fetch("/api/products");
-        const products = await productsRes.json();
+      const productsRes = await fetch("/api/products");
+      const productsText = await productsRes.text();
+      const products = productsText ? JSON.parse(productsText) : [];
 
-        const today = new Date();
-        const todayRevenue = orders
-          .filter((o: any) => new Date(o.createdAt).toDateString() === today.toDateString())
-          .reduce((sum: number, o: any) => sum + o.amount, 0);
+      const today = new Date();
+      const todayRevenue = orders
+        .filter((o: any) => new Date(o.createdAt).toDateString() === today.toDateString())
+        .reduce((sum: number, o: any) => sum + o.amount, 0);
 
-        const activeOrders = orders.filter((o: any) => o.status === "PENDING").length;
-        const lowStockItems = products.filter((p: any) => p.stock <= 5).length;
+      const activeOrders = orders.filter((o: any) => o.status === "PENDING").length;
+      const lowStockItems = products.filter((p: any) => (p.stock?.[0]?.quantity || 0) <= 5).length;
 
-        setQuickStats([
-          {
-            title: "Today's Revenue",
-            value: `KSh ${todayRevenue.toLocaleString()}`,
-            change: "+0%", // optional
-            icon: DollarSign,
-            positive: true
-          },
-          {
-            title: "Active Orders",
-            value: activeOrders.toString(),
-            change: "+0",
-            icon: ShoppingCart,
-            positive: true
-          },
-          {
-            title: "Low Stock Items",
-            value: lowStockItems.toString(),
-            change: lowStockItems <= 5 ? "-0" : "+0",
-            icon: Package,
-            positive: lowStockItems > 0
-          },
-          {
-            title: "System Health",
-            value: "99.8%",
-            change: "Excellent",
-            icon: Activity,
-            positive: true
-          }
-        ]);
-      } catch (error) {
-        console.error("Failed to fetch dashboard stats:", error);
-      }
-    };
+      setQuickStats([
+        {
+          title: "Today's Revenue",
+          value: `KSh ${todayRevenue.toLocaleString()}`,
+          change: "+0%",
+          icon: DollarSign,
+          positive: true
+        },
+        {
+          title: "Active Orders",
+          value: activeOrders.toString(),
+          change: "+0",
+          icon: ShoppingCart,
+          positive: true
+        },
+        {
+          title: "Low Stock Items",
+          value: lowStockItems.toString(),
+          change: lowStockItems <= 5 ? "-0" : "+0",
+          icon: Package,
+          positive: lowStockItems > 0
+        },
+        {
+          title: "System Health",
+          value: "99.8%",
+          change: "Excellent",
+          icon: Activity,
+          positive: true
+        }
+      ]);
+    } catch (error) {
+      console.error("Failed to fetch dashboard stats:", error);
+      // fallback stats
+      setQuickStats((prev) => prev.map(stat => ({ ...stat, value: "0" })));
+    }
+  };
 
-    fetchQuickStats();
-  }, []);
+  fetchQuickStats();
+}, []);
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100">
