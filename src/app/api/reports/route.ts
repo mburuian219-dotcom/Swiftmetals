@@ -1,12 +1,10 @@
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import ExcelJS from "exceljs";
-import fs from "fs";
-import path from "path";
 
 export async function GET() {
   try {
-    // ✅ Fetch sales with customer and products via saleitem (correct relation name)
+    // Fetch sales with relations
     const sales = await prisma.sale.findMany({
       include: {
         customer: true,
@@ -15,16 +13,16 @@ export async function GET() {
       orderBy: { createdAt: "desc" },
     });
 
-    // ✅ Fetch expenses
+    // Fetch expenses
     const expenses = await prisma.expense.findMany({
       orderBy: { createdAt: "desc" },
     });
 
-    // Create a new workbook
+    // Create workbook
     const workbook = new ExcelJS.Workbook();
     const sheet = workbook.addWorksheet("Financial Report");
 
-    // Add headers
+    // Columns
     sheet.columns = [
       { header: "ID", key: "id", width: 10 },
       { header: "Type", key: "type", width: 12 },
@@ -33,7 +31,7 @@ export async function GET() {
       { header: "Date", key: "date", width: 20 },
     ];
 
-    // ✅ Populate sales rows (with multiple products per sale)
+    // Sales rows
     sales.forEach((s) => {
       s.saleitem.forEach((item) => {
         sheet.addRow({
@@ -42,24 +40,24 @@ export async function GET() {
           description: `${item.product?.name || "Product"} sold to ${
             s.customer?.name || "Unknown"
           }`,
-          amount: s.amount, // total sale amount
+          amount: s.amount,
           date: s.createdAt.toISOString(),
         });
       });
     });
 
-    // ✅ Populate expenses rows
+    // Expenses rows
     expenses.forEach((e) => {
       sheet.addRow({
         id: `E-${e.id}`,
         type: "Expense",
         description: `${e.title} (${e.category || "General"}) - ${e.notes || ""}`,
-        amount: -Math.abs(e.amount), // negative for expenses
+        amount: -Math.abs(e.amount),
         date: e.createdAt.toISOString(),
       });
     });
 
-    // ✅ Add totals summary at the bottom
+    // Totals
     const totalSales = sales.reduce((sum, s) => sum + Number(s.amount), 0);
     const totalExpenses = expenses.reduce((sum, e) => sum + Number(e.amount), 0);
     const netIncome = totalSales - totalExpenses;
@@ -69,25 +67,15 @@ export async function GET() {
     sheet.addRow({ description: "TOTAL EXPENSES", amount: -totalExpenses });
     sheet.addRow({ description: "NET INCOME", amount: netIncome });
 
-    // Save to buffer
+    // ✅ Stream buffer (no fs.writeFileSync)
     const buffer = await workbook.xlsx.writeBuffer();
 
-    // Save file to "reports" folder
-    const reportsDir = path.join(process.cwd(), "reports");
-    if (!fs.existsSync(reportsDir)) {
-      fs.mkdirSync(reportsDir);
-    }
-    const filename = `financial-report-${Date.now()}.xlsx`;
-    const filePath = path.join(reportsDir, filename);
-    fs.writeFileSync(filePath, Buffer.from(buffer));
-
-    // Return as download
     return new NextResponse(buffer, {
       status: 200,
       headers: {
         "Content-Type":
           "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        "Content-Disposition": `attachment; filename=${filename}`,
+        "Content-Disposition": `attachment; filename=financial-report.xlsx`,
       },
     });
   } catch (error) {
