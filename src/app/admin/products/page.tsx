@@ -121,20 +121,20 @@ export default function ProductsPage() {
   };
 
   return (
-    <div className="p-6">
-      <h1 className="text-2xl font-bold mb-4">Products</h1>
+    <div className="p-6 text-black">
+      <h1 className="text-2xl font-bold mb-4 text-black">Products</h1>
 
       {/* Add/Edit product form */}
-      <form onSubmit={handleSubmit} className="mb-6 space-y-2">
+      <form onSubmit={handleSubmit} className="mb-6 space-y-2 text-black">
         <input
           placeholder="Name"
-          className="border p-2 w-full"
+          className="border p-2 w-full text-black"
           value={form.name}
           onChange={(e) => setForm({ ...form, name: e.target.value })}
         />
         <input
           placeholder="Description"
-          className="border p-2 w-full"
+          className="border p-2 w-full text-black"
           value={form.description}
           onChange={(e) => setForm({ ...form, description: e.target.value })}
         />
@@ -142,20 +142,20 @@ export default function ProductsPage() {
           placeholder="Price"
           type="number"
           step="0.01"
-          className="border p-2 w-full"
+          className="border p-2 w-full text-black"
           value={form.price}
           onChange={(e) => setForm({ ...form, price: e.target.value })}
         />
         <input
           placeholder="Stock"
           type="number"
-          className="border p-2 w-full"
+          className="border p-2 w-full text-black"
           value={form.stock}
           onChange={(e) => setForm({ ...form, stock: e.target.value })}
         />
         <input
           placeholder="Category"
-          className="border p-2 w-full"
+          className="border p-2 w-full text-black"
           value={form.category}
           onChange={(e) => setForm({ ...form, category: e.target.value })}
         />
@@ -168,19 +168,19 @@ export default function ProductsPage() {
       </form>
 
       {/* Products list */}
-      <div className="grid gap-4">
+      <div className="grid gap-4 text-black">
         {products.map((p) => (
           <div
             key={p.id}
-            className="border p-4 rounded flex justify-between items-center"
+            className="border p-4 rounded flex justify-between items-center text-black"
           >
             <div>
-              <h2 className="text-lg font-semibold">{p.name}</h2>
-              <p>{p.description}</p>
-              <p className="text-sm">
+              <h2 className="text-lg font-semibold text-black">{p.name}</h2>
+              <p className="text-black">{p.description}</p>
+              <p className="text-sm text-black">
                 Price: {p.price} | Stock: {p.stockQuantity}
               </p>
-              <p className="text-sm text-gray-500">{p.category}</p>
+              <p className="text-sm text-black">{p.category}</p>
             </div>
             <div className="flex gap-2">
               <button
