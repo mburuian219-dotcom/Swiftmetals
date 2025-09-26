@@ -6,7 +6,7 @@ import {
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
 } from "firebase/auth";
-import { doc, getDoc, setDoc } from "firebase/firestore";
+import { doc, setDoc } from "firebase/firestore";
 import { useRouter } from "next/navigation";
 
 export default function AuthenticationPage() {
@@ -23,18 +23,13 @@ export default function AuthenticationPage() {
 
     try {
       const userCredential = await signInWithEmailAndPassword(auth, email, password);
-
-      const loggedInEmail = userCredential.user.email;
-
-      // If admin email (from .env), redirect to admin page
       const adminEmails = process.env.NEXT_PUBLIC_ADMIN_EMAILS?.split(",") || [];
 
-if (adminEmails.includes(email.toLowerCase())) {
-  router.push("/admin");
-} else {
-  router.push("/dashboard/user");
-}
-
+      if (adminEmails.includes(email.toLowerCase())) {
+        router.push("/admin");
+      } else {
+        router.push("/dashboard/user");
+      }
     } catch (err: any) {
       setError(err.message);
     }
@@ -48,7 +43,6 @@ if (adminEmails.includes(email.toLowerCase())) {
     try {
       const userCredential = await createUserWithEmailAndPassword(auth, email, password);
 
-      // Save user in Firestore with default role "user"
       await setDoc(doc(db, "users", userCredential.user.uid), {
         email,
         role: "user",
@@ -61,24 +55,29 @@ if (adminEmails.includes(email.toLowerCase())) {
       if (err.code === "auth/email-already-in-use") {
         setError("This email is already registered. Please log in.");
         setIsLogin(true);
-      }}
+      }
+    }
   };
 
   return (
     <div className="flex items-center justify-center min-h-screen bg-gray-100 px-4">
       <div className="w-full max-w-md bg-white p-8 rounded-2xl shadow-lg">
-        <h2 className="text-3xl font-bold text-center mb-6">
+        <h2 className="text-3xl font-bold text-center mb-6 text-black">
           {isLogin ? "Login" : "Sign Up"}
         </h2>
-        {error && <p className="text-red-500 mb-4">{error}</p>}
 
-        <form onSubmit={isLogin ? handleLogin : handleSignup} className="space-y-4">
+        {error && <p className="text-red-600 mb-4 text-center text-sm">{error}</p>}
+
+        <form
+          onSubmit={isLogin ? handleLogin : handleSignup}
+          className="space-y-4 text-black"
+        >
           <input
             type="email"
             placeholder="Email"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
-            className="w-full p-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500"
+            className="w-full p-3 border rounded-lg text-black placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-emerald-500"
             required
           />
           <input
@@ -86,7 +85,7 @@ if (adminEmails.includes(email.toLowerCase())) {
             placeholder="Password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
-            className="w-full p-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500"
+            className="w-full p-3 border rounded-lg text-black placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-emerald-500"
             required
           />
           <button
@@ -97,7 +96,7 @@ if (adminEmails.includes(email.toLowerCase())) {
           </button>
         </form>
 
-        <p className="mt-4 text-center text-sm text-gray-600">
+        <p className="mt-4 text-center text-sm text-black">
           {isLogin ? "Don't have an account?" : "Already have an account?"}{" "}
           <span
             onClick={() => setIsLogin(!isLogin)}

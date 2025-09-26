@@ -1,12 +1,28 @@
+"use client";
 import React from "react";
-import { Bell, User } from "lucide-react";
+import { Bell, User, Menu } from "lucide-react";
 
-const Navbar: React.FC = () => {
+interface NavbarProps {
+  onMenuClick: () => void; // passed from parent
+}
+
+const Navbar: React.FC<NavbarProps> = ({ onMenuClick }) => {
   return (
     <header className="bg-white shadow-md fixed top-0 left-0 w-full z-40">
-      <div className="flex justify-between items-center px-6 py-3">
-        {/* Logo */}
-        <h1 className="text-xl font-bold text-blue-600">Swift METALS</h1>
+      <div className="flex justify-between items-center px-4 sm:px-6 py-3">
+        {/* Left Section */}
+        <div className="flex items-center gap-3">
+          {/* Hamburger - only visible on mobile */}
+          <button
+            onClick={onMenuClick}
+            className="md:hidden text-gray-700 focus:outline-none"
+          >
+            <Menu className="h-6 w-6" />
+          </button>
+
+          {/* Logo */}
+          <h1 className="text-xl font-bold text-blue-600">Swift METALS</h1>
+        </div>
 
         {/* Right Section */}
         <div className="flex items-center gap-6">
@@ -23,7 +39,9 @@ const Navbar: React.FC = () => {
             <div className="h-8 w-8 rounded-full bg-blue-500 flex items-center justify-center text-white font-bold">
               OLA
             </div>
-            <span className="text-gray-700 font-medium">HELLO ADMIN</span>
+            <span className="text-gray-700 font-medium hidden sm:block">
+              HELLO ADMIN
+            </span>
           </div>
         </div>
       </div>

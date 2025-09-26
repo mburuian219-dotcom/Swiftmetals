@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 
 // ---------------- GET all orders ----------------
@@ -129,5 +129,36 @@ export async function POST(req: Request) {
   } catch (error: any) {
     console.error("POST /api/orders error:", error);
     return NextResponse.json({ error: error.message }, { status: 500 });
+  }
+}
+
+// ---------------- UPDATE order status (PATCH) ----------------
+export async function PATCH(req: NextRequest) {
+  try {
+    const { id, status } = await req.json();
+
+    if (!id || !status) {
+      return NextResponse.json({ error: "ID and status are required" }, { status: 400 });
+    }
+
+    const updatedOrder = await prisma.sale.update({
+      where: { id: Number(id) },
+      data: { status },
+      include: {
+        customer: true,
+        saleitem: { include: { product: true } },
+      },
+    });
+
+    return NextResponse.json({
+      ...updatedOrder,
+      saleitems: updatedOrder.saleitem,
+    });
+  } catch (error: any) {
+    console.error("PATCH /api/orders error:", error);
+    return NextResponse.json(
+      { error: error.message || "Internal server error" },
+      { status: 500 }
+    );
   }
 }

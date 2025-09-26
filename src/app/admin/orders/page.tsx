@@ -169,87 +169,68 @@ export default function OrdersPage() {
   };
 
  const handlePlaceOrder = async () => {
-  try {
-    // Prepare order data
-    const orderData = {
-  customerId: parseInt(selectedCustomerId),
-  items: orderItems.map(item => ({
-    productId: Number(item.productId),
-    quantity: Number(item.quantity),
-    price: Number(item.price),
-  })),
-  status: orderStatus,
-};
+  if (!selectedCustomerId) return;
 
-await fetch("/api/orders", {
-  method: "POST",
-  headers: { "Content-Type": "application/json" },
-  body: JSON.stringify(orderData),
-});
+  const response = await fetch("/api/orders", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      customerId: selectedCustomerId,
+      items: orderItems,
+      status: "PENDING",
+      paymentMethod: "CASH",
+    }),
+  });
 
-    // Optional: client-side stock pre-check
-    const outOfStockItem = orderItems.find(
-      (item) =>
-        item.quantity >
-        (products.find((p) => p.id === Number(item.productId))?.stock || 0)
-    );
-
-    if (outOfStockItem) {
-      alert(`Not enough stock for ${outOfStockItem.productName || "this item"}`);
-      return;
-    }
-
-    // Send order to API
-    const response = await fetch("/api/orders", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(orderData),
-    });
-
+  if (response.ok) {
     const result = await response.json();
 
-    if (response.ok) {
-      // Add new order to state
-      setOrders([result, ...orders]);
+    // ✅ attach product names for frontend display
+    const enrichedItems = result.saleitems?.map((it: any) => ({
+      ...it,
+      productName:
+        it.product?.name ||
+        products.find(p => p.id === it.productId)?.name ||
+        "Unknown Product",
+    }));
 
-      // Reset form
-      setOrderItems([]);
-      setSelectedCustomerId("");
-      setOrderStatus("PENDING");
-      setIsAddingOrder(false);
+    const newOrder = { ...result, items: enrichedItems };
 
-      alert("Order placed successfully!");
-    } else {
-      // Show API error (e.g., out-of-stock)
-      alert(result.error || "Error placing order");
-    }
-  } catch (error: any) {
-    console.error("Error placing order:", error);
-    alert(error.message || "Error placing order. Please try again.");
+    setOrders(prev => [newOrder, ...prev]);
+
+    // Close modal + reset state
+    setOrderItems([]);
+    setSelectedCustomerId("");
+    // If you already have a modal state, update it here
+    // e.g. setShowModal(false);
   }
 };
 
 
-  // Update order status
-  const updateOrderStatus = async (orderId: number, newStatus: string) => {
-    try {
-      const response = await fetch(`/api/orders/${orderId}`, {
-        method: "PATCH",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ status: newStatus }),
-      });
 
-      if (response.ok) {
-        setOrders(orders.map(order => 
-          order.id === orderId ? { ...order, status: newStatus as OrderStatus } : order
-        ));
-      }
-    } catch (error) {
-      console.error("Error updating order status:", error);
+  const updateOrderStatus = async (orderId: number, newStatus: string) => {
+  try {
+    const response = await fetch(`/api/orders/${orderId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status: newStatus }),
+    });
+
+    if (response.ok) {
+      // ✅ use functional updater to avoid stale state
+      setOrders(prevOrders =>
+        prevOrders.map(order =>
+          order.id === orderId
+            ? { ...order, status: newStatus as OrderStatus }
+            : order
+        )
+      );
     }
-  };
+  } catch (error) {
+    console.error("Error updating order status:", error);
+  }
+};
+
 
   // Filter orders
   // Filter orders
@@ -574,120 +555,112 @@ const filteredOrders = orders.filter(order => {
         </div>
 
         {/* Orders Table */}
-        <div className="bg-white rounded-2xl shadow-lg border border-slate-100 overflow-hidden">
-          <div className="p-6 border-b border-slate-200">
-            <h2 className="text-2xl font-bold text-slate-900">Recent Orders</h2>
-            <p className="text-slate-600 mt-1">Showing {filteredOrders.length} orders</p>
-          </div>
-          
-          <div className="overflow-x-auto">
-            <table className="min-w-full">
-              <thead className="bg-slate-50">
-                <tr>
-                  <th className="px-6 py-4 text-left text-sm font-semibold text-slate-700">Order #</th>
-                  <th className="px-6 py-4 text-left text-sm font-semibold text-slate-700">Customer</th>
-                  <th className="px-6 py-4 text-left text-sm font-semibold text-slate-700">Items</th>
-                  <th className="px-6 py-4 text-left text-sm font-semibold text-slate-700">Total Amount</th>
-                  <th className="px-6 py-4 text-left text-sm font-semibold text-slate-700">Status</th>
-                  <th className="px-6 py-4 text-left text-sm font-semibold text-slate-700">Date</th>
-                  <th className="px-6 py-4 text-left text-sm font-semibold text-slate-700">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-200">
-                {filteredOrders.map((order) => (
-                  <tr key={order.id} className="hover:bg-slate-50 transition-colors">
-                    <td className="px-6 py-4">
-                      <div className="font-semibold text-slate-900">
-                        {order.orderNumber || `ORD-${order.id.toString().padStart(3, '0')}`}
-                      </div>
-                    </td>
-
-                    <td className="px-6 py-4">
-                      <div className="font-medium text-slate-900">{order.customer.name}</div>
-                    </td>
-
-                    {/* Show items - handle both items and saleItems */}
-                    
-                    <td className="px-6 py-4">
-  <div className="space-y-1">
-    {order.saleItems && order.saleItems.length > 0 ? (
-  order.saleItems.map((item: any, index: number) => (
-    <div key={index} className="text-sm text-slate-600">
-      {item.product?.name || 'Unknown Product'} × {item.quantity}
-    </div>
-  ))
-) : order.items && order.items.length > 0 ? (
-  order.items.map((item: any, index: number) => (
-    <div key={index} className="text-sm text-slate-600">
-      {item.productName} × {item.quantity}
-    </div>
-  ))
-) : (
-  <div className="text-sm text-slate-400 italic">No items</div>
-)}
-
+<div className="bg-white rounded-2xl shadow-lg border border-slate-100 overflow-hidden">
+  <div className="p-6 border-b border-slate-200">
+    <h2 className="text-2xl font-bold text-slate-900">Recent Orders</h2>
+    <p className="text-slate-600 mt-1">Showing {filteredOrders.length} orders</p>
   </div>
-</td>
+  
+  <div className="overflow-x-auto">
+    <table className="min-w-full">
+      <thead className="bg-slate-50">
+        <tr>
+          <th className="px-6 py-4 text-left text-sm font-semibold text-slate-700">Order #</th>
+          <th className="px-6 py-4 text-left text-sm font-semibold text-slate-700">Customer</th>
+          <th className="px-6 py-4 text-left text-sm font-semibold text-slate-700">Items</th>
+          <th className="px-6 py-4 text-left text-sm font-semibold text-slate-700">Total Amount</th>
+          <th className="px-6 py-4 text-left text-sm font-semibold text-slate-700">Status</th>
+          <th className="px-6 py-4 text-left text-sm font-semibold text-slate-700">Date</th>
+          <th className="px-6 py-4 text-left text-sm font-semibold text-slate-700">Actions</th>
+        </tr>
+      </thead>
 
+      <tbody className="divide-y divide-slate-200">
+        {filteredOrders.map((order) => (
+          <tr key={order.id} className="hover:bg-slate-50 transition-colors">
+            {/* Order Number */}
+            <td className="px-6 py-4 font-semibold text-slate-900">
+              {order.orderNumber || `ORD-${order.id.toString().padStart(3, "0")}`}
+            </td>
 
-                    {/* Show total - handle both amount and totalAmount */}
-                    <td className="px-6 py-4">
-                      <div className="font-bold text-emerald-600 text-lg">
-                        KSh {(order.amount || order.totalAmount || 0).toLocaleString()}
-                      </div>
-                    </td>
+            {/* Customer */}
+            <td className="px-6 py-4">
+              <div className="font-medium text-slate-900">{order.customer.name}</div>
+            </td>
 
-                    {/* Status select */}
-                    <td className="px-6 py-4">
-                      <select
-                        value={order.status}
-                        onChange={(e) => updateOrderStatus(order.id, e.target.value)}
-                        className={`px-3 py-2 rounded-full text-sm font-semibold border-0 outline-none cursor-pointer ${getStatusColor(
-                          order.status
-                        )}`}
-                      >
-                        <option value="PENDING">Pending</option>
-                        <option value="PAID">Paid</option>
-                        <option value="DELIVERED">Delivered</option>
-                        <option value="CANCELLED">Cancelled</option>
-                      </select>
-                    </td>
+            {/* Items */}
+            <td className="px-6 py-4">
+              <div className="space-y-1">
+                {order.saleItems && order.saleItems.length > 0 ? (
+                  order.saleItems.map((item: any, index: number) => (
+                    <div key={index} className="text-sm text-slate-600">
+                      {item.product?.name || "Unknown Product"} × {item.quantity}
+                    </div>
+                  ))
+                ) : order.items && order.items.length > 0 ? (
+                  order.items.map((item: any, index: number) => (
+                    <div key={index} className="text-sm text-slate-600">
+                      {item.productName} × {item.quantity}
+                    </div>
+                  ))
+                ) : (
+                  <div className="text-sm text-slate-400 italic">No items</div>
+                )}
+              </div>
+            </td>
 
-                    <td className="px-6 py-4">
-                      <div className="text-slate-600">
-                        {new Date(order.date).toLocaleDateString()}
-                      </div>
-                    </td>
+            {/* Total */}
+            <td className="px-6 py-4 font-bold text-emerald-600 text-lg">
+              KSh {(order.amount || order.totalAmount || 0).toLocaleString()}
+            </td>
 
-                    <td className="px-6 py-4">
-                      <div className="flex gap-2">
-                        <button className="p-2 text-slate-500 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-all duration-200">
-                          <Eye className="w-4 h-4" />
-                        </button>
+            {/* Status */}
+            <td className="px-6 py-4">
+              <select
+                value={order.status}
+                onChange={(e) => updateOrderStatus(order.id, e.target.value)}
+                className={`px-3 py-2 rounded-full text-sm font-semibold border-0 outline-none cursor-pointer ${getStatusColor(order.status)}`}
+              >
+                <option value="PENDING">Pending</option>
+                <option value="PAID">Paid</option>
+                <option value="DELIVERED">Delivered</option>
+                <option value="CANCELLED">Cancelled</option>
+              </select>
+            </td>
 
-                        {/* Edit button opens modal */}
-                        <button
-                          onClick={() => setEditingOrder(order)}
-                          className="p-2 text-slate-500 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-all duration-200"
-                        >
-                          <Edit3 className="w-4 h-4" />
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+            {/* Date */}
+            <td className="px-6 py-4 text-slate-600">
+              {new Date(order.date).toLocaleDateString()}
+            </td>
 
-          {filteredOrders.length === 0 && (
-            <div className="text-center py-12">
-              <ShoppingCart className="w-16 h-16 text-slate-300 mx-auto mb-4" />
-              <h3 className="text-xl font-semibold text-slate-700 mb-2">No orders found</h3>
-              <p className="text-slate-500">Try adjusting your search or filter criteria</p>
-            </div>
-          )}
-        </div>
+            {/* Actions */}
+            <td className="px-6 py-4">
+              <div className="flex gap-2">
+                <button className="p-2 text-slate-500 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-all duration-200">
+                  <Eye className="w-4 h-4" />
+                </button>
+                <button
+                  onClick={() => setEditingOrder(order)}
+                  className="p-2 text-slate-500 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-all duration-200"
+                >
+                  <Edit3 className="w-4 h-4" />
+                </button>
+              </div>
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  </div>
+
+  {filteredOrders.length === 0 && (
+    <div className="text-center py-12">
+      <ShoppingCart className="w-16 h-16 text-slate-300 mx-auto mb-4" />
+      <h3 className="text-xl font-semibold text-slate-700 mb-2">No orders found</h3>
+      <p className="text-slate-500">Try adjusting your search or filter criteria</p>
+    </div>
+  )}
+</div>
 
         {/* Edit Modal */}
         {editingOrder && (

@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 
 // ---------------- GET all products ----------------
@@ -9,27 +9,32 @@ export async function GET() {
       orderBy: { createdAt: "desc" },
     });
 
-    // Compute total stockQuantity
     const normalized = products.map((p) => ({
       ...p,
-      stockQuantity: p.stock.reduce((sum: number, s: { quantity: number }) => sum + s.quantity, 0),
+      stockQuantity: p.stock.reduce((sum, s) => sum + s.quantity, 0),
     }));
 
     return NextResponse.json(normalized);
   } catch (error) {
     console.error("GET /api/products error:", error);
-    return NextResponse.json({ error: "Failed to fetch products" }, { status: 500 });
+    return NextResponse.json(
+      { error: "Failed to fetch products" },
+      { status: 500 }
+    );
   }
 }
 
 // ---------------- CREATE a new product ----------------
 export async function POST(req: Request) {
   try {
-    const body = await req.json();
-    const { name, description, price, stockQuantity, costPrice, category } = body;
+    const { name, description, price, stockQuantity, costPrice, category } =
+      await req.json();
 
     if (!name || !price) {
-      return NextResponse.json({ error: "Name and price are required" }, { status: 400 });
+      return NextResponse.json(
+        { error: "Name and price are required" },
+        { status: 400 }
+      );
     }
 
     const newProduct = await prisma.product.create({
@@ -50,55 +55,80 @@ export async function POST(req: Request) {
       include: { stock: true },
     });
 
-    return NextResponse.json({
-      ...newProduct,
-      stockQuantity: newProduct.stock.reduce((sum: number, s: { quantity: number }) => sum + s.quantity, 0),
-    }, { status: 201 });
+    return NextResponse.json(
+      {
+        ...newProduct,
+        stockQuantity: newProduct.stock.reduce(
+          (sum, s) => sum + s.quantity,
+          0
+        ),
+      },
+      { status: 201 }
+    );
   } catch (error) {
     console.error("POST /api/products error:", error);
-    return NextResponse.json({ error: "Failed to create product" }, { status: 500 });
+    return NextResponse.json(
+      { error: "Failed to create product" },
+      { status: 500 }
+    );
   }
 }
 
 // ---------------- UPDATE a product ----------------
-export async function PUT(req: Request, { params }: { params: { id: string } }) {
+export async function PUT(req: NextRequest) {
   try {
-    const id = Number(params.id);
-    const { name, description, price, stockQuantity, category } = await req.json();
+    const { id, name, description, price, stockQuantity, category } =
+      await req.json();
 
-    // Update product details
+    const productId = Number(id);
+    if (!id || isNaN(productId)) {
+      return NextResponse.json(
+        { error: "Valid product ID is required" },
+        { status: 400 }
+      );
+    }
+
+    const product = await prisma.product.findUnique({
+      where: { id: productId },
+      include: { stock: true },
+    });
+
+    if (!product) {
+      return NextResponse.json({ error: "Product not found" }, { status: 404 });
+    }
+
     const updatedProduct = await prisma.product.update({
-      where: { id },
+      where: { id: productId },
       data: {
         name,
         description,
         price: Number(price),
         category,
+        stock: product.stock.length
+          ? {
+              update: {
+                where: { id: product.stock[0].id },
+                data: { quantity: Number(stockQuantity) || 0 },
+              },
+            }
+          : {
+              create: {
+                name: `${name} initial stock`,
+                quantity: Number(stockQuantity) || 0,
+                costPrice: Number(price),
+                sellingPrice: Number(price),
+              },
+            },
       },
       include: { stock: true },
     });
 
-    // Update stock separately
-    if (updatedProduct.stock.length > 0) {
-      // Update the first stock entry for simplicity
-      await prisma.stock.update({
-        where: { id: updatedProduct.stock[0].id },
-        data: { quantity: Number(stockQuantity) },
-      });
-    }
-
-    // Fetch again to include updated stock
-    const finalProduct = await prisma.product.findUnique({
-      where: { id },
-      include: { stock: true },
-    });
-
-    return NextResponse.json({
-      ...finalProduct,
-      stockQuantity: finalProduct?.stock.reduce((sum: number, s: { quantity: number }) => sum + s.quantity, 0) || 0,
-    });
-  } catch (error) {
+    return NextResponse.json(updatedProduct);
+  } catch (error: any) {
     console.error("PUT /api/products error:", error);
-    return NextResponse.json({ error: "Failed to update product" }, { status: 500 });
+    return NextResponse.json(
+      { error: error.message || "Failed to update product" },
+      { status: 500 }
+    );
   }
 }

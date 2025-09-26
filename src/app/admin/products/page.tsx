@@ -46,16 +46,16 @@ export default function ProductsPage() {
     e.preventDefault();
 
     const payload = {
+      id: editingId || undefined,
       ...form,
       price: parseFloat(form.price),
       stockQuantity: parseInt(form.stock),
     };
 
-    const url = editingId ? `/api/products/${editingId}` : "/api/products";
     const method = editingId ? "PUT" : "POST";
 
     try {
-      const res = await fetch(url, {
+      const res = await fetch("/api/products", {
         method,
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
@@ -70,9 +70,11 @@ export default function ProductsPage() {
       savedProduct.stockQuantity = savedProduct.stock?.[0]?.quantity || 0;
 
       if (editingId) {
-        setProducts(products.map((p) => (p.id === editingId ? savedProduct : p)));
+        setProducts((prev) =>
+          prev.map((p) => (p.id === editingId ? savedProduct : p))
+        );
       } else {
-        setProducts([savedProduct, ...products]);
+        setProducts((prev) => [savedProduct, ...prev]);
       }
 
       setForm({ name: "", description: "", price: "", stock: "", category: "" });
@@ -100,7 +102,12 @@ export default function ProductsPage() {
     if (!confirm("Are you sure you want to delete this product?")) return;
 
     try {
-      const res = await fetch(`/api/products/${id}`, { method: "DELETE" });
+      const res = await fetch("/api/products", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id }),
+      });
+
       if (!res.ok) {
         const data = await res.json();
         return alert(data.error || "Failed to delete product");
@@ -152,7 +159,10 @@ export default function ProductsPage() {
           value={form.category}
           onChange={(e) => setForm({ ...form, category: e.target.value })}
         />
-        <button className="bg-blue-600 text-white px-4 py-2 rounded" type="submit">
+        <button
+          className="bg-blue-600 text-white px-4 py-2 rounded"
+          type="submit"
+        >
           {editingId ? "Update Product" : "Add Product"}
         </button>
       </form>
@@ -160,7 +170,10 @@ export default function ProductsPage() {
       {/* Products list */}
       <div className="grid gap-4">
         {products.map((p) => (
-          <div key={p.id} className="border p-4 rounded flex justify-between items-center">
+          <div
+            key={p.id}
+            className="border p-4 rounded flex justify-between items-center"
+          >
             <div>
               <h2 className="text-lg font-semibold">{p.name}</h2>
               <p>{p.description}</p>
