@@ -155,54 +155,56 @@ export async function PUT(req: Request) {
       return NextResponse.json({ error: "Sale not found" }, { status: 404 });
     }
 
-    // ✅ NEW: If updating only payments, don’t wipe out old items
-    let newItems = data.saleItems || existingSale.saleitem;
+    // 🟢 Recalculate amount if items changed
+    const newItems = data.saleItems || existingSale.saleitem;
     const recalculatedAmount = newItems.reduce(
       (sum: number, item: any) => sum + item.price * item.quantity,
       0
     );
 
-    // ✅ NEW: Append payments instead of deleting all
-    const newPayments = [
-      ...existingSale.payment,
-      ...(data.payments?.map((p: any) => ({
-        amount: Number(p.amount),
-        method: p.method,
-        status: p.method === "CHECK" && !p.checkDate ? "PENDING" : "CLEARED",
-        referenceId: p.referenceId || null,
-        checkDate: p.checkDate ? new Date(p.checkDate) : null,
-        paidAt: p.paidAt ? new Date(p.paidAt) : new Date(),
-      })) || []),
-    ];
-
-    const updated = await prisma.sale.update({
+    // 🟢 Update main sale fields
+    await prisma.sale.update({
       where: { id },
       data: {
         customerId: data.customerId ?? existingSale.customerId,
         amount: recalculatedAmount,
         date: data.date ? new Date(data.date) : existingSale.date,
         paymentMethod: data.paymentMethod ?? existingSale.paymentMethod,
-        saleitem: {
-          deleteMany: { saleId: id },
-          create: newItems.map((item: any) => ({
-            productId: item.productId,
-            quantity: item.quantity,
-            price: item.price,
-            total: item.price * item.quantity,
-          })),
-        },
-        payment: {
-          deleteMany: { saleId: id },
-          create: newPayments.map((p: any) => ({
-            amount: p.amount,
-            method: p.method,
-            status: p.status,
-            referenceId: p.referenceId,
-            checkDate: p.checkDate,
-            paidAt: p.paidAt,
-          })),
-        },
       },
+    });
+
+    // 🟢 Replace saleitems if provided
+    if (data.saleItems) {
+      await prisma.saleitem.deleteMany({ where: { saleId: id } });
+      await prisma.saleitem.createMany({
+        data: data.saleItems.map((item: any) => ({
+          saleId: id,
+          productId: item.productId,
+          quantity: item.quantity,
+          price: item.price,
+          total: item.price * item.quantity,
+        })),
+      });
+    }
+
+    // 🟢 Append new payments
+    if (Array.isArray(data.payments) && data.payments.length > 0) {
+      await prisma.payment.createMany({
+        data: data.payments.map((p: any) => ({
+          saleId: id,
+          amount: Number(p.amount),
+          method: p.method,
+          status: p.method === "CHECK" && !p.checkDate ? "PENDING" : "CLEARED",
+          referenceId: p.referenceId || null,
+          checkDate: p.checkDate ? new Date(p.checkDate) : null,
+          paidAt: p.paidAt ? new Date(p.paidAt) : new Date(),
+        })),
+      });
+    }
+
+    // 🟢 Fetch updated sale
+    const updated = await prisma.sale.findUnique({
+      where: { id },
       include: {
         customer: true,
         saleitem: { include: { product: true } },

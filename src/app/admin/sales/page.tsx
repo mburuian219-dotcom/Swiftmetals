@@ -28,7 +28,7 @@ interface Payment {
   date: string;
   referenceId?: string | null;
   checkDepositDate?: string | null;
-  status?: "PENDING" | "COMPLETED" | "BOUNCED"; // ✅ Added status property
+  status?: "PENDING" | "COMPLETED" | "BOUNCED";
 }
 
 interface NewPayment {
@@ -36,18 +36,13 @@ interface NewPayment {
   amount: string;
   method: "CASH" | "MPESA" | "BANK" | "CHECK" | "CARD";
   referenceId?: string;
-
-  // For check payments
-  checkDepositDate?: string;   // when it will be deposited
-  checkNumber?: string;        // actual check number
-  bankName?: string;           // issuing bank
-  checkDate?: string;          // date written on the check
-
-  // Optional verification/status tracking
+  checkDepositDate?: string;
+  checkNumber?: string;
+  bankName?: string;
+  checkDate?: string;
   isVerified?: boolean;
   status?: "PENDING" | "CLEARED" | "BOUNCED";
 }
-
 
 interface Sale {
   id: number;
@@ -74,23 +69,22 @@ const EnhancedSalesPage = () => {
   const [sales, setSales] = useState<Sale[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
- 
 
-const fetchSales = async () => {
-  const res = await fetch("/api/sales");
-  const data = await res.json();
-  setSales(data);
-};
+  const fetchSales = async () => {
+    const res = await fetch("/api/sales");
+    const data = await res.json();
+    setSales(data);
+  };
 
-useEffect(() => {
-  fetchSales();
-}, []);
+  useEffect(() => {
+    fetchSales();
+  }, []);
 
   // New Sale State
   const [showAddSale, setShowAddSale] = useState(false);
   const [newSale, setNewSale] = useState({
     customerId: "",
-    dueDate: new Date().toISOString().split('T')[0], // Default to today
+    dueDate: new Date().toISOString().split('T')[0],
   });
   
   const [saleItems, setSaleItems] = useState<NewSaleItem[]>([]);
@@ -117,7 +111,7 @@ useEffect(() => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<"overview" | "paid" | "partial" | "unpaid" | "messaging">("overview");
+  const [activeTab, setActiveTab] = useState<"messaging" | "overview" | "paid" | "partial" | "unpaid">("messaging");
   
   // SMS messaging state
   const [messagingStats, setMessagingStats] = useState({
@@ -131,50 +125,91 @@ useEffect(() => {
   const [selectedSales, setSelectedSales] = useState<number[]>([]);
   const [messagingLoading, setMessagingLoading] = useState(false);
 
-  // Fixed function to calculate status and remaining amount correctly
- const calculateSaleStatus = (sale: any): Sale => {
-  const totalPayments = sale.payments && sale.payments.length > 0
-    ? sale.payments.reduce((sum: number, p: Payment) => sum + Number(p.amount || 0), 0)
-    : 0;
-  
-  const remainingAmount = Math.max(0, Number(sale.amount) - totalPayments);
-  
-  // Check if there are any pending checks
-  const hasPendingChecks = sale.payments?.some((p: Payment) => {
-    if (p.method !== "CHECK") return false;
+  // Format phone number to international format
+  const formatPhoneNumber = (phone: string) => {
+    if (!phone) return phone;
     
-    // Check is pending if:
-    // 1. No deposit date set, OR
-    // 2. Deposit date is in the future, OR  
-    // 3. Payment status is explicitly "PENDING"
-    const today = new Date().toISOString().split('T')[0];
-    const hasDepositDate = p.checkDepositDate;
-    const isDepositDateFuture = hasDepositDate && p.checkDepositDate! > today;
-    const isPendingStatus = p.status === "PENDING";
+    const cleanPhone = phone.replace(/\D/g, "");
     
-    return !hasDepositDate || isDepositDateFuture || isPendingStatus;
-  }) || false;
-
-  let status: "PAID" | "PARTIAL" | "UNPAID";
-  
-  // If there are pending checks, status cannot be "PAID" even if amount is covered
-  if (hasPendingChecks && remainingAmount <= 0.01) {
-    status = "PARTIAL"; // Has full payment amount but checks not cleared
-  } else if (remainingAmount <= 0.01) {
-    status = "PAID";
-  } else if (totalPayments > 0) {
-    status = "PARTIAL";
-  } else {
-    status = "UNPAID";
-  }
-
-  return {
-    ...sale,
-    remainingAmount,
-    status,
-    payments: sale.payments || []
+    // Convert 07XXXXXXXX to 2547XXXXXXXX
+    if (cleanPhone.startsWith("07")) {
+      return "254" + cleanPhone.substring(1);
+    }
+    
+    // Convert 7XXXXXXXX to 2547XXXXXXXX
+    if (cleanPhone.startsWith("7") && cleanPhone.length === 9) {
+      return "254" + cleanPhone;
+    }
+    
+    return cleanPhone;
   };
-};
+
+  // Message type options for manual messaging
+  const messageTypes = [
+    { 
+      value: "delivery", 
+      label: "Delivery Confirmation",
+      getTemplate: (sale: Sale) => `Hi ${sale.customer.name}, thank you for your purchase of ${
+        sale.saleitems?.map(item => `${item.product?.name || "Product"} (×${item.quantity})`).join(", ") || "your recent purchase"
+      }. Your order has been confirmed for delivery.`
+    },
+    { 
+      value: "payment", 
+      label: "Payment Reminder",
+      getTemplate: (sale: Sale) => `Hi ${sale.customer.name}, you have an outstanding balance of Ksh ${sale.remainingAmount.toFixed(2)} for ${
+        sale.saleitems?.map(item => item.product?.name || "Product").join(", ") || "your order"
+      }. ${sale.dueDate && sale.status !== "PAID" ? `Payment is due on ${new Date(sale.dueDate).toLocaleDateString()}.` : ""} Please clear your balance at your earliest convenience.`
+    },
+    { 
+      value: "check", 
+      label: "Check Deposit Reminder",
+      getTemplate: (sale: Sale) => `Hi ${sale.customer.name}, this is a reminder that your check payment for ${
+        sale.saleitems?.map(item => item.product?.name || "Product").join(", ") || "your order"
+      } is scheduled for deposit. Please ensure sufficient funds are available in your account.`
+    }
+  ];
+
+  const [selectedMessageType, setSelectedMessageType] = useState("delivery");
+
+  // Fixed function to calculate status and remaining amount correctly
+  const calculateSaleStatus = (sale: any): Sale => {
+    const totalPayments = sale.payments && sale.payments.length > 0
+      ? sale.payments.reduce((sum: number, p: Payment) => sum + Number(p.amount || 0), 0)
+      : 0;
+    
+    const remainingAmount = Math.max(0, Number(sale.amount) - totalPayments);
+    
+    const hasPendingChecks = sale.payments?.some((p: Payment) => {
+      if (p.method !== "CHECK") return false;
+      
+      const today = new Date().toISOString().split('T')[0];
+      const hasDepositDate = p.checkDepositDate;
+      const isDepositDateFuture = hasDepositDate && p.checkDepositDate! > today;
+      const isPendingStatus = p.status === "PENDING";
+      
+      return !hasDepositDate || isDepositDateFuture || isPendingStatus;
+    }) || false;
+
+    let status: "PAID" | "PARTIAL" | "UNPAID";
+    
+    if (hasPendingChecks && remainingAmount <= 0.01) {
+      status = "PARTIAL";
+    } else if (remainingAmount <= 0.01) {
+      status = "PAID";
+    } else if (totalPayments > 0) {
+      status = "PARTIAL";
+    } else {
+      status = "UNPAID";
+    }
+
+    return {
+      ...sale,
+      remainingAmount,
+      status,
+      payments: sale.payments || []
+    };
+  };
+
   // Fetch all data from database
   useEffect(() => {
     const fetchData = async () => {
@@ -196,7 +231,6 @@ useEffect(() => {
           productsRes.json()
         ]);
 
-        // Process sales data with fixed calculation
         const processedSales = salesData.map(calculateSaleStatus);
 
         setSales(processedSales);
@@ -257,8 +291,16 @@ useEffect(() => {
 
   const handleAddPayment = () => {
     const amount = parseFloat(currentPayment.amount);
+    const remainingAmount = getRemainingAmount();
+    
     if (!amount || amount <= 0) {
       setError("Please enter a valid payment amount");
+      return;
+    }
+
+    // Check if payment exceeds remaining amount
+    if (amount > remainingAmount) {
+      setError(`Payment amount cannot exceed remaining balance of Ksh ${remainingAmount.toFixed(2)}`);
       return;
     }
 
@@ -313,107 +355,103 @@ useEffect(() => {
   };
 
   // Handle new sale submission
- const handleCreateSale = async () => {
-  if (saleItems.length === 0) {
-    setError("Please add at least one item to the sale");
-    return;
-  }
-
-  if (!newSale.customerId) {
-    setError("Please select a customer");
-    return;
-  }
-
-  setLoading(true);
-  try {
-    const totalAmount = calculateTotalAmount();
-    const totalPayments = calculateTotalPayments();
-    const remainingAmount = totalAmount - totalPayments;
-
-    let status: "PAID" | "PARTIAL" | "UNPAID";
-    if (remainingAmount <= 0.01) {
-      status = "PAID";
-    } else if (totalPayments > 0) {
-      status = "PARTIAL";
-    } else {
-      status = "UNPAID";
+  const handleCreateSale = async () => {
+    if (saleItems.length === 0) {
+      setError("Please add at least one item to the sale");
+      return;
     }
 
-    // ✅ Prepare payments data with proper status
-    const paymentsData = payments.length > 0
-      ? payments.map(p => {
-          const isCheck = p.method?.toUpperCase() === "CHECK";
-          return {
-            amount: Number(p.amount),
-            method: p.method || "CASH",
-            referenceId: p.referenceId?.trim() || null,
-            checkDepositDate: p.checkDepositDate || null,
-            checkNumber: p.checkNumber?.trim() || null,
-            bankName: p.bankName?.trim() || null,
-            checkDate: p.checkDate || null,
-            date: new Date().toISOString(),
-            status: isCheck ? "PENDING" : "COMPLETED", // ✅ Check starts as PENDING
-          };
-        })
-      : [];
-
-    const saleData = {
-      customerId: parseInt(newSale.customerId),
-      amount: totalAmount,
-      status,
-      dueDate: newSale.dueDate || null,
-      saleItems: saleItems.map(item => ({
-        productId: item.productId,
-        quantity: item.quantity,
-        price: item.price,
-      })),
-      payments: paymentsData,
-    };
-
-    const response = await fetch("/api/sales", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(saleData),
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      throw new Error(errorData.error || "Failed to create sale");
+    if (!newSale.customerId) {
+      setError("Please select a customer");
+      return;
     }
 
-    const createdSale = await response.json();
+    setLoading(true);
+    try {
+      const totalAmount = calculateTotalAmount();
+      const totalPayments = calculateTotalPayments();
+      const remainingAmount = totalAmount - totalPayments;
 
-    // Process the created sale with correct calculations
-    const processedSale = calculateSaleStatus(createdSale);
-    setSales([processedSale, ...sales]);
+      let status: "PAID" | "PARTIAL" | "UNPAID";
+      if (remainingAmount <= 0.01) {
+        status = "PAID";
+      } else if (totalPayments > 0) {
+        status = "PARTIAL";
+      } else {
+        status = "UNPAID";
+      }
 
-    // Reset form
-    setShowAddSale(false);
-    setSaleItems([]);
-    setPayments([]);
-    setNewSale({
-      customerId: "",
-      dueDate: new Date().toISOString().split("T")[0],
-    });
-    setSuccess("Sale created successfully!");
+      const paymentsData = payments.length > 0
+        ? payments.map(p => {
+            const isCheck = p.method?.toUpperCase() === "CHECK";
+            return {
+              amount: Number(p.amount),
+              method: p.method || "CASH",
+              referenceId: p.referenceId?.trim() || null,
+              checkDepositDate: p.checkDepositDate || null,
+              checkNumber: p.checkNumber?.trim() || null,
+              bankName: p.bankName?.trim() || null,
+              checkDate: p.checkDate || null,
+              date: new Date().toISOString(),
+              status: isCheck ? "PENDING" : "COMPLETED",
+            };
+          })
+        : [];
 
-    // Refresh data from database
-    const salesRes = await fetch("/api/sales");
-    if (salesRes.ok) {
-      const updatedSales = await salesRes.json();
-      const processedSales = updatedSales.map(calculateSaleStatus);
-      setSales(processedSales);
+      const saleData = {
+        customerId: parseInt(newSale.customerId),
+        amount: totalAmount,
+        status,
+        dueDate: newSale.dueDate || null,
+        saleItems: saleItems.map(item => ({
+          productId: item.productId,
+          quantity: item.quantity,
+          price: item.price,
+        })),
+        payments: paymentsData,
+      };
+
+      const response = await fetch("/api/sales", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(saleData),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || "Failed to create sale");
+      }
+
+      const createdSale = await response.json();
+      const processedSale = calculateSaleStatus(createdSale);
+      setSales([processedSale, ...sales]);
+
+      // Reset form
+      setShowAddSale(false);
+      setSaleItems([]);
+      setPayments([]);
+      setNewSale({
+        customerId: "",
+        dueDate: new Date().toISOString().split("T")[0],
+      });
+      setSuccess("Sale created successfully!");
+
+      // Refresh data from database
+      const salesRes = await fetch("/api/sales");
+      if (salesRes.ok) {
+        const updatedSales = await salesRes.json();
+        const processedSales = updatedSales.map(calculateSaleStatus);
+        setSales(processedSales);
+      }
+    } catch (err: any) {
+      setError(err.message || "Failed to create sale");
+      console.error("Error creating sale:", err);
+    } finally {
+      setLoading(false);
     }
-  } catch (err: any) {
-    setError(err.message || "Failed to create sale");
-    console.error("Error creating sale:", err);
-  } finally {
-    setLoading(false);
-  }
-};
-
+  };
   
   // Handle edit sale
   const handleEditSale = (sale: Sale) => {
@@ -427,7 +465,7 @@ useEffect(() => {
     })));
   };
 
-  // ✅ Fixed handleUpdateSale function with proper closing
+  // Fixed handleUpdateSale function
   const handleUpdateSale = async () => {
     if (!editingSale) return;
 
@@ -441,9 +479,17 @@ useEffect(() => {
         return;
       }
 
+      // Check if payment exceeds remaining amount
+      const paymentAmount = Number(newPayment.amount);
+      if (paymentAmount > editingSale.remainingAmount) {
+        setError(`Payment amount cannot exceed remaining balance of Ksh ${editingSale.remainingAmount.toFixed(2)}`);
+        setLoading(false);
+        return;
+      }
+
       const updateData = {
         payment: {
-          amount: Number(newPayment.amount),
+          amount: paymentAmount,
           method: newPayment.method,
           referenceId: newPayment.referenceId?.trim() || null,
           checkDepositDate: newPayment.checkDepositDate || null,
@@ -463,19 +509,17 @@ useEffect(() => {
       }
 
       const updatedSale = await response.json();
-      
-      // ✅ Process the updated sale with correct calculations
       const processedSale = calculateSaleStatus(updatedSale);
 
-      // ✅ Update the sales list with the new data
+      // Update the sales list immediately
       setSales(prevSales => 
         prevSales.map(s => s.id === processedSale.id ? processedSale : s)
       );
 
-      // ✅ Update the editing modal with fresh data
+      // Update the editing modal with fresh data
       setEditingSale(processedSale);
       
-      // ✅ Update editPayments to show all payments (including the new one)
+      // Update editPayments to show all payments
       setEditPayments(
         processedSale.payments.map((p: Payment) => ({
           id: p.id,
@@ -501,47 +545,51 @@ useEffect(() => {
     } finally {
       setLoading(false);
     }
-  }; // ✅ Added missing closing brace
+  };
 
-const handleDeletePayment = async (paymentId: number, saleId: number) => {
-  try {
-    const response = await fetch(`/api/payments/${paymentId}?saleId=${saleId}`, {
-      method: "DELETE",
-    });
+  const handleDeletePayment = async (paymentId: number, saleId: number) => {
+    try {
+      const response = await fetch(`/api/payments/${paymentId}?saleId=${saleId}`, {
+        method: "DELETE",
+      });
 
-    if (!response.ok) {
-      const err = await response.json();
-      throw new Error(err.error || "Failed to delete payment");
+      if (!response.ok) {
+        const err = await response.json();
+        throw new Error(err.error || "Failed to delete payment");
+      }
+
+      const updatedSale = await response.json();
+      const processedSale = calculateSaleStatus(updatedSale);
+
+      setSales(sales.map(s => s.id === processedSale.id ? processedSale : s));
+      setEditingSale(processedSale);
+      setEditPayments(
+        processedSale.payments.map((p: Payment) => ({
+          id: p.id,
+          amount: p.amount.toString(),
+          method: p.method,
+          referenceId: p.referenceId || "",
+          checkDepositDate: p.checkDepositDate || ""
+        }))
+      );
+
+      setSuccess("Payment deleted successfully!");
+    } catch (error: any) {
+      console.error("Error deleting payment:", error);
+      setError(error.message || "Failed to delete payment");
     }
-
-    const updatedSale = await response.json();
-
-    setSales(sales.map(s => s.id === updatedSale.id ? updatedSale : s));
-    setEditingSale(updatedSale);
-    setEditPayments(
-  updatedSale.payments.map((p: Payment) => ({
-    id: p.id,
-    amount: p.amount.toString(),
-    method: p.method,
-    referenceId: p.referenceId || "",
-    checkDepositDate: p.checkDepositDate || ""
-  }))
-);
-
-
-    setSuccess("Payment deleted successfully!");
-  } catch (error: any) {
-    console.error("Error deleting payment:", error);
-    setError(error.message || "Failed to delete payment");
-  }
-};
-
- 
+  };
 
   const addEditPayment = () => {
     const amount = parseFloat(currentPayment.amount);
     if (!amount || amount <= 0) {
       setError("Please enter a valid payment amount");
+      return;
+    }
+
+    // Check if payment exceeds remaining amount for edit mode
+    if (editingSale && amount > editingSale.remainingAmount) {
+      setError(`Payment amount cannot exceed remaining balance of Ksh ${editingSale.remainingAmount.toFixed(2)}`);
       return;
     }
 
@@ -565,7 +613,7 @@ const handleDeletePayment = async (paymentId: number, saleId: number) => {
     setSuccess(null);
   };
 
-  // Calculate dashboard totals with fixed calculations
+  // Calculate dashboard totals
   const totalSales = sales.reduce((acc, s) => acc + Number(s.amount), 0);
   const paidSales = sales.filter((s) => s.status === "PAID").reduce((acc, s) => acc + Number(s.amount), 0);
   const partialSales = sales.filter((s) => s.status === "PARTIAL").reduce((acc, s) => acc + Number(s.amount), 0);
@@ -581,94 +629,85 @@ const handleDeletePayment = async (paymentId: number, saleId: number) => {
         return sales.filter(s => s.status === "PARTIAL");
       case "unpaid":
         return sales.filter(s => s.status === "UNPAID");
+      case "overview":
+        return sales;
       default:
         return sales;
     }
   };
-  
 
-  // SMS messaging functions (keeping existing implementation)
+  // SMS messaging functions
   const sendDeliveryConfirmation = async (saleId: number) => {
-  setMessagingLoading(true);
-  try {
-    const res = await fetch("/api/sms/send-delivery-confirmation", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ saleId }),
-    });
+    setMessagingLoading(true);
+    try {
+      const res = await fetch("/api/sms/send-delivery-confirmation", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ saleId }),
+      });
 
-    const data = await res.json();
+      const data = await res.json();
 
-    if (res.ok && !data.blacklist) {
-      setSuccess(`✅ Delivery confirmation SMS sent to ${data.customer}`);
-    } else if (data.blacklist) {
-      // 🚫 Blacklist fallback
-      alert("⚠️ Customer is in blacklist. Opening manual messaging…");
+      if (res.ok && !data.blacklist) {
+        setSuccess(`✅ Delivery confirmation SMS sent to ${data.customer}`);
+      } else if (data.blacklist) {
+        alert("⚠️ Customer is in blacklist. Opening manual messaging…");
+        const phoneDigits = formatPhoneNumber(data.phone);
+        const manualMsg = encodeURIComponent(
+          `Hi ${data.customer}, your delivery for ${data.product || "your order"} has been confirmed.`
+        );
 
-      const phoneDigits = data.phone.replace(/\D/g, "");
-      const manualMsg = encodeURIComponent(
-        `Hi ${data.customer}, your delivery for ${data.product || "your order"} has been confirmed.`
-      );
-
-      if (confirm("Send via WhatsApp instead?")) {
-        window.open(`https://wa.me/${phoneDigits}?text=${manualMsg}`, "_blank");
+        if (confirm("Send via WhatsApp instead?")) {
+          window.open(`https://wa.me/${phoneDigits}?text=${manualMsg}`, "_blank");
+        } else {
+          window.open(`sms:${phoneDigits}?body=${manualMsg}`, "_blank");
+        }
       } else {
-        window.open(`sms:${phoneDigits}?body=${manualMsg}`, "_blank");
+        setError(data.error || "❌ Failed to send delivery confirmation SMS");
       }
-    } else {
-      setError(data.error || "❌ Failed to send delivery confirmation SMS");
+    } catch (err) {
+      setError("❌ Failed to send delivery confirmation SMS");
+    } finally {
+      setMessagingLoading(false);
     }
-  } catch (err) {
-    setError("❌ Failed to send delivery confirmation SMS");
-  } finally {
-    setMessagingLoading(false);
-  }
-};
+  };
 
+  const sendPaymentReminder = async () => {
+    setMessagingLoading(true);
+    try {
+      const res = await fetch("/api/sms/get-overdue-payments", {
+        method: "GET",
+      });
 
- 
-const sendPaymentReminder = async () => {
-  setMessagingLoading(true);
-  try {
-    const res = await fetch("/api/sms/get-overdue-payments", {
-      method: "GET",
-    });
+      const data = await res.json();
 
-    const data = await res.json();
+      if (res.ok && !data.blacklist) {
+        setSuccess(data.message || "✅ Payment reminders sent");
+        setSelectedSales([]);
+        return data;
+      } else if (data.blacklist) {
+        alert("⚠️ Customer is in blacklist. Opening manual messaging…");
+        const phoneDigits = formatPhoneNumber(data.phone);
+        const manualMsg = encodeURIComponent(
+          `Hi ${data.customer}, you have an overdue payment of Ksh ${data.amount}. Please clear your balance for ${data.product || "your order"}.`
+        );
 
-    if (res.ok && !data.blacklist) {
-      setSuccess(data.message || "✅ Payment reminders sent");
-      setSelectedSales([]);
-      return data;
-    } else if (data.blacklist) {
-      // 🚫 Blacklist fallback
-      alert("⚠️ Customer is in blacklist. Opening manual messaging…");
-
-      const phoneDigits = data.phone.replace(/\D/g, "");
-      const manualMsg = encodeURIComponent(
-        `Hi ${data.customer}, you have an overdue payment of Ksh ${data.amount}. Please clear your balance for ${data.product || "your order"}.`
-      );
-
-      if (confirm("Send via WhatsApp instead?")) {
-        window.open(`https://wa.me/${phoneDigits}?text=${manualMsg}`, "_blank");
+        if (confirm("Send via WhatsApp instead?")) {
+          window.open(`https://wa.me/${phoneDigits}?text=${manualMsg}`, "_blank");
+        } else {
+          window.open(`sms:${phoneDigits}?body=${manualMsg}`, "_blank");
+        }
       } else {
-        window.open(`sms:${phoneDigits}?body=${manualMsg}`, "_blank");
+        setError(data.error || "❌ Failed to send payment reminders");
+        throw new Error(data.error || "Failed to send payment reminders");
       }
-    } else {
-      setError(data.error || "❌ Failed to send payment reminders");
-      throw new Error(data.error || "Failed to send payment reminders");
+    } catch (err) {
+      setError("❌ Failed to send payment reminders");
+      throw err;
+    } finally {
+      setMessagingLoading(false);
     }
-  } catch (err) {
-    setError("❌ Failed to send payment reminders");
-    throw err;
-  } finally {
-    setMessagingLoading(false);
-  }
-};
-
-
-
-
+  };
 
   const sendCheckDepositNotification = async (saleIds: number | number[]) => {
     setMessagingLoading(true);
@@ -704,7 +743,7 @@ const sendPaymentReminder = async () => {
   if (loading && sales.length === 0) {
     return (
       <div className="p-8 bg-gray-50 min-h-screen">
-        <div className="text-center">Loading...</div>
+        <div className="text-center text-black">Loading...</div>
       </div>
     );
   }
@@ -712,7 +751,7 @@ const sendPaymentReminder = async () => {
   return (
     <div className="p-8 bg-gray-50 min-h-screen">
       <div className="flex justify-between items-center mb-6">
-        <h1 className="text-3xl font-bold text-slate-900">Sales Management Dashboard</h1>
+        <h1 className="text-3xl font-bold text-black">Sales Management Dashboard</h1>
         <button
           onClick={() => setShowAddSale(true)}
           className="bg-blue-600 text-white px-6 py-3 rounded-xl hover:bg-blue-700 flex items-center gap-2 shadow-lg"
@@ -742,27 +781,27 @@ const sendPaymentReminder = async () => {
         <div className="bg-white p-6 rounded-xl shadow-lg border-l-4 border-emerald-500">
           <div className="text-slate-500 text-sm font-medium">Total Sales</div>
           <div className="text-2xl font-bold text-emerald-600">Ksh {totalSales.toFixed(2)}</div>
-          <div className="text-sm text-slate-400">{sales.length} orders</div>
+          <div className="text-sm text-black">{sales.length} orders</div>
         </div>
         <div className="bg-white p-6 rounded-xl shadow-lg border-l-4 border-blue-500">
           <div className="text-slate-500 text-sm font-medium">Fully Paid</div>
           <div className="text-2xl font-bold text-blue-600">Ksh {paidSales.toFixed(2)}</div>
-          <div className="text-sm text-slate-400">{sales.filter(s => s.status === "PAID").length} orders</div>
+          <div className="text-sm text-black">{sales.filter(s => s.status === "PAID").length} orders</div>
         </div>
         <div className="bg-white p-6 rounded-xl shadow-lg border-l-4 border-orange-500">
           <div className="text-slate-500 text-sm font-medium">Partially Paid</div>
           <div className="text-2xl font-bold text-orange-600">Ksh {partialSales.toFixed(2)}</div>
-          <div className="text-sm text-slate-400">{sales.filter(s => s.status === "PARTIAL").length} orders</div>
+          <div className="text-sm text-black">{sales.filter(s => s.status === "PARTIAL").length} orders</div>
         </div>
         <div className="bg-white p-6 rounded-xl shadow-lg border-l-4 border-red-500">
           <div className="text-slate-500 text-sm font-medium">Unpaid</div>
           <div className="text-2xl font-bold text-red-600">Ksh {unpaidSales.toFixed(2)}</div>
-          <div className="text-sm text-slate-400">{sales.filter(s => s.status === "UNPAID").length} orders</div>
+          <div className="text-sm text-black">{sales.filter(s => s.status === "UNPAID").length} orders</div>
         </div>
         <div className="bg-white p-6 rounded-xl shadow-lg border-l-4 border-purple-500">
           <div className="text-slate-500 text-sm font-medium">Outstanding Amount</div>
           <div className="text-2xl font-bold text-purple-600">Ksh {totalOutstanding.toFixed(2)}</div>
-          <div className="text-sm text-slate-400">Total remaining</div>
+          <div className="text-sm text-black">Total remaining</div>
         </div>
       </div>
 
@@ -772,7 +811,7 @@ const sendPaymentReminder = async () => {
           <div className="bg-white rounded-xl max-w-4xl w-full max-h-[90vh] overflow-y-auto">
             <div className="p-6 border-b">
               <div className="flex justify-between items-center">
-                <h2 className="text-2xl font-bold">Create New Sale</h2>
+                <h2 className="text-2xl font-bold text-black">Create New Sale</h2>
                 <button
                   onClick={() => setShowAddSale(false)}
                   className="text-gray-500 hover:text-gray-700"
@@ -785,11 +824,11 @@ const sendPaymentReminder = async () => {
             <div className="p-6 space-y-6">
               {/* Customer Selection */}
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Customer</label>
+                <label className="block text-sm font-medium text-black mb-2">Customer</label>
                 <select
                   value={newSale.customerId}
                   onChange={(e) => setNewSale({...newSale, customerId: e.target.value})}
-                  className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                  className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 text-black"
                 >
                   <option value="">Select a customer</option>
                   {customers.map(customer => (
@@ -802,23 +841,23 @@ const sendPaymentReminder = async () => {
 
               {/* Due Date */}
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Date</label>
+                <label className="block text-sm font-medium text-black mb-2">Date</label>
                 <input
                   type="date"
                   value={newSale.dueDate}
                   onChange={(e) => setNewSale({...newSale, dueDate: e.target.value})}
-                  className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                  className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 text-black"
                 />
               </div>
 
               {/* Sale Items */}
               <div>
-                <h3 className="text-lg font-semibold mb-4">Sale Items</h3>
+                <h3 className="text-lg font-semibold mb-4 text-black">Sale Items</h3>
                 
                 {/* Add Item Form */}
                 <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-4 p-4 bg-gray-50 rounded-lg">
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Product</label>
+                    <label className="block text-sm font-medium text-black mb-1">Product</label>
                     <select
                       value={currentItem.productId}
                       onChange={(e) => {
@@ -831,7 +870,7 @@ const sendPaymentReminder = async () => {
                           productName: product?.name || ""
                         });
                       }}
-                      className="w-full p-2 border border-gray-300 rounded"
+                      className="w-full p-2 border border-gray-300 rounded text-black"
                     >
                       <option value={0}>Select product</option>
                       {products.map(product => (
@@ -843,25 +882,25 @@ const sendPaymentReminder = async () => {
                   </div>
                   
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Quantity</label>
+                    <label className="block text-sm font-medium text-black mb-1">Quantity</label>
                     <input
                       type="number"
                       min="1"
                       value={currentItem.quantity}
                       onChange={(e) => setCurrentItem({...currentItem, quantity: parseInt(e.target.value) || 1})}
-                      className="w-full p-2 border border-gray-300 rounded"
+                      className="w-full p-2 border border-gray-300 rounded text-black"
                     />
                   </div>
                   
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Unit Price</label>
+                    <label className="block text-sm font-medium text-black mb-1">Unit Price</label>
                     <input
                       type="number"
                       min="0"
                       step="0.01"
                       value={currentItem.price}
                       onChange={(e) => setCurrentItem({...currentItem, price: parseFloat(e.target.value) || 0})}
-                      className="w-full p-2 border border-gray-300 rounded"
+                      className="w-full p-2 border border-gray-300 rounded text-black"
                     />
                   </div>
                   
@@ -883,8 +922,8 @@ const sendPaymentReminder = async () => {
                     {saleItems.map((item, index) => (
                       <div key={index} className="flex justify-between items-center bg-white p-3 rounded-lg border">
                         <div>
-                          <span className="font-medium">{item.productName}</span>
-                          <span className="text-gray-500 ml-2">×{item.quantity} @ Ksh {item.price}</span>
+                          <span className="font-medium text-black">{item.productName}</span>
+                          <span className="text-black ml-2">×{item.quantity} @ Ksh {item.price}</span>
                         </div>
                         <div className="flex items-center gap-2">
                           <span className="font-bold text-green-600">Ksh {(item.quantity * item.price).toFixed(2)}</span>
@@ -903,29 +942,33 @@ const sendPaymentReminder = async () => {
 
               {/* Payments Section */}
               <div>
-                <h3 className="text-lg font-semibold mb-4">Payments</h3>
+                <h3 className="text-lg font-semibold mb-4 text-black">Payments</h3>
                 
                 {/* Add Payment Form */}
                 <div className="grid grid-cols-1 md:grid-cols-5 gap-4 mb-4 p-4 bg-gray-50 rounded-lg">
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Amount</label>
+                    <label className="block text-sm font-medium text-black mb-1">Amount</label>
                     <input
                       type="number"
                       min="0"
                       step="0.01"
+                      max={getRemainingAmount()}
                       value={currentPayment.amount}
                       onChange={(e) => setCurrentPayment({...currentPayment, amount: e.target.value})}
-                      className="w-full p-2 border border-gray-300 rounded"
+                      className="w-full p-2 border border-gray-300 rounded text-black"
                       placeholder="0.00"
                     />
+                    <div className="text-xs text-gray-600 mt-1">
+                      Max: Ksh {getRemainingAmount().toFixed(2)}
+                    </div>
                   </div>
                   
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Method</label>
+                    <label className="block text-sm font-medium text-black mb-1">Method</label>
                     <select
                       value={currentPayment.method}
                       onChange={(e) => setCurrentPayment({...currentPayment, method: e.target.value as any})}
-                      className="w-full p-2 border border-gray-300 rounded"
+                      className="w-full p-2 border border-gray-300 rounded text-black"
                     >
                       {paymentMethods.map(method => (
                         <option key={method.value} value={method.value}>{method.label}</option>
@@ -934,24 +977,24 @@ const sendPaymentReminder = async () => {
                   </div>
                   
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Reference</label>
+                    <label className="block text-sm font-medium text-black mb-1">Reference</label>
                     <input
                       type="text"
                       value={currentPayment.referenceId}
                       onChange={(e) => setCurrentPayment({...currentPayment, referenceId: e.target.value})}
-                      className="w-full p-2 border border-gray-300 rounded"
+                      className="w-full p-2 border border-gray-300 rounded text-black"
                       placeholder="Transaction ID"
                     />
                   </div>
                   
                   {currentPayment.method === "CHECK" && (
                     <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">Deposit Date</label>
+                      <label className="block text-sm font-medium text-black mb-1">Deposit Date</label>
                       <input
                         type="date"
                         value={currentPayment.checkDepositDate}
                         onChange={(e) => setCurrentPayment({...currentPayment, checkDepositDate: e.target.value})}
-                        className="w-full p-2 border border-gray-300 rounded"
+                        className="w-full p-2 border border-gray-300 rounded text-black"
                       />
                     </div>
                   )}
@@ -979,9 +1022,9 @@ const sendPaymentReminder = async () => {
                           }`}>
                             {payment.method}
                           </span>
-                          <span className="font-medium">Ksh {parseFloat(payment.amount).toFixed(2)}</span>
+                          <span className="font-medium text-black">Ksh {parseFloat(payment.amount).toFixed(2)}</span>
                           {payment.referenceId && (
-                            <span className="text-gray-500 text-sm">Ref: {payment.referenceId}</span>
+                            <span className="text-black text-sm">Ref: {payment.referenceId}</span>
                           )}
                         </div>
                         <button
@@ -999,15 +1042,15 @@ const sendPaymentReminder = async () => {
                 {saleItems.length > 0 && (
                   <div className="bg-blue-50 p-4 rounded-lg">
                     <div className="flex justify-between items-center mb-2">
-                      <span className="font-medium">Total Sale Amount:</span>
+                      <span className="font-medium text-black">Total Sale Amount:</span>
                       <span className="font-bold text-blue-600">Ksh {calculateTotalAmount().toFixed(2)}</span>
                     </div>
                     <div className="flex justify-between items-center mb-2">
-                      <span className="font-medium">Total Payments:</span>
+                      <span className="font-medium text-black">Total Payments:</span>
                       <span className="font-bold text-green-600">Ksh {calculateTotalPayments().toFixed(2)}</span>
                     </div>
                     <div className="flex justify-between items-center pt-2 border-t">
-                      <span className="font-medium">Remaining Amount:</span>
+                      <span className="font-medium text-black">Remaining Amount:</span>
                       <span className={`font-bold ${getRemainingAmount() > 0 ? 'text-red-600' : 'text-green-600'}`}>
                         Ksh {getRemainingAmount().toFixed(2)}
                       </span>
@@ -1043,7 +1086,7 @@ const sendPaymentReminder = async () => {
           <div className="bg-white rounded-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
             <div className="p-6 border-b">
               <div className="flex justify-between items-center">
-                <h2 className="text-2xl font-bold">Edit Sale #{editingSale.id}</h2>
+                <h2 className="text-2xl font-bold text-black">Edit Sale #{editingSale.id}</h2>
                 <button
                   onClick={() => setEditingSale(null)}
                   className="text-gray-500 hover:text-gray-700"
@@ -1056,22 +1099,22 @@ const sendPaymentReminder = async () => {
             <div className="p-6 space-y-6">
               {/* Sale Info */}
               <div className="bg-gray-50 p-4 rounded-lg">
-                <h3 className="font-semibold mb-2">Sale Information</h3>
+                <h3 className="font-semibold mb-2 text-black">Sale Information</h3>
                 <div className="grid grid-cols-2 gap-4 text-sm">
                   <div>
-                    <span className="text-gray-600">Customer:</span>
-                    <span className="font-medium ml-2">{editingSale.customer.name}</span>
+                    <span className="text-black">Customer:</span>
+                    <span className="font-medium ml-2 text-black">{editingSale.customer.name}</span>
                   </div>
                   <div>
-                    <span className="text-gray-600">Total Amount:</span>
-                    <span className="font-medium ml-2">Ksh {editingSale.amount.toFixed(2)}</span>
+                    <span className="text-black">Total Amount:</span>
+                    <span className="font-medium ml-2 text-black">Ksh {editingSale.amount.toFixed(2)}</span>
                   </div>
                   <div>
-                    <span className="text-gray-600">Date:</span>
-                    <span className="font-medium ml-2">{new Date(editingSale.date).toLocaleDateString()}</span>
+                    <span className="text-black">Date:</span>
+                    <span className="font-medium ml-2 text-black">{new Date(editingSale.date).toLocaleDateString()}</span>
                   </div>
                   <div>
-                    <span className="text-gray-600">Status:</span>
+                    <span className="text-black">Status:</span>
                     <span className={`ml-2 px-2 py-1 rounded text-xs font-bold ${
                       editingSale.status === "PAID" ? "bg-green-100 text-green-800" :
                       editingSale.status === "PARTIAL" ? "bg-orange-100 text-orange-800" :
@@ -1085,13 +1128,13 @@ const sendPaymentReminder = async () => {
 
               {/* Sale Items */}
               <div>
-                <h3 className="text-lg font-semibold mb-3">Sale Items</h3>
+                <h3 className="text-lg font-semibold mb-3 text-black">Sale Items</h3>
                 <div className="space-y-2">
                   {editingSale.saleitems?.map((item, index) => (
                     <div key={index} className="flex justify-between items-center bg-gray-50 p-3 rounded-lg">
                       <div>
-                        <span className="font-medium">{item.product.name}</span>
-                        <span className="text-gray-500 ml-2">×{item.quantity} @ Ksh {item.price}</span>
+                        <span className="font-medium text-black">{item.product.name}</span>
+                        <span className="text-black ml-2">×{item.quantity} @ Ksh {item.price}</span>
                       </div>
                       <span className="font-bold text-green-600">Ksh {(item.quantity * item.price).toFixed(2)}</span>
                     </div>
@@ -1101,12 +1144,12 @@ const sendPaymentReminder = async () => {
 
               {/* Edit Payments */}
               <div>
-                <h3 className="text-lg font-semibold mb-4">Payments</h3>
+                <h3 className="text-lg font-semibold mb-4 text-black">Payments</h3>
                 
                 {/* Current Payments */}
                 {editPayments.length > 0 && (
                   <div className="space-y-2 mb-4">
-                    <h4 className="font-medium text-gray-700">Current Payments:</h4>
+                    <h4 className="font-medium text-black">Current Payments:</h4>
                     {editPayments.map((payment, index) => (
                       <div key={index} className="flex justify-between items-center bg-white p-3 rounded-lg border">
                         <div className="flex items-center gap-4">
@@ -1115,22 +1158,19 @@ const sendPaymentReminder = async () => {
                           }`}>
                             {payment.method}
                           </span>
-                          <span className="font-medium">Ksh {parseFloat(payment.amount).toFixed(2)}</span>
+                          <span className="font-medium text-black">Ksh {parseFloat(payment.amount).toFixed(2)}</span>
                           {payment.referenceId && (
-                            <span className="text-gray-500 text-sm">Ref: {payment.referenceId}</span>
+                            <span className="text-black text-sm">Ref: {payment.referenceId}</span>
                           )}
                         </div>
-                            {payment.id !== undefined && (
-  <button
-    onClick={() => handleDeletePayment(payment.id as number, editingSale.id)}
-    className="text-red-500 hover:text-red-700"
-  >
-    <Trash2 size={16} />
-  </button>
-)}
-
-
-
+                        {payment.id !== undefined && (
+                          <button
+                            onClick={() => handleDeletePayment(payment.id as number, editingSale.id)}
+                            className="text-red-500 hover:text-red-700"
+                          >
+                            <Trash2 size={16} />
+                          </button>
+                        )}
                       </div>
                     ))}
                   </div>
@@ -1139,24 +1179,28 @@ const sendPaymentReminder = async () => {
                 {/* Add New Payment */}
                 <div className="grid grid-cols-1 md:grid-cols-5 gap-4 mb-4 p-4 bg-gray-50 rounded-lg">
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Amount</label>
+                    <label className="block text-sm font-medium text-black mb-1">Amount</label>
                     <input
                       type="number"
                       min="0"
                       step="0.01"
+                      max={editingSale.remainingAmount}
                       value={currentPayment.amount}
                       onChange={(e) => setCurrentPayment({...currentPayment, amount: e.target.value})}
-                      className="w-full p-2 border border-gray-300 rounded"
+                      className="w-full p-2 border border-gray-300 rounded text-black"
                       placeholder="0.00"
                     />
+                    <div className="text-xs text-gray-600 mt-1">
+                      Max: Ksh {editingSale.remainingAmount.toFixed(2)}
+                    </div>
                   </div>
                   
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Method</label>
+                    <label className="block text-sm font-medium text-black mb-1">Method</label>
                     <select
                       value={currentPayment.method}
                       onChange={(e) => setCurrentPayment({...currentPayment, method: e.target.value as any})}
-                      className="w-full p-2 border border-gray-300 rounded"
+                      className="w-full p-2 border border-gray-300 rounded text-black"
                     >
                       {paymentMethods.map(method => (
                         <option key={method.value} value={method.value}>{method.label}</option>
@@ -1165,24 +1209,24 @@ const sendPaymentReminder = async () => {
                   </div>
                   
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Reference</label>
+                    <label className="block text-sm font-medium text-black mb-1">Reference</label>
                     <input
                       type="text"
                       value={currentPayment.referenceId}
                       onChange={(e) => setCurrentPayment({...currentPayment, referenceId: e.target.value})}
-                      className="w-full p-2 border border-gray-300 rounded"
+                      className="w-full p-2 border border-gray-300 rounded text-black"
                       placeholder="Transaction ID"
                     />
                   </div>
                   
                   {currentPayment.method === "CHECK" && (
                     <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">Deposit Date</label>
+                      <label className="block text-sm font-medium text-black mb-1">Deposit Date</label>
                       <input
                         type="date"
                         value={currentPayment.checkDepositDate}
                         onChange={(e) => setCurrentPayment({...currentPayment, checkDepositDate: e.target.value})}
-                        className="w-full p-2 border border-gray-300 rounded"
+                        className="w-full p-2 border border-gray-300 rounded text-black"
                       />
                     </div>
                   )}
@@ -1202,17 +1246,17 @@ const sendPaymentReminder = async () => {
                 {/* Payment Summary for Edit */}
                 <div className="bg-blue-50 p-4 rounded-lg">
                   <div className="flex justify-between items-center mb-2">
-                    <span className="font-medium">Total Sale Amount:</span>
+                    <span className="font-medium text-black">Total Sale Amount:</span>
                     <span className="font-bold text-blue-600">Ksh {editingSale.amount.toFixed(2)}</span>
                   </div>
                   <div className="flex justify-between items-center mb-2">
-                    <span className="font-medium">Total Payments:</span>
+                    <span className="font-medium text-black">Total Payments:</span>
                     <span className="font-bold text-green-600">
                       Ksh {editPayments.reduce((sum, p) => sum + Number(p.amount), 0).toFixed(2)}
                     </span>
                   </div>
                   <div className="flex justify-between items-center pt-2 border-t">
-                    <span className="font-medium">Remaining Amount:</span>
+                    <span className="font-medium text-black">Remaining Amount:</span>
                     <span className={`font-bold ${
                       (editingSale.amount - editPayments.reduce((sum, p) => sum + Number(p.amount), 0)) > 0 
                         ? 'text-red-600' : 'text-green-600'
@@ -1248,11 +1292,11 @@ const sendPaymentReminder = async () => {
       <div className="bg-white rounded-xl shadow mb-6">
         <div className="flex border-b">
           {[
+            { key: "messaging", label: "SMS Messaging", count: 0 },
             { key: "overview", label: "All Sales", count: sales.length },
             { key: "paid", label: "Fully Paid", count: sales.filter(s => s.status === "PAID").length },
             { key: "partial", label: "Partially Paid", count: sales.filter(s => s.status === "PARTIAL").length },
-            { key: "unpaid", label: "Unpaid", count: sales.filter(s => s.status === "UNPAID").length },
-            { key: "messaging", label: "SMS Messaging", count: 0 }
+            { key: "unpaid", label: "Unpaid", count: sales.filter(s => s.status === "UNPAID").length }
           ].map((tab) => (
             <button
               key={tab.key}
@@ -1260,7 +1304,7 @@ const sendPaymentReminder = async () => {
               className={`flex-1 px-4 py-3 text-center transition-colors ${
                 activeTab === tab.key
                   ? "border-b-2 border-blue-500 text-blue-600 font-semibold"
-                  : "text-gray-600 hover:text-gray-800"
+                  : "text-black hover:text-gray-800"
               }`}
             >
               <div className="flex items-center justify-center gap-2">
@@ -1286,7 +1330,7 @@ const sendPaymentReminder = async () => {
                 <div className="space-y-3 mb-4">
                   <div className="bg-white p-3 rounded-lg">
                     <div className="flex justify-between items-center">
-                      <span className="text-sm text-gray-600">Overdue Payments</span>
+                      <span className="text-sm text-black">Overdue Payments</span>
                       <span className="font-bold text-red-600">
                         {sales.filter(s => s.status !== "PAID" && s.dueDate && new Date(s.dueDate) < new Date()).length}
                       </span>
@@ -1295,7 +1339,7 @@ const sendPaymentReminder = async () => {
                   
                   <div className="bg-white p-3 rounded-lg">
                     <div className="flex justify-between items-center">
-                      <span className="text-sm text-gray-600">Partial Payments</span>
+                      <span className="text-sm text-black">Partial Payments</span>
                       <span className="font-bold text-orange-600">
                         {sales.filter(s => s.status === "PARTIAL").length}
                       </span>
@@ -1304,7 +1348,7 @@ const sendPaymentReminder = async () => {
                   
                   <div className="bg-white p-3 rounded-lg">
                     <div className="flex justify-between items-center">
-                      <span className="text-sm text-gray-600">Unpaid Orders</span>
+                      <span className="text-sm text-black">Unpaid Orders</span>
                       <span className="font-bold text-red-600">
                         {sales.filter(s => s.status === "UNPAID").length}
                       </span>
@@ -1313,15 +1357,14 @@ const sendPaymentReminder = async () => {
                 </div>
 
                 <div className="space-y-2">
-                 <button
-  onClick={sendPaymentReminder}
-  disabled={messagingLoading}
-  className="bg-orange-500 text-white px-4 py-2 rounded-lg hover:bg-orange-600 disabled:opacity-50 flex items-center gap-2"
->
-  <Send size={16} />
-  Send SMS Payment Reminders
-</button>
-
+                  <button
+                    onClick={sendPaymentReminder}
+                    disabled={messagingLoading}
+                    className="bg-orange-500 text-white px-4 py-2 rounded-lg hover:bg-orange-600 disabled:opacity-50 flex items-center gap-2"
+                  >
+                    <Send size={16} />
+                    Send SMS Payment Reminders
+                  </button>
                 </div>
               </div>
                 
@@ -1335,7 +1378,7 @@ const sendPaymentReminder = async () => {
                 <div className="space-y-3 mb-4">
                   <div className="bg-white p-3 rounded-lg">
                     <div className="flex justify-between items-center">
-                      <span className="text-sm text-gray-600">Pending Check Deposits</span>
+                      <span className="text-sm text-black">Pending Check Deposits</span>
                       <span className="font-bold text-orange-600">
                         {sales.filter(s => s.paymentMethod === "CHECK" || 
                           s.payments?.some(p => p.method === "CHECK")).length}
@@ -1374,17 +1417,17 @@ const sendPaymentReminder = async () => {
                 
                 <div className="space-y-3">
                   <div className="bg-white p-3 rounded-lg">
-                    <div className="text-sm text-gray-600 mb-2">Total Outstanding</div>
+                    <div className="text-sm text-black mb-2">Total Outstanding</div>
                     <div className="font-bold text-red-600">Ksh {totalOutstanding.toFixed(2)}</div>
                   </div>
                   
                   <div className="bg-white p-3 rounded-lg">
-                    <div className="text-sm text-gray-600 mb-2">This Month's Sales</div>
+                    <div className="text-sm text-black mb-2">This Month's Sales</div>
                     <div className="font-bold text-green-600">Ksh {totalSales.toFixed(2)}</div>
                   </div>
 
                   <div className="bg-white p-3 rounded-lg">
-                    <div className="text-sm text-gray-600 mb-2">Customers with Phone Numbers</div>
+                    <div className="text-sm text-black mb-2">Customers with Phone Numbers</div>
                     <div className="font-bold text-blue-600">
                       {customers.filter(c => c.phone).length}/{customers.length}
                     </div>
@@ -1406,8 +1449,6 @@ const sendPaymentReminder = async () => {
             {/* Africa's Talking Integration Info */}
             <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-4">
               <h4 className="font-semibold text-blue-800 mb-2">Africa's Talking SMS Integration</h4>
-              
-             
             </div>
           </div>
         )}
@@ -1419,7 +1460,7 @@ const sendPaymentReminder = async () => {
               <table className="min-w-full border-collapse">
                 <thead>
                   <tr className="bg-slate-100">
-                    <th className="p-3 text-left">
+                    <th className="p-3 text-left text-black">
                       <input
                         type="checkbox"
                         onChange={(e) => {
@@ -1432,16 +1473,16 @@ const sendPaymentReminder = async () => {
                         checked={selectedSales.length === getFilteredSales().length && getFilteredSales().length > 0}
                       />
                     </th>
-                    <th className="p-3 text-left">Product(s)</th>
-                    <th className="p-3 text-left">Customer</th>
-                    <th className="p-3 text-left">Amount</th>
-                    <th className="p-3 text-left">Payment Method(s)</th>
-                    <th className="p-3 text-left">Status</th>
-                    <th className="p-3 text-left">Payments</th>
-                    <th className="p-3 text-left">Remaining</th>
-                    <th className="p-3 text-left">Due Date</th>
-                    <th className="p-3 text-left">Date</th>
-                    <th className="p-3 text-left">Actions</th>
+                    <th className="p-3 text-left text-black">Product(s)</th>
+                    <th className="p-3 text-left text-black">Customer</th>
+                    <th className="p-3 text-left text-black">Amount</th>
+                    <th className="p-3 text-left text-black">Payment Method(s)</th>
+                    <th className="p-3 text-left text-black">Status</th>
+                    <th className="p-3 text-left text-black">Payments</th>
+                    <th className="p-3 text-left text-black">Remaining</th>
+                    <th className="p-3 text-left text-black">Due Date</th>
+                    <th className="p-3 text-left text-black">Date</th>
+                    <th className="p-3 text-left text-black">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1465,17 +1506,17 @@ const sendPaymentReminder = async () => {
                           {sale.saleitems && sale.saleitems.length > 0
                             ? sale.saleitems.map((item, idx) => (
                                 <div key={idx} className="text-sm">
-                                  <span className="font-medium">{item.product.name}</span>
-                                  <span className="text-gray-500"> (×{item.quantity})</span>
+                                  <span className="font-medium text-black">{item.product.name}</span>
+                                  <span className="text-black"> (×{item.quantity})</span>
                                   <span className="text-green-600 ml-1">Ksh {(item.quantity * item.price).toFixed(2)}</span>
                                 </div>
                               ))
-                            : "-"}
+                            : <span className="text-black">-</span>}
                         </div>
                       </td>
                       <td className="p-3">
                         <div>
-                          <div className="font-medium">{sale.customer?.name || "-"}</div>
+                          <div className="font-medium text-black">{sale.customer?.name || "-"}</div>
                           {sale.customer?.phone && (
                             <div className="text-xs text-gray-500">{sale.customer.phone}</div>
                           )}
@@ -1517,7 +1558,7 @@ const sendPaymentReminder = async () => {
                               <div className="font-medium text-green-600">
                                 Ksh {sale.payments.reduce((sum, p) => sum + p.amount, 0).toFixed(2)}
                               </div>
-                              <div className="text-xs text-gray-500">
+                              <div className="text-xs text-black">
                                 {sale.payments.length} payment{sale.payments.length > 1 ? 's' : ''}
                               </div>
                             </div>
@@ -1540,67 +1581,52 @@ const sendPaymentReminder = async () => {
                           <span className={`${
                             new Date(sale.dueDate) < new Date() && sale.status !== "PAID"
                               ? "text-red-600 font-semibold"
-                              : ""
+                              : "text-black"
                           }`}>
                             {new Date(sale.dueDate).toLocaleDateString()}
                           </span>
-                        ) : "-"}
+                        ) : <span className="text-black">-</span>}
                       </td>
-                      <td className="p-3">{new Date(sale.date).toLocaleDateString()}</td>
+                      <td className="p-3 text-black">{new Date(sale.date).toLocaleDateString()}</td>
                       <td className="p-3">
+                        {/* Message Type Selector */}
+                        <select
+                          value={selectedMessageType}
+                          onChange={(e) => setSelectedMessageType(e.target.value)}
+                          className="px-2 py-1 text-xs border border-gray-300 rounded text-black mb-2"
+                        >
+                          {messageTypes.map(type => (
+                            <option key={type.value} value={type.value}>
+                              {type.label}
+                            </option>
+                          ))}
+                        </select>
 
-                      <button
-  onClick={() => {
-    if (!sale.customer?.phone) {
-      alert("Customer phone number required");
-      return;
-    }
+                        <button
+                          onClick={() => {
+                            if (!sale.customer?.phone) {
+                              alert("Customer phone number required");
+                              return;
+                            }
 
-    const phone = sale.customer.phone.replace(/\D/g, ""); // clean digits
+                            const phone = formatPhoneNumber(sale.customer.phone);
+                            const selectedTemplate = messageTypes.find(t => t.value === selectedMessageType);
+                            const message = encodeURIComponent(selectedTemplate?.getTemplate(sale) || "Thank you for your business!");
 
-    // Build product list summary
-    const productSummary = sale.saleitems
-      ?.map(
-        (item) =>
-          `${item.product?.name || "Product"} (×${item.quantity}) - Ksh ${(item.quantity * item.price).toFixed(2)}`
-      )
-      .join(", ") || "your recent purchase";
+                            const useWhatsApp = confirm("Send via WhatsApp? (Click Cancel for SMS)");
 
-    // Due date
-    const due =
-      sale.dueDate && sale.status !== "PAID"
-        ? ` Your payment is due on ${new Date(sale.dueDate).toLocaleDateString()}.`
-        : "";
-
-    // Remaining balance
-    const balance =
-      sale.remainingAmount > 0
-        ? ` You still have a balance of Ksh ${sale.remainingAmount.toFixed(2)}.We would request you clear at your earliest convinience `
-        : " Your balance is fully settled. Thankyou for shopping with Swift Metals";
-
-    // Final message
-    const message = encodeURIComponent(
-      `Hi ${sale.customer.name}, thank you for your purchase of ${productSummary}.` +
-        balance +
-        due
-    );
-
-    // Choose platform (WhatsApp / SMS)
-    const useWhatsApp = true;
-
-    if (useWhatsApp) {
-      window.open(`https://wa.me/${phone}?text=${message}`, "_blank");
-    } else {
-      window.open(`sms:${phone}?body=${message}`, "_blank");
-    }
-  }}
-  className="px-3 py-1 text-sm bg-blue-500 text-white rounded hover:bg-blue-600 flex items-center gap-1"
-  title="Open WhatsApp or SMS to send manually"
->
-  <MessageSquare size={14} />
-  Manual Message
-</button>
-
+                            if (useWhatsApp) {
+                              window.open(`https://wa.me/${phone}?text=${message}`, "_blank");
+                            } else {
+                              window.open(`sms:${phone}?body=${message}`, "_blank");
+                            }
+                          }}
+                          className="px-3 py-1 text-sm bg-blue-500 text-white rounded hover:bg-blue-600 flex items-center gap-1 mb-2"
+                          title="Open WhatsApp or SMS to send manually"
+                        >
+                          <MessageSquare size={14} />
+                          Manual Message
+                        </button>
 
                         <div className="flex gap-2 flex-wrap">
                           <button
@@ -1614,37 +1640,35 @@ const sendPaymentReminder = async () => {
                           </button>
                           
                           {sale.status !== "PAID" && (
-  <button
-    onClick={async () => {
-      try {
-        setMessagingLoading(true);
-        const res = await fetch("/api/sms/get-overdue-payments", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ saleId: sale.id }),
-        });
-        const data = await res.json();
-        if (res.ok) {
-          alert(data.message);
-        } else {
-          alert(data.error || "Failed to send reminder");
-        }
-      } catch (err) {
-        alert("Failed to send reminder");
-      } finally {
-        setMessagingLoading(false);
-      }
-    }}
-    disabled={messagingLoading || !sale.customer?.phone}
-    className="px-3 py-1 text-sm bg-orange-500 text-white rounded hover:bg-orange-600 disabled:opacity-50 flex items-center gap-1"
-    title={!sale.customer?.phone ? "Customer phone number required" : "Send payment reminder SMS"}
-  >
-    <Clock size={14} />
-    SMS Remind
-  </button>
-)}
-
-
+                            <button
+                              onClick={async () => {
+                                try {
+                                  setMessagingLoading(true);
+                                  const res = await fetch("/api/sms/get-overdue-payments", {
+                                    method: "POST",
+                                    headers: { "Content-Type": "application/json" },
+                                    body: JSON.stringify({ saleId: sale.id }),
+                                  });
+                                  const data = await res.json();
+                                  if (res.ok) {
+                                    alert(data.message);
+                                  } else {
+                                    alert(data.error || "Failed to send reminder");
+                                  }
+                                } catch (err) {
+                                  alert("Failed to send reminder");
+                                } finally {
+                                  setMessagingLoading(false);
+                                }
+                              }}
+                              disabled={messagingLoading || !sale.customer?.phone}
+                              className="px-3 py-1 text-sm bg-orange-500 text-white rounded hover:bg-orange-600 disabled:opacity-50 flex items-center gap-1"
+                              title={!sale.customer?.phone ? "Customer phone number required" : "Send payment reminder SMS"}
+                            >
+                              <Clock size={14} />
+                              SMS Remind
+                            </button>
+                          )}
                           
                           <button
                             onClick={() => handleEditSale(sale)}
@@ -1660,7 +1684,7 @@ const sendPaymentReminder = async () => {
                   ))}
                   {getFilteredSales().length === 0 && (
                     <tr>
-                      <td colSpan={11} className="p-8 text-center text-gray-500">
+                      <td colSpan={11} className="p-8 text-center text-black">
                         No sales found for this category
                       </td>
                     </tr>
@@ -1678,24 +1702,23 @@ const sendPaymentReminder = async () => {
                   </span>
                   <div className="flex gap-2">
                     <button
-  onClick={async () => {
-    try {
-      setMessagingLoading(true);
-      const result = await sendPaymentReminder(); // no args needed now
-      alert(result.message); // works because API returns { message: "..." }
-    } catch (err) {
-      alert("Failed to send reminders");
-    } finally {
-      setMessagingLoading(false);
-    }
-  }}
-  disabled={messagingLoading}
-  className="bg-orange-500 text-white px-4 py-2 rounded-lg hover:bg-orange-600 disabled:opacity-50 flex items-center gap-2"
->
-  <Send size={16} />
-  Send SMS Payment Reminders
-</button>
-
+                      onClick={async () => {
+                        try {
+                          setMessagingLoading(true);
+                          const result = await sendPaymentReminder();
+                          alert(result.message);
+                        } catch (err) {
+                          alert("Failed to send reminders");
+                        } finally {
+                          setMessagingLoading(false);
+                        }
+                      }}
+                      disabled={messagingLoading}
+                      className="bg-orange-500 text-white px-4 py-2 rounded-lg hover:bg-orange-600 disabled:opacity-50 flex items-center gap-2"
+                    >
+                      <Send size={16} />
+                      Send SMS Payment Reminders
+                    </button>
                     <button
                       onClick={() => setSelectedSales([])}
                       className="bg-gray-500 text-white px-4 py-2 rounded-lg hover:bg-gray-600"

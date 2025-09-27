@@ -210,26 +210,30 @@ export default function OrdersPage() {
 
   const updateOrderStatus = async (orderId: number, newStatus: string) => {
   try {
-    const response = await fetch(`/api/orders/${orderId}`, {
+    const response = await fetch("/api/orders", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ status: newStatus }),
+      body: JSON.stringify({ id: orderId, status: newStatus }),
     });
 
     if (response.ok) {
       // ✅ use functional updater to avoid stale state
-      setOrders(prevOrders =>
-        prevOrders.map(order =>
+      setOrders((prevOrders) =>
+        prevOrders.map((order) =>
           order.id === orderId
             ? { ...order, status: newStatus as OrderStatus }
             : order
         )
       );
+    } else {
+      const data = await response.json();
+      console.error("Failed to update order:", data.error);
     }
   } catch (error) {
     console.error("Error updating order status:", error);
   }
 };
+
 
 
   // Filter orders
