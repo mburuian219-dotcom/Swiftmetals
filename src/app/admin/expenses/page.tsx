@@ -117,15 +117,17 @@ const ExpensePage = () => {
             }
             className="border p-3 rounded-xl text-black"
           />
-          <input
-            type="text"
-            placeholder="Category"
+          <select
             value={newExpense.category}
             onChange={(e) =>
               setNewExpense({ ...newExpense, category: e.target.value })
             }
-            className="border p-3 rounded-xl text-black"
-          />
+            className="border p-3 rounded-xl text-black bg-white"
+          >
+            <option value="">Select Category</option>
+            <option value="Selling and Distribution Costs">Selling and Distribution Costs</option>
+            <option value="Admin Costs">Admin Costs</option>
+          </select>
           <input
             type="date"
             value={newExpense.date}

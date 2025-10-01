@@ -9,6 +9,7 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "@pdf-lib/standard-fonts": "^1.0.0",
     "@prisma/client": "^6.16.2",
     "africastalking": "^0.7.7",
     "cloudinary": "^2.7.0",

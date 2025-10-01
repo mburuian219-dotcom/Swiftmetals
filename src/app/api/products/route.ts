@@ -27,8 +27,14 @@ export async function GET() {
 // ---------------- CREATE a new product ----------------
 export async function POST(req: Request) {
   try {
-    const { name, description, price, stockQuantity, costPrice, category } =
-      await req.json();
+    const {
+      name,
+      description,
+      price,
+      stockQuantity,
+      productionCost,
+      category,
+    } = await req.json();
 
     if (!name || !price) {
       return NextResponse.json(
@@ -42,12 +48,13 @@ export async function POST(req: Request) {
         name,
         description,
         price: Number(price),
+        productionCost: productionCost ? Number(productionCost) : null,
         category,
         stock: {
           create: {
             name: `${name} initial stock`,
             quantity: Number(stockQuantity) || 0,
-            costPrice: Number(costPrice) || 0,
+            costPrice: productionCost ? Number(productionCost) : 0,
             sellingPrice: Number(price),
           },
         },
@@ -77,8 +84,15 @@ export async function POST(req: Request) {
 // ---------------- UPDATE a product ----------------
 export async function PUT(req: NextRequest) {
   try {
-    const { id, name, description, price, stockQuantity, category } =
-      await req.json();
+    const {
+      id,
+      name,
+      description,
+      price,
+      stockQuantity,
+      productionCost,
+      category,
+    } = await req.json();
 
     const productId = Number(id);
     if (!id || isNaN(productId)) {
@@ -103,19 +117,24 @@ export async function PUT(req: NextRequest) {
         name,
         description,
         price: Number(price),
+        productionCost: productionCost ? Number(productionCost) : null,
         category,
         stock: product.stock.length
           ? {
               update: {
                 where: { id: product.stock[0].id },
-                data: { quantity: Number(stockQuantity) || 0 },
+                data: {
+                  quantity: Number(stockQuantity) || 0,
+                  costPrice: productionCost ? Number(productionCost) : 0,
+                  sellingPrice: Number(price),
+                },
               },
             }
           : {
               create: {
                 name: `${name} initial stock`,
                 quantity: Number(stockQuantity) || 0,
-                costPrice: Number(price),
+                costPrice: productionCost ? Number(productionCost) : 0,
                 sellingPrice: Number(price),
               },
             },
@@ -128,6 +147,38 @@ export async function PUT(req: NextRequest) {
     console.error("PUT /api/products error:", error);
     return NextResponse.json(
       { error: error.message || "Failed to update product" },
+      { status: 500 }
+    );
+  }
+}
+
+// ---------------- DELETE a product ----------------
+export async function DELETE(req: NextRequest) {
+  try {
+    const { id } = await req.json();
+    const productId = Number(id);
+
+    if (!id || isNaN(productId)) {
+      return NextResponse.json(
+        { error: "Valid product ID is required" },
+        { status: 400 }
+      );
+    }
+
+    // Delete related stock first (to avoid FK constraint issues)
+    await prisma.stock.deleteMany({
+      where: { productId },
+    });
+
+    await prisma.product.delete({
+      where: { id: productId },
+    });
+
+    return NextResponse.json({ success: true });
+  } catch (error: any) {
+    console.error("DELETE /api/products error:", error);
+    return NextResponse.json(
+      { error: error.message || "Failed to delete product" },
       { status: 500 }
     );
   }

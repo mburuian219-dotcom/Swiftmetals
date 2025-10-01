@@ -1,5 +1,6 @@
 "use client";
 import React, { useEffect, useState } from "react";
+import { Download } from "lucide-react";
 import { MessageSquare, Send, Clock, CreditCard, AlertTriangle, CheckCircle, Plus, X, Edit, Trash2, Calculator, Save } from "lucide-react";
 
 interface Customer {
@@ -63,6 +64,7 @@ interface NewSaleItem {
   quantity: number;
   price: number;
   productName: string;
+  originalPrice?: number; // Optional field to track original price
 }
 
 const EnhancedSalesPage = () => {
@@ -257,38 +259,42 @@ const EnhancedSalesPage = () => {
   ];
 
   // Add item to sale
-  const handleAddItemToSale = () => {
-    if (!currentItem.productId || currentItem.quantity <= 0 || currentItem.price <= 0) {
-      setError("Please fill in all item details");
-      return;
-    }
-
-    const product = products.find(p => p.id === currentItem.productId);
-    if (!product) {
-      setError("Product not found");
-      return;
-    }
-
-    const existingItemIndex = saleItems.findIndex(item => item.productId === currentItem.productId);
-    
-    if (existingItemIndex >= 0) {
-      const updatedItems = [...saleItems];
-      updatedItems[existingItemIndex].quantity += currentItem.quantity;
-      setSaleItems(updatedItems);
-    } else {
-      setSaleItems([...saleItems, { ...currentItem, productName: product.name }]);
-    }
-
-    setCurrentItem({
-      productId: 0,
-      quantity: 1,
-      price: 0,
-      productName: ""
-    });
-    setProductSearch("");
-    setError(null);
-  };
-
+ const handleAddItemToSale = () => {
+  if (!currentItem.productId || currentItem.quantity <= 0 || currentItem.price <= 0) {
+    setError("Please fill in all item details");
+    return;
+  }
+  const product = products.find(p => p.id === currentItem.productId);
+  if (!product) {
+    setError("Product not found");
+    return;
+  }
+  
+  const existingItemIndex = saleItems.findIndex(item => item.productId === currentItem.productId);
+ 
+  if (existingItemIndex >= 0) {
+    const updatedItems = [...saleItems];
+    // Update both quantity and price (in case of discount)
+    updatedItems[existingItemIndex].quantity += currentItem.quantity;
+    updatedItems[existingItemIndex].price = currentItem.price; // Use the adjusted price
+    setSaleItems(updatedItems);
+  } else {
+    setSaleItems([...saleItems, { 
+      ...currentItem, 
+      productName: product.name,
+      originalPrice: product.price // Store original price for reference
+    }]);
+  }
+  
+  setCurrentItem({
+    productId: 0,
+    quantity: 1,
+    price: 0,
+    productName: ""
+  });
+  setProductSearch("");
+  setError(null);
+};
   const handleAddPayment = () => {
     const amount = parseFloat(currentPayment.amount);
     const remainingAmount = getRemainingAmount();
@@ -1669,6 +1675,15 @@ const EnhancedSalesPage = () => {
                               SMS Remind
                             </button>
                           )}
+                          <button
+  onClick={() => window.open(`/api/receipt/${sale.id}`, "_blank")}
+  className="px-3 py-1 text-sm bg-purple-500 text-white rounded hover:bg-purple-600 flex items-center gap-1"
+  title="Download receipt"
+>
+  <Download size={14} />
+  Receipt
+</button>
+
                           
                           <button
                             onClick={() => handleEditSale(sale)}
