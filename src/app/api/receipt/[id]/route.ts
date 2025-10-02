@@ -38,6 +38,44 @@ export async function GET(
     const totalPaid = sale.payment.reduce((sum, p) => sum + p.amount, 0);
     const remaining = sale.amount - totalPaid;
 
+    // Get the base URL from request headers (works automatically with Vercel)
+    const host = req.headers.get('host') || '';
+    const protocol = req.headers.get('x-forwarded-proto') || 'https';
+    const baseUrl = `${protocol}://${host}`;
+    
+    // Prepare WhatsApp message
+    const receiptUrl = `${baseUrl}/api/receipt/${sale.id}`;
+    const whatsappMessage = `Hello ${sale.customer?.name || 'Customer'}! 👋
+
+Thank you for your purchase at SwiftMetals!
+
+Receipt #${String(sale.id).padStart(6, '0')}
+Date: ${new Date(sale.date).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}
+
+Total Amount: Ksh ${sale.amount.toFixed(2)}
+Amount Paid: Ksh ${totalPaid.toFixed(2)}
+Balance Due: Ksh ${remaining.toFixed(2)}
+
+View your receipt: ${receiptUrl}
+
+For any inquiries, contact us at support@swiftmetals.com`;
+
+    // Format phone number for WhatsApp (remove spaces, dashes, and add country code if needed)
+    const formatPhoneForWhatsApp = (phone: string) => {
+      if (!phone) return '';
+      // Remove all non-digit characters
+      let cleaned = phone.replace(/\D/g, '');
+      // Add Kenya country code if not present (254)
+      if (cleaned.startsWith('0')) {
+        cleaned = '254' + cleaned.substring(1);
+      } else if (!cleaned.startsWith('254')) {
+        cleaned = '254' + cleaned;
+      }
+      return cleaned;
+    };
+
+    const whatsappPhone = sale.customer?.phone ? formatPhoneForWhatsApp(sale.customer.phone) : '';
+
     // Generate HTML Receipt
     const html = `
 <!DOCTYPE html>
@@ -340,27 +378,53 @@ export async function GET(
     
     .action-button {
       padding: 12px 24px;
-      background: #2563eb;
       color: white;
       border: none;
       border-radius: 6px;
       cursor: pointer;
       font-size: 14px;
       font-weight: 600;
-      box-shadow: 0 2px 8px rgba(37, 99, 235, 0.3);
-      transition: background 0.2s;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+      transition: all 0.2s;
+      text-decoration: none;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
     }
     
     .action-button:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+    }
+    
+    .action-button.print {
+      background: #2563eb;
+    }
+    
+    .action-button.print:hover {
       background: #1d4ed8;
     }
     
+    .action-button.whatsapp {
+      background: #25D366;
+    }
+    
+    .action-button.whatsapp:hover {
+      background: #20BA5A;
+    }
+    
     .action-button.download {
-      background: #059669;
+      background: #dc2626;
     }
     
     .action-button.download:hover {
-      background: #047857;
+      background: #b91c1c;
+    }
+    
+    .action-button:disabled {
+      background: #9ca3af;
+      cursor: not-allowed;
+      transform: none;
     }
     
     @media print {
@@ -369,9 +433,50 @@ export async function GET(
       }
     }
   </style>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+  <script>
+    function downloadPDF() {
+      const element = document.querySelector('.receipt-container');
+      const opt = {
+        margin: 0.5,
+        filename: 'Receipt_#${String(sale.id).padStart(6, '0')}.pdf',
+        image: { type: 'jpeg', quality: 0.98 },
+        html2canvas: { scale: 2, useCORS: true },
+        jsPDF: { unit: 'in', format: 'letter', orientation: 'portrait' }
+      };
+      
+      // Hide action buttons before generating PDF
+      const buttons = document.querySelector('.action-buttons');
+      const originalDisplay = buttons.style.display;
+      buttons.style.display = 'none';
+      
+      html2pdf().set(opt).from(element).save().then(() => {
+        buttons.style.display = originalDisplay;
+      });
+    }
+  </script>
 </head>
 <body>
-  <button class="print-button" onclick="window.print()">🖨️ Print Receipt</button>
+  <div class="action-buttons">
+    <button class="action-button print" onclick="window.print()">
+      🖨️ Print Receipt
+    </button>
+    <button class="action-button download" onclick="downloadPDF()">
+      📥 Download PDF
+    </button>
+    ${whatsappPhone ? `
+    <a href="https://wa.me/${whatsappPhone}?text=${encodeURIComponent(whatsappMessage)}" 
+       class="action-button whatsapp" 
+       target="_blank"
+       rel="noopener noreferrer">
+      📱 Share via WhatsApp
+    </a>
+    ` : `
+    <button class="action-button whatsapp" disabled title="Customer phone number not available">
+      📱 Share via WhatsApp
+    </button>
+    `}
+  </div>
   
   <div class="receipt-container">
     <!-- Header -->
