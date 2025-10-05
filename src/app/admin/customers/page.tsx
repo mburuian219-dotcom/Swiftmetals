@@ -316,15 +316,16 @@ const CustomerPage = () => {
     setImportedContact(null); // Clear imported contact after adding
   };
 
-  const handleDeleteCustomer = async (id: number) => {
+ const handleDeleteCustomer = async (id: number) => {
     try {
-      const res = await fetch("/api/customer", {
+      const res = await fetch(`/api/customer?id=${id}`, {
         method: "DELETE",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id }),
       });
 
       if (!res.ok) throw new Error("Failed to delete customer");
+
+
+      
 
       setCustomers((prev) => prev.filter((c) => c.id !== id));
       

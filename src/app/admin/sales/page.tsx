@@ -1,6 +1,6 @@
 "use client";
 import React, { useEffect, useState } from "react";
-import { Download, MessageSquare, Send, Clock, CreditCard, AlertTriangle, CheckCircle, Plus, X, Edit, Trash2, Calculator, Save, Menu } from "lucide-react";
+import { Download, MessageSquare, Send, Clock, CreditCard, AlertTriangle, CheckCircle, Plus, X, Edit, Trash2, Calculator, Save, Menu, ChevronDown, ChevronUp } from "lucide-react";
 
 interface Customer {
   id: number;
@@ -12,6 +12,7 @@ interface Product {
   id: number;
   name: string;
   price?: number;
+  stock?: number;
 }
 
 interface SaleItem {
@@ -75,6 +76,7 @@ const EnhancedSalesPage = () => {
     customerId: "",
     dueDate: new Date().toISOString().split('T')[0],
   });
+  const [stockError, setStockError] = useState<string | null>(null);
   
   const [saleItems, setSaleItems] = useState<NewSaleItem[]>([]);
   const [currentItem, setCurrentItem] = useState<NewSaleItem>({
@@ -224,6 +226,17 @@ const EnhancedSalesPage = () => {
       return;
     }
     
+    const productStock = product.stock || 0;
+    const existingItem = saleItems.find(item => item.productId === currentItem.productId);
+    const existingQuantity = existingItem ? existingItem.quantity : 0;
+    const totalQuantity = existingQuantity + currentItem.quantity;
+    
+    if (totalQuantity > productStock) {
+      setStockError(`Insufficient stock for ${product.name}. Available: ${productStock}, Requested: ${totalQuantity}`);
+      setError(`Insufficient stock for ${product.name}. Available: ${productStock}, Requested: ${totalQuantity}`);
+      return;
+    }
+    
     const existingItemIndex = saleItems.findIndex(item => item.productId === currentItem.productId);
   
     if (existingItemIndex >= 0) {
@@ -246,25 +259,9 @@ const EnhancedSalesPage = () => {
       productName: ""
     });
     setError(null);
+    setStockError(null);
   };
-{/* Add Sale Dropdown Panel */}
-{showAddSale && (
-  <div className="bg-white rounded-xl shadow-lg mb-6 border-2 border-blue-500 overflow-hidden animate-slideDown">
-    <div className="p-4 md:p-6 bg-blue-50 border-b border-blue-200">
-      <h2 className="text-xl md:text-2xl font-bold text-black flex items-center gap-2">
-        <Plus size={24} className="text-blue-600" />
-        Create New Sale
-      </h2>
-    </div>
 
-    <div className="p-4 md:p-6 space-y-6 max-h-[70vh] overflow-y-auto">
-      {/* Rest of your form content stays the same */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {/* ... existing form fields ... */}
-      </div>
-    </div>
-  </div>
-)}
   const handleAddPayment = () => {
     const amount = parseFloat(currentPayment.amount);
     const remainingAmount = getRemainingAmount();
@@ -611,6 +608,7 @@ const EnhancedSalesPage = () => {
   const clearMessages = () => {
     setError(null);
     setSuccess(null);
+    setStockError(null);
   };
 
   const totalSales = sales.reduce((acc, s) => acc + Number(s.amount), 0);
@@ -670,27 +668,70 @@ const EnhancedSalesPage = () => {
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-6">
         <h1 className="text-2xl md:text-3xl font-bold text-black">Sales Management Dashboard</h1>
         <button
-          onClick={() => setShowAddSale(true)}
-          className="w-full md:w-auto bg-blue-600 text-white px-6 py-3 rounded-xl hover:bg-blue-700 flex items-center justify-center gap-2 shadow-lg"
+          onClick={() => {
+            setShowAddSale(!showAddSale);
+            if (showAddSale) {
+              setSaleItems([]);
+              setPayments([]);
+              setError(null);
+              setStockError(null);
+            }
+          }}
+          className="w-full md:w-auto bg-blue-600 text-white px-6 py-3 rounded-xl hover:bg-blue-700 flex items-center justify-center gap-2 shadow-lg transition-all"
         >
-          <Plus size={20} />
-          New Sale
+          {showAddSale ? <ChevronUp size={20} /> : <Plus size={20} />}
+          {showAddSale ? "Close" : "New Sale"}
         </button>
       </div>
 
       {error && (
-        <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-4">
-          {error}
-          <button onClick={clearMessages} className="float-right font-bold text-red-700">×</button>
+        <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-4 flex justify-between items-start">
+          <div className="flex items-start gap-2">
+            <AlertTriangle size={20} className="flex-shrink-0 mt-0.5" />
+            <span>{error}</span>
+          </div>
+          <button onClick={clearMessages} className="font-bold text-red-700 text-xl leading-none hover:text-red-900">×</button>
         </div>
       )}
       
       {success && (
-        <div className="bg-green-100 border border-green-400 text-green-700 px-4 py-3 rounded mb-4">
-          {success}
-          <button onClick={clearMessages} className="float-right font-bold text-green-700">×</button>
+        <div className="bg-green-100 border border-green-400 text-green-700 px-4 py-3 rounded mb-4 flex justify-between items-start">
+          <div className="flex items-start gap-2">
+            <CheckCircle size={20} className="flex-shrink-0 mt-0.5" />
+            <span>{success}</span>
+          </div>
+          <button onClick={clearMessages} className="font-bold text-green-700 text-xl leading-none hover:text-green-900">×</button>
         </div>
       )}
+
+      {/* Overview Stats */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4 md:gap-6 mb-6 md:mb-8">
+        <div className="bg-white p-4 md:p-6 rounded-xl shadow-lg border-l-4 border-emerald-500">
+          <div className="text-slate-500 text-xs md:text-sm font-medium">Total Sales</div>
+          <div className="text-xl md:text-2xl font-bold text-emerald-600">Ksh {totalSales.toFixed(2)}</div>
+          <div className="text-xs md:text-sm text-black">{sales.length} orders</div>
+        </div>
+        <div className="bg-white p-4 md:p-6 rounded-xl shadow-lg border-l-4 border-blue-500">
+          <div className="text-slate-500 text-xs md:text-sm font-medium">Fully Paid</div>
+          <div className="text-xl md:text-2xl font-bold text-blue-600">Ksh {paidSales.toFixed(2)}</div>
+          <div className="text-xs md:text-sm text-black">{sales.filter(s => s.status === "PAID").length} orders</div>
+        </div>
+        <div className="bg-white p-4 md:p-6 rounded-xl shadow-lg border-l-4 border-orange-500">
+          <div className="text-slate-500 text-xs md:text-sm font-medium">Partially Paid</div>
+          <div className="text-xl md:text-2xl font-bold text-orange-600">Ksh {partialSales.toFixed(2)}</div>
+          <div className="text-xs md:text-sm text-black">{sales.filter(s => s.status === "PARTIAL").length} orders</div>
+        </div>
+        <div className="bg-white p-4 md:p-6 rounded-xl shadow-lg border-l-4 border-red-500">
+          <div className="text-slate-500 text-xs md:text-sm font-medium">Unpaid</div>
+          <div className="text-xl md:text-2xl font-bold text-red-600">Ksh {unpaidSales.toFixed(2)}</div>
+          <div className="text-xs md:text-sm text-black">{sales.filter(s => s.status === "UNPAID").length} orders</div>
+        </div>
+        <div className="bg-white p-4 md:p-6 rounded-xl shadow-lg border-l-4 border-purple-500">
+          <div className="text-slate-500 text-xs md:text-sm font-medium">Outstanding Amount</div>
+          <div className="text-xl md:text-2xl font-bold text-purple-600">Ksh {totalOutstanding.toFixed(2)}</div>
+          <div className="text-xs md:text-sm text-black">Total remaining</div>
+        </div>
+      </div>
 
       {/* Overview Stats */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4 md:gap-6 mb-6 md:mb-8">
