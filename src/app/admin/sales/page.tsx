@@ -1,7 +1,6 @@
 "use client";
 import React, { useEffect, useState } from "react";
-import { Download } from "lucide-react";
-import { MessageSquare, Send, Clock, CreditCard, AlertTriangle, CheckCircle, Plus, X, Edit, Trash2, Calculator, Save } from "lucide-react";
+import { Download, MessageSquare, Send, Clock, CreditCard, AlertTriangle, CheckCircle, Plus, X, Edit, Trash2, Calculator, Save, Menu } from "lucide-react";
 
 interface Customer {
   id: number;
@@ -64,25 +63,13 @@ interface NewSaleItem {
   quantity: number;
   price: number;
   productName: string;
-  originalPrice?: number; // Optional field to track original price
+  originalPrice?: number;
 }
 
 const EnhancedSalesPage = () => {
   const [sales, setSales] = useState<Sale[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
-
-  const fetchSales = async () => {
-    const res = await fetch("/api/sales");
-    const data = await res.json();
-    setSales(data);
-  };
-
-  useEffect(() => {
-    fetchSales();
-  }, []);
-
-  // New Sale State
   const [showAddSale, setShowAddSale] = useState(false);
   const [newSale, setNewSale] = useState({
     customerId: "",
@@ -97,7 +84,6 @@ const EnhancedSalesPage = () => {
     productName: ""
   });
   
-  // Payment State
   const [payments, setPayments] = useState<NewPayment[]>([]);
   const [currentPayment, setCurrentPayment] = useState<NewPayment>({
     amount: "",
@@ -106,47 +92,24 @@ const EnhancedSalesPage = () => {
     checkDepositDate: ""
   });
   
-  const [customerSearch, setCustomerSearch] = useState("");
-  const [productSearch, setProductSearch] = useState("");
   const [editingSale, setEditingSale] = useState<Sale | null>(null);
   const [editPayments, setEditPayments] = useState<NewPayment[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<"messaging" | "overview" | "paid" | "partial" | "unpaid">("messaging");
-  
-  // SMS messaging state
-  const [messagingStats, setMessagingStats] = useState({
-    overdue: { count: 0, totalAmount: 0, sales: [] },
-    dueToday: { count: 0, totalAmount: 0, sales: [] },
-    dueTomorrow: { count: 0, totalAmount: 0, sales: [] },
-    depositsToday: { count: 0, totalAmount: 0, sales: [] },
-    depositsTomorrow: { count: 0, totalAmount: 0, sales: [] },
-    depositsThisWeek: { count: 0, totalAmount: 0, sales: [] }
-  });
+  const [activeTab, setActiveTab] = useState<"messaging" | "overview" | "paid" | "partial" | "unpaid">("overview");
   const [selectedSales, setSelectedSales] = useState<number[]>([]);
   const [messagingLoading, setMessagingLoading] = useState(false);
+  const [selectedMessageType, setSelectedMessageType] = useState("delivery");
 
-  // Format phone number to international format
   const formatPhoneNumber = (phone: string) => {
     if (!phone) return phone;
-    
     const cleanPhone = phone.replace(/\D/g, "");
-    
-    // Convert 07XXXXXXXX to 2547XXXXXXXX
-    if (cleanPhone.startsWith("07")) {
-      return "254" + cleanPhone.substring(1);
-    }
-    
-    // Convert 7XXXXXXXX to 2547XXXXXXXX
-    if (cleanPhone.startsWith("7") && cleanPhone.length === 9) {
-      return "254" + cleanPhone;
-    }
-    
+    if (cleanPhone.startsWith("07")) return "254" + cleanPhone.substring(1);
+    if (cleanPhone.startsWith("7") && cleanPhone.length === 9) return "254" + cleanPhone;
     return cleanPhone;
   };
 
-  // Message type options for manual messaging
   const messageTypes = [
     { 
       value: "delivery", 
@@ -171,9 +134,6 @@ const EnhancedSalesPage = () => {
     }
   ];
 
-  const [selectedMessageType, setSelectedMessageType] = useState("delivery");
-
-  // Fixed function to calculate status and remaining amount correctly
   const calculateSaleStatus = (sale: any): Sale => {
     const totalPayments = sale.payments && sale.payments.length > 0
       ? sale.payments.reduce((sum: number, p: Payment) => sum + Number(p.amount || 0), 0)
@@ -183,12 +143,10 @@ const EnhancedSalesPage = () => {
     
     const hasPendingChecks = sale.payments?.some((p: Payment) => {
       if (p.method !== "CHECK") return false;
-      
       const today = new Date().toISOString().split('T')[0];
       const hasDepositDate = p.checkDepositDate;
       const isDepositDateFuture = hasDepositDate && p.checkDepositDate! > today;
       const isPendingStatus = p.status === "PENDING";
-      
       return !hasDepositDate || isDepositDateFuture || isPendingStatus;
     }) || false;
 
@@ -212,7 +170,6 @@ const EnhancedSalesPage = () => {
     };
   };
 
-  // Fetch all data from database
   useEffect(() => {
     const fetchData = async () => {
       setLoading(true);
@@ -234,7 +191,6 @@ const EnhancedSalesPage = () => {
         ]);
 
         const processedSales = salesData.map(calculateSaleStatus);
-
         setSales(processedSales);
         setCustomers(customersData);
         setProducts(productsData);
@@ -249,7 +205,6 @@ const EnhancedSalesPage = () => {
     fetchData();
   }, []);
 
-  // Payment method options
   const paymentMethods = [
     { value: "CASH", label: "Cash", color: "bg-green-100 text-green-800" },
     { value: "MPESA", label: "M-Pesa", color: "bg-blue-100 text-blue-800" },
@@ -258,43 +213,58 @@ const EnhancedSalesPage = () => {
     { value: "CARD", label: "Card Payment", color: "bg-pink-100 text-pink-800" }
   ];
 
-  // Add item to sale
- const handleAddItemToSale = () => {
-  if (!currentItem.productId || currentItem.quantity <= 0 || currentItem.price <= 0) {
-    setError("Please fill in all item details");
-    return;
-  }
-  const product = products.find(p => p.id === currentItem.productId);
-  if (!product) {
-    setError("Product not found");
-    return;
-  }
+  const handleAddItemToSale = () => {
+    if (!currentItem.productId || currentItem.quantity <= 0 || currentItem.price <= 0) {
+      setError("Please fill in all item details");
+      return;
+    }
+    const product = products.find(p => p.id === currentItem.productId);
+    if (!product) {
+      setError("Product not found");
+      return;
+    }
+    
+    const existingItemIndex = saleItems.findIndex(item => item.productId === currentItem.productId);
   
-  const existingItemIndex = saleItems.findIndex(item => item.productId === currentItem.productId);
- 
-  if (existingItemIndex >= 0) {
-    const updatedItems = [...saleItems];
-    // Update both quantity and price (in case of discount)
-    updatedItems[existingItemIndex].quantity += currentItem.quantity;
-    updatedItems[existingItemIndex].price = currentItem.price; // Use the adjusted price
-    setSaleItems(updatedItems);
-  } else {
-    setSaleItems([...saleItems, { 
-      ...currentItem, 
-      productName: product.name,
-      originalPrice: product.price // Store original price for reference
-    }]);
-  }
-  
-  setCurrentItem({
-    productId: 0,
-    quantity: 1,
-    price: 0,
-    productName: ""
-  });
-  setProductSearch("");
-  setError(null);
-};
+    if (existingItemIndex >= 0) {
+      const updatedItems = [...saleItems];
+      updatedItems[existingItemIndex].quantity += currentItem.quantity;
+      updatedItems[existingItemIndex].price = currentItem.price;
+      setSaleItems(updatedItems);
+    } else {
+      setSaleItems([...saleItems, { 
+        ...currentItem, 
+        productName: product.name,
+        originalPrice: product.price
+      }]);
+    }
+    
+    setCurrentItem({
+      productId: 0,
+      quantity: 1,
+      price: 0,
+      productName: ""
+    });
+    setError(null);
+  };
+{/* Add Sale Dropdown Panel */}
+{showAddSale && (
+  <div className="bg-white rounded-xl shadow-lg mb-6 border-2 border-blue-500 overflow-hidden animate-slideDown">
+    <div className="p-4 md:p-6 bg-blue-50 border-b border-blue-200">
+      <h2 className="text-xl md:text-2xl font-bold text-black flex items-center gap-2">
+        <Plus size={24} className="text-blue-600" />
+        Create New Sale
+      </h2>
+    </div>
+
+    <div className="p-4 md:p-6 space-y-6 max-h-[70vh] overflow-y-auto">
+      {/* Rest of your form content stays the same */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {/* ... existing form fields ... */}
+      </div>
+    </div>
+  </div>
+)}
   const handleAddPayment = () => {
     const amount = parseFloat(currentPayment.amount);
     const remainingAmount = getRemainingAmount();
@@ -304,7 +274,6 @@ const EnhancedSalesPage = () => {
       return;
     }
 
-    // Check if payment exceeds remaining amount
     if (amount > remainingAmount) {
       setError(`Payment amount cannot exceed remaining balance of Ksh ${remainingAmount.toFixed(2)}`);
       return;
@@ -315,10 +284,7 @@ const EnhancedSalesPage = () => {
       return;
     }
 
-    if (
-      ["MPESA", "BANK", "CARD"].includes(currentPayment.method) &&
-      !currentPayment.referenceId
-    ) {
+    if (["MPESA", "BANK", "CARD"].includes(currentPayment.method) && !currentPayment.referenceId) {
       setError("Please enter transaction reference");
       return;
     }
@@ -342,12 +308,10 @@ const EnhancedSalesPage = () => {
     setError(null);
   };
 
-  // Remove payment
   const removePayment = (index: number) => {
     setPayments(payments.filter((_, i) => i !== index));
   };
 
-  // Calculate totals with proper number handling
   const calculateTotalAmount = () => {
     return saleItems.reduce((total, item) => total + (Number(item.quantity) * Number(item.price)), 0);
   };
@@ -360,7 +324,6 @@ const EnhancedSalesPage = () => {
     return Math.max(0, calculateTotalAmount() - calculateTotalPayments());
   };
 
-  // Handle new sale submission
   const handleCreateSale = async () => {
     if (saleItems.length === 0) {
       setError("Please add at least one item to the sale");
@@ -373,6 +336,9 @@ const EnhancedSalesPage = () => {
     }
 
     setLoading(true);
+    setError(null);
+    setSuccess("Creating sale, please wait...");
+    
     try {
       const totalAmount = calculateTotalAmount();
       const totalPayments = calculateTotalPayments();
@@ -434,7 +400,6 @@ const EnhancedSalesPage = () => {
       const processedSale = calculateSaleStatus(createdSale);
       setSales([processedSale, ...sales]);
 
-      // Reset form
       setShowAddSale(false);
       setSaleItems([]);
       setPayments([]);
@@ -443,8 +408,8 @@ const EnhancedSalesPage = () => {
         dueDate: new Date().toISOString().split("T")[0],
       });
       setSuccess("Sale created successfully!");
+      setTimeout(() => setSuccess(null), 3000);
 
-      // Refresh data from database
       const salesRes = await fetch("/api/sales");
       if (salesRes.ok) {
         const updatedSales = await salesRes.json();
@@ -459,7 +424,6 @@ const EnhancedSalesPage = () => {
     }
   };
   
-  // Handle edit sale
   const handleEditSale = (sale: Sale) => {
     setEditingSale(sale);
     setEditPayments(sale.payments.map(p => ({
@@ -471,25 +435,28 @@ const EnhancedSalesPage = () => {
     })));
   };
 
-  // Fixed handleUpdateSale function
   const handleUpdateSale = async () => {
     if (!editingSale) return;
 
     setLoading(true);
+    setError(null);
+    setSuccess("Updating sale, please wait...");
+    
     try {
       const newPayment = editPayments[editPayments.length - 1];
 
       if (!newPayment || !newPayment.amount) {
         setError("Please enter a valid payment before updating.");
         setLoading(false);
+        setSuccess(null);
         return;
       }
 
-      // Check if payment exceeds remaining amount
       const paymentAmount = Number(newPayment.amount);
       if (paymentAmount > editingSale.remainingAmount) {
         setError(`Payment amount cannot exceed remaining balance of Ksh ${editingSale.remainingAmount.toFixed(2)}`);
         setLoading(false);
+        setSuccess(null);
         return;
       }
 
@@ -517,15 +484,12 @@ const EnhancedSalesPage = () => {
       const updatedSale = await response.json();
       const processedSale = calculateSaleStatus(updatedSale);
 
-      // Update the sales list immediately
       setSales(prevSales => 
         prevSales.map(s => s.id === processedSale.id ? processedSale : s)
       );
 
-      // Update the editing modal with fresh data
       setEditingSale(processedSale);
       
-      // Update editPayments to show all payments
       setEditPayments(
         processedSale.payments.map((p: Payment) => ({
           id: p.id,
@@ -536,7 +500,6 @@ const EnhancedSalesPage = () => {
         }))
       );
 
-      // Reset current payment input
       setCurrentPayment({
         amount: "",
         method: "CASH",
@@ -545,6 +508,7 @@ const EnhancedSalesPage = () => {
       });
 
       setSuccess("Sale updated successfully!");
+      setTimeout(() => setSuccess(null), 3000);
     } catch (err: any) {
       setError(err.message || "Failed to update sale");
       console.error("Error updating sale:", err);
@@ -580,9 +544,41 @@ const EnhancedSalesPage = () => {
       );
 
       setSuccess("Payment deleted successfully!");
+      setTimeout(() => setSuccess(null), 3000);
     } catch (error: any) {
       console.error("Error deleting payment:", error);
       setError(error.message || "Failed to delete payment");
+    }
+  };
+
+  const handleDeleteSale = async (saleId: number) => {
+    if (!confirm("Are you sure you want to delete this sale? This action cannot be undone.")) {
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+    setSuccess("Deleting sale, please wait...");
+    
+    try {
+      const response = await fetch(`/api/sales/${saleId}`, {
+        method: "DELETE",
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || "Failed to delete sale");
+      }
+
+      setSales(prevSales => prevSales.filter(s => s.id !== saleId));
+      
+      setSuccess("Sale deleted successfully!");
+      setTimeout(() => setSuccess(null), 3000);
+    } catch (error: any) {
+      console.error("Error deleting sale:", error);
+      setError(error.message || "Failed to delete sale");
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -593,7 +589,6 @@ const EnhancedSalesPage = () => {
       return;
     }
 
-    // Check if payment exceeds remaining amount for edit mode
     if (editingSale && amount > editingSale.remainingAmount) {
       setError(`Payment amount cannot exceed remaining balance of Ksh ${editingSale.remainingAmount.toFixed(2)}`);
       return;
@@ -613,20 +608,17 @@ const EnhancedSalesPage = () => {
     setError(null);
   };
 
-  // Clear messages
   const clearMessages = () => {
     setError(null);
     setSuccess(null);
   };
 
-  // Calculate dashboard totals
   const totalSales = sales.reduce((acc, s) => acc + Number(s.amount), 0);
   const paidSales = sales.filter((s) => s.status === "PAID").reduce((acc, s) => acc + Number(s.amount), 0);
   const partialSales = sales.filter((s) => s.status === "PARTIAL").reduce((acc, s) => acc + Number(s.amount), 0);
   const unpaidSales = sales.filter((s) => s.status === "UNPAID").reduce((acc, s) => acc + Number(s.amount), 0);
   const totalOutstanding = sales.reduce((acc, s) => acc + Number(s.remainingAmount), 0);
 
-  // Filter sales based on active tab
   const getFilteredSales = () => {
     switch (activeTab) {
       case "paid":
@@ -642,7 +634,6 @@ const EnhancedSalesPage = () => {
     }
   };
 
-  // SMS messaging functions
   const sendDeliveryConfirmation = async (saleId: number) => {
     setMessagingLoading(true);
     try {
@@ -655,92 +646,12 @@ const EnhancedSalesPage = () => {
       const data = await res.json();
 
       if (res.ok && !data.blacklist) {
-        setSuccess(`✅ Delivery confirmation SMS sent to ${data.customer}`);
-      } else if (data.blacklist) {
-        alert("⚠️ Customer is in blacklist. Opening manual messaging…");
-        const phoneDigits = formatPhoneNumber(data.phone);
-        const manualMsg = encodeURIComponent(
-          `Hi ${data.customer}, your delivery for ${data.product || "your order"} has been confirmed.`
-        );
-
-        if (confirm("Send via WhatsApp instead?")) {
-          window.open(`https://wa.me/${phoneDigits}?text=${manualMsg}`, "_blank");
-        } else {
-          window.open(`sms:${phoneDigits}?body=${manualMsg}`, "_blank");
-        }
+        setSuccess(`Delivery confirmation SMS sent to ${data.customer}`);
       } else {
-        setError(data.error || "❌ Failed to send delivery confirmation SMS");
+        setError(data.error || "Failed to send delivery confirmation SMS");
       }
     } catch (err) {
-      setError("❌ Failed to send delivery confirmation SMS");
-    } finally {
-      setMessagingLoading(false);
-    }
-  };
-
-  const sendPaymentReminder = async () => {
-    setMessagingLoading(true);
-    try {
-      const res = await fetch("/api/sms/get-overdue-payments", {
-        method: "GET",
-      });
-
-      const data = await res.json();
-
-      if (res.ok && !data.blacklist) {
-        setSuccess(data.message || "✅ Payment reminders sent");
-        setSelectedSales([]);
-        return data;
-      } else if (data.blacklist) {
-        alert("⚠️ Customer is in blacklist. Opening manual messaging…");
-        const phoneDigits = formatPhoneNumber(data.phone);
-        const manualMsg = encodeURIComponent(
-          `Hi ${data.customer}, you have an overdue payment of Ksh ${data.amount}. Please clear your balance for ${data.product || "your order"}.`
-        );
-
-        if (confirm("Send via WhatsApp instead?")) {
-          window.open(`https://wa.me/${phoneDigits}?text=${manualMsg}`, "_blank");
-        } else {
-          window.open(`sms:${phoneDigits}?body=${manualMsg}`, "_blank");
-        }
-      } else {
-        setError(data.error || "❌ Failed to send payment reminders");
-        throw new Error(data.error || "Failed to send payment reminders");
-      }
-    } catch (err) {
-      setError("❌ Failed to send payment reminders");
-      throw err;
-    } finally {
-      setMessagingLoading(false);
-    }
-  };
-
-  const sendCheckDepositNotification = async (saleIds: number | number[]) => {
-    setMessagingLoading(true);
-    try {
-      const body = Array.isArray(saleIds) 
-        ? { saleIds } 
-        : { saleId: saleIds };
-
-      const res = await fetch("/api/sms/get-check-deposits", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-
-      const data = await res.json();
-      if (res.ok) {
-        if (Array.isArray(saleIds)) {
-          setSuccess(`Check deposit notification SMS sent: ${data.summary.success} successful, ${data.summary.failed} failed`);
-        } else {
-          setSuccess(`Check deposit notification SMS sent to ${data.customer}`);
-        }
-        setSelectedSales([]);
-      } else {
-        setError(data.error || "Failed to send check deposit notification SMS");
-      }
-    } catch (err) {
-      setError("Failed to send check deposit notification SMS");
+      setError("Failed to send delivery confirmation SMS");
     } finally {
       setMessagingLoading(false);
     }
@@ -748,26 +659,25 @@ const EnhancedSalesPage = () => {
 
   if (loading && sales.length === 0) {
     return (
-      <div className="p-8 bg-gray-50 min-h-screen">
+      <div className="p-4 md:p-8 bg-gray-50 min-h-screen">
         <div className="text-center text-black">Loading...</div>
       </div>
     );
   }
 
   return (
-    <div className="p-8 bg-gray-50 min-h-screen">
-      <div className="flex justify-between items-center mb-6">
-        <h1 className="text-3xl font-bold text-black">Sales Management Dashboard</h1>
+    <div className="p-4 md:p-8 bg-gray-50 min-h-screen">
+      <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-6">
+        <h1 className="text-2xl md:text-3xl font-bold text-black">Sales Management Dashboard</h1>
         <button
           onClick={() => setShowAddSale(true)}
-          className="bg-blue-600 text-white px-6 py-3 rounded-xl hover:bg-blue-700 flex items-center gap-2 shadow-lg"
+          className="w-full md:w-auto bg-blue-600 text-white px-6 py-3 rounded-xl hover:bg-blue-700 flex items-center justify-center gap-2 shadow-lg"
         >
           <Plus size={20} />
           New Sale
         </button>
       </div>
 
-      {/* Success/Error Messages */}
       {error && (
         <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-4">
           {error}
@@ -783,41 +693,41 @@ const EnhancedSalesPage = () => {
       )}
 
       {/* Overview Stats */}
-      <div className="grid grid-cols-1 md:grid-cols-5 gap-6 mb-8">
-        <div className="bg-white p-6 rounded-xl shadow-lg border-l-4 border-emerald-500">
-          <div className="text-slate-500 text-sm font-medium">Total Sales</div>
-          <div className="text-2xl font-bold text-emerald-600">Ksh {totalSales.toFixed(2)}</div>
-          <div className="text-sm text-black">{sales.length} orders</div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4 md:gap-6 mb-6 md:mb-8">
+        <div className="bg-white p-4 md:p-6 rounded-xl shadow-lg border-l-4 border-emerald-500">
+          <div className="text-slate-500 text-xs md:text-sm font-medium">Total Sales</div>
+          <div className="text-xl md:text-2xl font-bold text-emerald-600">Ksh {totalSales.toFixed(2)}</div>
+          <div className="text-xs md:text-sm text-black">{sales.length} orders</div>
         </div>
-        <div className="bg-white p-6 rounded-xl shadow-lg border-l-4 border-blue-500">
-          <div className="text-slate-500 text-sm font-medium">Fully Paid</div>
-          <div className="text-2xl font-bold text-blue-600">Ksh {paidSales.toFixed(2)}</div>
-          <div className="text-sm text-black">{sales.filter(s => s.status === "PAID").length} orders</div>
+        <div className="bg-white p-4 md:p-6 rounded-xl shadow-lg border-l-4 border-blue-500">
+          <div className="text-slate-500 text-xs md:text-sm font-medium">Fully Paid</div>
+          <div className="text-xl md:text-2xl font-bold text-blue-600">Ksh {paidSales.toFixed(2)}</div>
+          <div className="text-xs md:text-sm text-black">{sales.filter(s => s.status === "PAID").length} orders</div>
         </div>
-        <div className="bg-white p-6 rounded-xl shadow-lg border-l-4 border-orange-500">
-          <div className="text-slate-500 text-sm font-medium">Partially Paid</div>
-          <div className="text-2xl font-bold text-orange-600">Ksh {partialSales.toFixed(2)}</div>
-          <div className="text-sm text-black">{sales.filter(s => s.status === "PARTIAL").length} orders</div>
+        <div className="bg-white p-4 md:p-6 rounded-xl shadow-lg border-l-4 border-orange-500">
+          <div className="text-slate-500 text-xs md:text-sm font-medium">Partially Paid</div>
+          <div className="text-xl md:text-2xl font-bold text-orange-600">Ksh {partialSales.toFixed(2)}</div>
+          <div className="text-xs md:text-sm text-black">{sales.filter(s => s.status === "PARTIAL").length} orders</div>
         </div>
-        <div className="bg-white p-6 rounded-xl shadow-lg border-l-4 border-red-500">
-          <div className="text-slate-500 text-sm font-medium">Unpaid</div>
-          <div className="text-2xl font-bold text-red-600">Ksh {unpaidSales.toFixed(2)}</div>
-          <div className="text-sm text-black">{sales.filter(s => s.status === "UNPAID").length} orders</div>
+        <div className="bg-white p-4 md:p-6 rounded-xl shadow-lg border-l-4 border-red-500">
+          <div className="text-slate-500 text-xs md:text-sm font-medium">Unpaid</div>
+          <div className="text-xl md:text-2xl font-bold text-red-600">Ksh {unpaidSales.toFixed(2)}</div>
+          <div className="text-xs md:text-sm text-black">{sales.filter(s => s.status === "UNPAID").length} orders</div>
         </div>
-        <div className="bg-white p-6 rounded-xl shadow-lg border-l-4 border-purple-500">
-          <div className="text-slate-500 text-sm font-medium">Outstanding Amount</div>
-          <div className="text-2xl font-bold text-purple-600">Ksh {totalOutstanding.toFixed(2)}</div>
-          <div className="text-sm text-black">Total remaining</div>
+        <div className="bg-white p-4 md:p-6 rounded-xl shadow-lg border-l-4 border-purple-500">
+          <div className="text-slate-500 text-xs md:text-sm font-medium">Outstanding Amount</div>
+          <div className="text-xl md:text-2xl font-bold text-purple-600">Ksh {totalOutstanding.toFixed(2)}</div>
+          <div className="text-xs md:text-sm text-black">Total remaining</div>
         </div>
       </div>
 
       {/* Add Sale Modal */}
       {showAddSale && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-xl max-w-4xl w-full max-h-[90vh] overflow-y-auto">
-            <div className="p-6 border-b">
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50 overflow-y-auto">
+          <div className="bg-white rounded-xl max-w-4xl w-full max-h-[90vh] overflow-y-auto my-4">
+            <div className="p-4 md:p-6 border-b sticky top-0 bg-white z-10">
               <div className="flex justify-between items-center">
-                <h2 className="text-2xl font-bold text-black">Create New Sale</h2>
+                <h2 className="text-xl md:text-2xl font-bold text-black">Create New Sale</h2>
                 <button
                   onClick={() => setShowAddSale(false)}
                   className="text-gray-500 hover:text-gray-700"
@@ -827,8 +737,7 @@ const EnhancedSalesPage = () => {
               </div>
             </div>
 
-            <div className="p-6 space-y-6">
-              {/* Customer Selection */}
+            <div className="p-4 md:p-6 space-y-6">
               <div>
                 <label className="block text-sm font-medium text-black mb-2">Customer</label>
                 <select
@@ -845,7 +754,6 @@ const EnhancedSalesPage = () => {
                 </select>
               </div>
 
-              {/* Due Date */}
               <div>
                 <label className="block text-sm font-medium text-black mb-2">Date</label>
                 <input
@@ -856,61 +764,61 @@ const EnhancedSalesPage = () => {
                 />
               </div>
 
-              {/* Sale Items */}
               <div>
                 <h3 className="text-lg font-semibold mb-4 text-black">Sale Items</h3>
                 
-                {/* Add Item Form */}
-                <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-4 p-4 bg-gray-50 rounded-lg">
-                  <div>
-                    <label className="block text-sm font-medium text-black mb-1">Product</label>
-                    <select
-                      value={currentItem.productId}
-                      onChange={(e) => {
-                        const productId = parseInt(e.target.value);
-                        const product = products.find(p => p.id === productId);
-                        setCurrentItem({
-                          ...currentItem,
-                          productId,
-                          price: product?.price || 0,
-                          productName: product?.name || ""
-                        });
-                      }}
-                      className="w-full p-2 border border-gray-300 rounded text-black"
-                    >
-                      <option value={0}>Select product</option>
-                      {products.map(product => (
-                        <option key={product.id} value={product.id}>
-                          {product.name} (Ksh {product.price})
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  
-                  <div>
-                    <label className="block text-sm font-medium text-black mb-1">Quantity</label>
-                    <input
-                      type="number"
-                      min="1"
-                      value={currentItem.quantity}
-                      onChange={(e) => setCurrentItem({...currentItem, quantity: parseInt(e.target.value) || 1})}
-                      className="w-full p-2 border border-gray-300 rounded text-black"
-                    />
-                  </div>
-                  
-                  <div>
-                    <label className="block text-sm font-medium text-black mb-1">Unit Price</label>
-                    <input
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      value={currentItem.price}
-                      onChange={(e) => setCurrentItem({...currentItem, price: parseFloat(e.target.value) || 0})}
-                      className="w-full p-2 border border-gray-300 rounded text-black"
-                    />
-                  </div>
-                  
-                  <div className="flex items-end">
+                <div className="space-y-3 mb-4 p-4 bg-gray-50 rounded-lg">
+                  <div className="grid grid-cols-1 gap-3">
+                    <div>
+                      <label className="block text-sm font-medium text-black mb-1">Product</label>
+                      <select
+                        value={currentItem.productId}
+                        onChange={(e) => {
+                          const productId = parseInt(e.target.value);
+                          const product = products.find(p => p.id === productId);
+                          setCurrentItem({
+                            ...currentItem,
+                            productId,
+                            price: product?.price || 0,
+                            productName: product?.name || ""
+                          });
+                        }}
+                        className="w-full p-2 border border-gray-300 rounded text-black"
+                      >
+                        <option value={0}>Select product</option>
+                        {products.map(product => (
+                          <option key={product.id} value={product.id}>
+                            {product.name} (Ksh {product.price})
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-sm font-medium text-black mb-1">Quantity</label>
+                        <input
+                          type="number"
+                          min="1"
+                          value={currentItem.quantity}
+                          onChange={(e) => setCurrentItem({...currentItem, quantity: parseInt(e.target.value) || 1})}
+                          className="w-full p-2 border border-gray-300 rounded text-black"
+                        />
+                      </div>
+                      
+                      <div>
+                        <label className="block text-sm font-medium text-black mb-1">Unit Price</label>
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          value={currentItem.price}
+                          onChange={(e) => setCurrentItem({...currentItem, price: parseFloat(e.target.value) || 0})}
+                          className="w-full p-2 border border-gray-300 rounded text-black"
+                        />
+                      </div>
+                    </div>
+                    
                     <button
                       type="button"
                       onClick={handleAddItemToSale}
@@ -922,17 +830,16 @@ const EnhancedSalesPage = () => {
                   </div>
                 </div>
 
-                {/* Items List */}
                 {saleItems.length > 0 && (
                   <div className="space-y-2 mb-4">
                     {saleItems.map((item, index) => (
                       <div key={index} className="flex justify-between items-center bg-white p-3 rounded-lg border">
-                        <div>
-                          <span className="font-medium text-black">{item.productName}</span>
-                          <span className="text-black ml-2">×{item.quantity} @ Ksh {item.price}</span>
+                        <div className="flex-1 min-w-0">
+                          <span className="font-medium text-black block truncate">{item.productName}</span>
+                          <span className="text-black text-sm">×{item.quantity} @ Ksh {item.price}</span>
                         </div>
-                        <div className="flex items-center gap-2">
-                          <span className="font-bold text-green-600">Ksh {(item.quantity * item.price).toFixed(2)}</span>
+                        <div className="flex items-center gap-2 ml-2">
+                          <span className="font-bold text-green-600 whitespace-nowrap">Ksh {(item.quantity * item.price).toFixed(2)}</span>
                           <button
                             onClick={() => setSaleItems(saleItems.filter((_, i) => i !== index))}
                             className="text-red-500 hover:text-red-700"
@@ -946,66 +853,66 @@ const EnhancedSalesPage = () => {
                 )}
               </div>
 
-              {/* Payments Section */}
               <div>
                 <h3 className="text-lg font-semibold mb-4 text-black">Payments</h3>
                 
-                {/* Add Payment Form */}
-                <div className="grid grid-cols-1 md:grid-cols-5 gap-4 mb-4 p-4 bg-gray-50 rounded-lg">
-                  <div>
-                    <label className="block text-sm font-medium text-black mb-1">Amount</label>
-                    <input
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      max={getRemainingAmount()}
-                      value={currentPayment.amount}
-                      onChange={(e) => setCurrentPayment({...currentPayment, amount: e.target.value})}
-                      className="w-full p-2 border border-gray-300 rounded text-black"
-                      placeholder="0.00"
-                    />
-                    <div className="text-xs text-gray-600 mt-1">
-                      Max: Ksh {getRemainingAmount().toFixed(2)}
+                <div className="space-y-3 mb-4 p-4 bg-gray-50 rounded-lg">
+                  <div className="grid grid-cols-1 gap-3">
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-sm font-medium text-black mb-1">Amount</label>
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          max={getRemainingAmount()}
+                          value={currentPayment.amount}
+                          onChange={(e) => setCurrentPayment({...currentPayment, amount: e.target.value})}
+                          className="w-full p-2 border border-gray-300 rounded text-black"
+                          placeholder="0.00"
+                        />
+                        <div className="text-xs text-gray-600 mt-1">
+                          Max: Ksh {getRemainingAmount().toFixed(2)}
+                        </div>
+                      </div>
+                      
+                      <div>
+                        <label className="block text-sm font-medium text-black mb-1">Method</label>
+                        <select
+                          value={currentPayment.method}
+                          onChange={(e) => setCurrentPayment({...currentPayment, method: e.target.value as any})}
+                          className="w-full p-2 border border-gray-300 rounded text-black"
+                        >
+                          {paymentMethods.map(method => (
+                            <option key={method.value} value={method.value}>{method.label}</option>
+                          ))}
+                        </select>
+                      </div>
                     </div>
-                  </div>
-                  
-                  <div>
-                    <label className="block text-sm font-medium text-black mb-1">Method</label>
-                    <select
-                      value={currentPayment.method}
-                      onChange={(e) => setCurrentPayment({...currentPayment, method: e.target.value as any})}
-                      className="w-full p-2 border border-gray-300 rounded text-black"
-                    >
-                      {paymentMethods.map(method => (
-                        <option key={method.value} value={method.value}>{method.label}</option>
-                      ))}
-                    </select>
-                  </div>
-                  
-                  <div>
-                    <label className="block text-sm font-medium text-black mb-1">Reference</label>
-                    <input
-                      type="text"
-                      value={currentPayment.referenceId}
-                      onChange={(e) => setCurrentPayment({...currentPayment, referenceId: e.target.value})}
-                      className="w-full p-2 border border-gray-300 rounded text-black"
-                      placeholder="Transaction ID"
-                    />
-                  </div>
-                  
-                  {currentPayment.method === "CHECK" && (
+                    
                     <div>
-                      <label className="block text-sm font-medium text-black mb-1">Deposit Date</label>
+                      <label className="block text-sm font-medium text-black mb-1">Reference</label>
                       <input
-                        type="date"
-                        value={currentPayment.checkDepositDate}
-                        onChange={(e) => setCurrentPayment({...currentPayment, checkDepositDate: e.target.value})}
+                        type="text"
+                        value={currentPayment.referenceId}
+                        onChange={(e) => setCurrentPayment({...currentPayment, referenceId: e.target.value})}
                         className="w-full p-2 border border-gray-300 rounded text-black"
+                        placeholder="Transaction ID"
                       />
                     </div>
-                  )}
-                  
-                  <div className="flex items-end">
+                    
+                    {currentPayment.method === "CHECK" && (
+                      <div>
+                        <label className="block text-sm font-medium text-black mb-1">Deposit Date</label>
+                        <input
+                          type="date"
+                          value={currentPayment.checkDepositDate}
+                          onChange={(e) => setCurrentPayment({...currentPayment, checkDepositDate: e.target.value})}
+                          className="w-full p-2 border border-gray-300 rounded text-black"
+                        />
+                      </div>
+                    )}
+                    
                     <button
                       type="button"
                       onClick={handleAddPayment}
@@ -1017,12 +924,11 @@ const EnhancedSalesPage = () => {
                   </div>
                 </div>
 
-                {/* Payments List */}
                 {payments.length > 0 && (
                   <div className="space-y-2 mb-4">
                     {payments.map((payment, index) => (
                       <div key={index} className="flex justify-between items-center bg-white p-3 rounded-lg border">
-                        <div className="flex items-center gap-4">
+                        <div className="flex items-center gap-2 flex-wrap">
                           <span className={`px-2 py-1 rounded-full text-xs font-medium ${
                             paymentMethods.find(m => m.value === payment.method)?.color
                           }`}>
@@ -1035,7 +941,7 @@ const EnhancedSalesPage = () => {
                         </div>
                         <button
                           onClick={() => removePayment(index)}
-                          className="text-red-500 hover:text-red-700"
+                          className="text-red-500 hover:text-red-700 ml-2"
                         >
                           <Trash2 size={16} />
                         </button>
@@ -1044,7 +950,6 @@ const EnhancedSalesPage = () => {
                   </div>
                 )}
 
-                {/* Payment Summary */}
                 {saleItems.length > 0 && (
                   <div className="bg-blue-50 p-4 rounded-lg">
                     <div className="flex justify-between items-center mb-2">
@@ -1065,20 +970,27 @@ const EnhancedSalesPage = () => {
                 )}
               </div>
 
-              {/* Action Buttons */}
-              <div className="flex gap-4 pt-6 border-t">
+              <div className="flex flex-col sm:flex-row gap-3 pt-6 border-t">
                 <button
                   onClick={() => setShowAddSale(false)}
-                  className="flex-1 bg-gray-500 text-white px-6 py-3 rounded-lg hover:bg-gray-600"
+                  disabled={loading}
+                  className="flex-1 bg-gray-500 text-white px-6 py-3 rounded-lg hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   Cancel
                 </button>
                 <button
                   onClick={handleCreateSale}
-                  disabled={saleItems.length === 0 || !newSale.customerId}
-                  className="flex-1 bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                  disabled={saleItems.length === 0 || !newSale.customerId || loading}
+                  className="flex-1 bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
                 >
-                  Create Sale
+                  {loading ? (
+                    <>
+                      <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
+                      Creating Sale...
+                    </>
+                  ) : (
+                    "Create Sale"
+                  )}
                 </button>
               </div>
             </div>
@@ -1088,11 +1000,11 @@ const EnhancedSalesPage = () => {
   
       {/* Edit Sale Modal */}
       {editingSale && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
-            <div className="p-6 border-b">
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50 overflow-y-auto">
+          <div className="bg-white rounded-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto my-4">
+            <div className="p-4 md:p-6 border-b sticky top-0 bg-white z-10">
               <div className="flex justify-between items-center">
-                <h2 className="text-2xl font-bold text-black">Edit Sale #{editingSale.id}</h2>
+                <h2 className="text-xl md:text-2xl font-bold text-black">Edit Sale #{editingSale.id}</h2>
                 <button
                   onClick={() => setEditingSale(null)}
                   className="text-gray-500 hover:text-gray-700"
@@ -1102,11 +1014,10 @@ const EnhancedSalesPage = () => {
               </div>
             </div>
 
-            <div className="p-6 space-y-6">
-              {/* Sale Info */}
+            <div className="p-4 md:p-6 space-y-6">
               <div className="bg-gray-50 p-4 rounded-lg">
                 <h3 className="font-semibold mb-2 text-black">Sale Information</h3>
-                <div className="grid grid-cols-2 gap-4 text-sm">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
                   <div>
                     <span className="text-black">Customer:</span>
                     <span className="font-medium ml-2 text-black">{editingSale.customer.name}</span>
@@ -1132,33 +1043,30 @@ const EnhancedSalesPage = () => {
                 </div>
               </div>
 
-              {/* Sale Items */}
               <div>
                 <h3 className="text-lg font-semibold mb-3 text-black">Sale Items</h3>
                 <div className="space-y-2">
                   {editingSale.saleitems?.map((item, index) => (
                     <div key={index} className="flex justify-between items-center bg-gray-50 p-3 rounded-lg">
-                      <div>
-                        <span className="font-medium text-black">{item.product.name}</span>
-                        <span className="text-black ml-2">×{item.quantity} @ Ksh {item.price}</span>
+                      <div className="flex-1 min-w-0">
+                        <span className="font-medium text-black block truncate">{item.product.name}</span>
+                        <span className="text-black text-sm">×{item.quantity} @ Ksh {item.price}</span>
                       </div>
-                      <span className="font-bold text-green-600">Ksh {(item.quantity * item.price).toFixed(2)}</span>
+                      <span className="font-bold text-green-600 whitespace-nowrap ml-2">Ksh {(item.quantity * item.price).toFixed(2)}</span>
                     </div>
                   ))}
                 </div>
               </div>
 
-              {/* Edit Payments */}
               <div>
                 <h3 className="text-lg font-semibold mb-4 text-black">Payments</h3>
                 
-                {/* Current Payments */}
                 {editPayments.length > 0 && (
                   <div className="space-y-2 mb-4">
                     <h4 className="font-medium text-black">Current Payments:</h4>
                     {editPayments.map((payment, index) => (
                       <div key={index} className="flex justify-between items-center bg-white p-3 rounded-lg border">
-                        <div className="flex items-center gap-4">
+                        <div className="flex items-center gap-2 flex-wrap flex-1">
                           <span className={`px-2 py-1 rounded-full text-xs font-medium ${
                             paymentMethods.find(m => m.value === payment.method)?.color
                           }`}>
@@ -1172,7 +1080,7 @@ const EnhancedSalesPage = () => {
                         {payment.id !== undefined && (
                           <button
                             onClick={() => handleDeletePayment(payment.id as number, editingSale.id)}
-                            className="text-red-500 hover:text-red-700"
+                            className="text-red-500 hover:text-red-700 ml-2"
                           >
                             <Trash2 size={16} />
                           </button>
@@ -1182,62 +1090,63 @@ const EnhancedSalesPage = () => {
                   </div>
                 )}
 
-                {/* Add New Payment */}
-                <div className="grid grid-cols-1 md:grid-cols-5 gap-4 mb-4 p-4 bg-gray-50 rounded-lg">
-                  <div>
-                    <label className="block text-sm font-medium text-black mb-1">Amount</label>
-                    <input
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      max={editingSale.remainingAmount}
-                      value={currentPayment.amount}
-                      onChange={(e) => setCurrentPayment({...currentPayment, amount: e.target.value})}
-                      className="w-full p-2 border border-gray-300 rounded text-black"
-                      placeholder="0.00"
-                    />
-                    <div className="text-xs text-gray-600 mt-1">
-                      Max: Ksh {editingSale.remainingAmount.toFixed(2)}
+                <div className="space-y-3 mb-4 p-4 bg-gray-50 rounded-lg">
+                  <div className="grid grid-cols-1 gap-3">
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-sm font-medium text-black mb-1">Amount</label>
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          max={editingSale.remainingAmount}
+                          value={currentPayment.amount}
+                          onChange={(e) => setCurrentPayment({...currentPayment, amount: e.target.value})}
+                          className="w-full p-2 border border-gray-300 rounded text-black"
+                          placeholder="0.00"
+                        />
+                        <div className="text-xs text-gray-600 mt-1">
+                          Max: Ksh {editingSale.remainingAmount.toFixed(2)}
+                        </div>
+                      </div>
+                      
+                      <div>
+                        <label className="block text-sm font-medium text-black mb-1">Method</label>
+                        <select
+                          value={currentPayment.method}
+                          onChange={(e) => setCurrentPayment({...currentPayment, method: e.target.value as any})}
+                          className="w-full p-2 border border-gray-300 rounded text-black"
+                        >
+                          {paymentMethods.map(method => (
+                            <option key={method.value} value={method.value}>{method.label}</option>
+                          ))}
+                        </select>
+                      </div>
                     </div>
-                  </div>
-                  
-                  <div>
-                    <label className="block text-sm font-medium text-black mb-1">Method</label>
-                    <select
-                      value={currentPayment.method}
-                      onChange={(e) => setCurrentPayment({...currentPayment, method: e.target.value as any})}
-                      className="w-full p-2 border border-gray-300 rounded text-black"
-                    >
-                      {paymentMethods.map(method => (
-                        <option key={method.value} value={method.value}>{method.label}</option>
-                      ))}
-                    </select>
-                  </div>
-                  
-                  <div>
-                    <label className="block text-sm font-medium text-black mb-1">Reference</label>
-                    <input
-                      type="text"
-                      value={currentPayment.referenceId}
-                      onChange={(e) => setCurrentPayment({...currentPayment, referenceId: e.target.value})}
-                      className="w-full p-2 border border-gray-300 rounded text-black"
-                      placeholder="Transaction ID"
-                    />
-                  </div>
-                  
-                  {currentPayment.method === "CHECK" && (
+                    
                     <div>
-                      <label className="block text-sm font-medium text-black mb-1">Deposit Date</label>
+                      <label className="block text-sm font-medium text-black mb-1">Reference</label>
                       <input
-                        type="date"
-                        value={currentPayment.checkDepositDate}
-                        onChange={(e) => setCurrentPayment({...currentPayment, checkDepositDate: e.target.value})}
+                        type="text"
+                        value={currentPayment.referenceId}
+                        onChange={(e) => setCurrentPayment({...currentPayment, referenceId: e.target.value})}
                         className="w-full p-2 border border-gray-300 rounded text-black"
+                        placeholder="Transaction ID"
                       />
                     </div>
-                  )}
-                  
-                  <div className="flex items-end">
+                    
+                    {currentPayment.method === "CHECK" && (
+                      <div>
+                        <label className="block text-sm font-medium text-black mb-1">Deposit Date</label>
+                        <input
+                          type="date"
+                          value={currentPayment.checkDepositDate}
+                          onChange={(e) => setCurrentPayment({...currentPayment, checkDepositDate: e.target.value})}
+                          className="w-full p-2 border border-gray-300 rounded text-black"
+                        />
+                      </div>
+                    )}
+                    
                     <button
                       type="button"
                       onClick={addEditPayment}
@@ -1249,7 +1158,6 @@ const EnhancedSalesPage = () => {
                   </div>
                 </div>
 
-                {/* Payment Summary for Edit */}
                 <div className="bg-blue-50 p-4 rounded-lg">
                   <div className="flex justify-between items-center mb-2">
                     <span className="font-medium text-black">Total Sale Amount:</span>
@@ -1270,23 +1178,39 @@ const EnhancedSalesPage = () => {
                       Ksh {Math.max(0, editingSale.amount - editPayments.reduce((sum, p) => sum + Number(p.amount), 0)).toFixed(2)}
                     </span>
                   </div>
+                  
+                  {currentPayment.amount && Number(currentPayment.amount) > Math.max(0, editingSale.amount - editPayments.reduce((sum, p) => sum + Number(p.amount), 0)) && (
+                    <div className="mt-3 bg-red-100 border border-red-400 text-red-700 px-3 py-2 rounded text-sm">
+                      Warning: Payment amount exceeds remaining balance. Maximum allowed: Ksh {Math.max(0, editingSale.amount - editPayments.reduce((sum, p) => sum + Number(p.amount), 0)).toFixed(2)}
+                    </div>
+                  )}
                 </div>
               </div>
 
-              {/* Action Buttons */}
-              <div className="flex gap-4 pt-6 border-t">
+              <div className="flex flex-col sm:flex-row gap-3 pt-6 border-t">
                 <button
                   onClick={() => setEditingSale(null)}
-                  className="flex-1 bg-gray-500 text-white px-6 py-3 rounded-lg hover:bg-gray-600"
+                  disabled={loading}
+                  className="flex-1 bg-gray-500 text-white px-6 py-3 rounded-lg hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   Cancel
                 </button>
                 <button
                   onClick={handleUpdateSale}
-                  className="flex-1 bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700 flex items-center justify-center gap-2"
+                  disabled={loading}
+                  className="flex-1 bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
                 >
-                  <Save size={20} />
-                  Update Sale
+                  {loading ? (
+                    <>
+                      <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
+                      Updating Sale...
+                    </>
+                  ) : (
+                    <>
+                      <Save size={20} />
+                      Update Sale
+                    </>
+                  )}
                 </button>
               </div>
             </div>
@@ -1296,217 +1220,196 @@ const EnhancedSalesPage = () => {
 
       {/* Navigation Tabs */}
       <div className="bg-white rounded-xl shadow mb-6">
-        <div className="flex border-b">
+        <div className="flex overflow-x-auto">
           {[
-            { key: "messaging", label: "SMS Messaging", count: 0 },
-            { key: "overview", label: "All Sales", count: sales.length },
-            { key: "paid", label: "Fully Paid", count: sales.filter(s => s.status === "PAID").length },
-            { key: "partial", label: "Partially Paid", count: sales.filter(s => s.status === "PARTIAL").length },
+            { key: "messaging", label: "SMS", icon: <MessageSquare size={16} />, count: 0 },
+            { key: "overview", label: "All", count: sales.length },
+            { key: "paid", label: "Paid", count: sales.filter(s => s.status === "PAID").length },
+            { key: "partial", label: "Partial", count: sales.filter(s => s.status === "PARTIAL").length },
             { key: "unpaid", label: "Unpaid", count: sales.filter(s => s.status === "UNPAID").length }
           ].map((tab) => (
             <button
               key={tab.key}
               onClick={() => setActiveTab(tab.key as any)}
-              className={`flex-1 px-4 py-3 text-center transition-colors ${
+              className={`flex-shrink-0 px-3 md:px-4 py-3 text-center transition-colors whitespace-nowrap ${
                 activeTab === tab.key
                   ? "border-b-2 border-blue-500 text-blue-600 font-semibold"
                   : "text-black hover:text-gray-800"
               }`}
             >
               <div className="flex items-center justify-center gap-2">
-                {tab.key === "messaging" && <MessageSquare size={16} />}
-                {tab.key === "partial" && <Calculator size={16} />}
-                {tab.label} ({tab.count})
+                {tab.icon}
+                <span className="text-sm md:text-base">{tab.label}</span>
+                <span className="text-xs md:text-sm">({tab.count})</span>
               </div>
             </button>
           ))}
         </div>
 
-        {/* SMS Messaging Tab Content */}
         {activeTab === "messaging" && (
-          <div className="p-6">
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-              {/* Payment Reminders Section */}
-              <div className="bg-red-50 p-6 rounded-xl border border-red-200">
-                <div className="flex items-center gap-2 mb-4">
-                  <AlertTriangle className="text-red-600" size={20} />
-                  <h3 className="text-lg font-semibold text-red-800">SMS Payment Reminders</h3>
-                </div>
-                
-                <div className="space-y-3 mb-4">
-                  <div className="bg-white p-3 rounded-lg">
-                    <div className="flex justify-between items-center">
-                      <span className="text-sm text-black">Overdue Payments</span>
-                      <span className="font-bold text-red-600">
-                        {sales.filter(s => s.status !== "PAID" && s.dueDate && new Date(s.dueDate) < new Date()).length}
-                      </span>
-                    </div>
-                  </div>
-                  
-                  <div className="bg-white p-3 rounded-lg">
-                    <div className="flex justify-between items-center">
-                      <span className="text-sm text-black">Partial Payments</span>
-                      <span className="font-bold text-orange-600">
-                        {sales.filter(s => s.status === "PARTIAL").length}
-                      </span>
-                    </div>
-                  </div>
-                  
-                  <div className="bg-white p-3 rounded-lg">
-                    <div className="flex justify-between items-center">
-                      <span className="text-sm text-black">Unpaid Orders</span>
-                      <span className="font-bold text-red-600">
-                        {sales.filter(s => s.status === "UNPAID").length}
-                      </span>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="space-y-2">
-                  <button
-                    onClick={sendPaymentReminder}
-                    disabled={messagingLoading}
-                    className="bg-orange-500 text-white px-4 py-2 rounded-lg hover:bg-orange-600 disabled:opacity-50 flex items-center gap-2"
-                  >
-                    <Send size={16} />
-                    Send SMS Payment Reminders
-                  </button>
-                </div>
-              </div>
-                
-              {/* Check Deposits */}
-              <div className="bg-orange-50 p-6 rounded-xl border border-orange-200">
-                <div className="flex items-center gap-2 mb-4">
-                  <CreditCard className="text-orange-600" size={20} />
-                  <h3 className="text-lg font-semibold text-orange-800">Check Deposit SMS</h3>
-                </div>
-                
-                <div className="space-y-3 mb-4">
-                  <div className="bg-white p-3 rounded-lg">
-                    <div className="flex justify-between items-center">
-                      <span className="text-sm text-black">Pending Check Deposits</span>
-                      <span className="font-bold text-orange-600">
-                        {sales.filter(s => s.paymentMethod === "CHECK" || 
-                          s.payments?.some(p => p.method === "CHECK")).length}
-                      </span>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="space-y-2">
-                  <button
-                    onClick={() => {
-                      const checkSales = sales.filter(s => 
-                        s.paymentMethod === "CHECK" || s.payments?.some(p => p.method === "CHECK")
-                      ).map(s => s.id);
-                      if (checkSales.length > 0) {
-                        sendCheckDepositNotification(checkSales);
-                      }
-                    }}
-                    disabled={messagingLoading || sales.filter(s => 
-                      s.paymentMethod === "CHECK" || s.payments?.some(p => p.method === "CHECK")
-                    ).length === 0}
-                    className="w-full bg-orange-500 text-white px-4 py-2 rounded-lg hover:bg-orange-600 disabled:opacity-50 flex items-center justify-center gap-2"
-                  >
-                    <Send size={16} />
-                    Send Check Deposit SMS
-                  </button>
-                </div>
-              </div>
-
-              {/* Quick Stats */}
-              <div className="bg-green-50 p-6 rounded-xl border border-green-200">
-                <div className="flex items-center gap-2 mb-4">
-                  <CheckCircle className="text-green-600" size={20} />
-                  <h3 className="text-lg font-semibold text-green-800">SMS Quick Stats</h3>
-                </div>
-                
-                <div className="space-y-3">
-                  <div className="bg-white p-3 rounded-lg">
-                    <div className="text-sm text-black mb-2">Total Outstanding</div>
-                    <div className="font-bold text-red-600">Ksh {totalOutstanding.toFixed(2)}</div>
-                  </div>
-                  
-                  <div className="bg-white p-3 rounded-lg">
-                    <div className="text-sm text-black mb-2">This Month's Sales</div>
-                    <div className="font-bold text-green-600">Ksh {totalSales.toFixed(2)}</div>
-                  </div>
-
-                  <div className="bg-white p-3 rounded-lg">
-                    <div className="text-sm text-black mb-2">Customers with Phone Numbers</div>
-                    <div className="font-bold text-blue-600">
-                      {customers.filter(c => c.phone).length}/{customers.length}
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* SMS Status */}
-            {messagingLoading && (
-              <div className="bg-blue-50 border border-blue-200 text-blue-700 px-4 py-3 rounded-lg mb-4">
-                <div className="flex items-center gap-2">
-                  <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-600"></div>
-                  Sending SMS messages via Africa's Talking... Please wait.
-                </div>
-              </div>
-            )}
-
-            {/* Africa's Talking Integration Info */}
+          <div className="p-4 md:p-6">
             <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-4">
-              <h4 className="font-semibold text-blue-800 mb-2">Africa's Talking SMS Integration</h4>
+              <h4 className="font-semibold text-blue-800 mb-2">SMS Messaging</h4>
+              <p className="text-sm text-blue-700">Send automated payment reminders and delivery confirmations via SMS</p>
             </div>
           </div>
         )}
 
-        {/* Sales Table */}
         {activeTab !== "messaging" && (
-          <div className="p-6">
-            <div className="overflow-x-auto">
+          <div className="p-4 md:p-6">
+            {/* Mobile Card View */}
+            <div className="block lg:hidden space-y-4">
+              {getFilteredSales().map((sale) => (
+                <div key={sale.id} className="bg-white border rounded-lg p-4 shadow-sm">
+                  <div className="flex justify-between items-start mb-3">
+                    <div>
+                      <h3 className="font-semibold text-black">{sale.customer?.name || "-"}</h3>
+                      {sale.customer?.phone && (
+                        <p className="text-xs text-gray-500">{sale.customer.phone}</p>
+                      )}
+                    </div>
+                    <span className={`px-2 py-1 rounded-full text-xs font-bold ${
+                      sale.status === "PAID" ? "bg-green-100 text-green-800" :
+                      sale.status === "PARTIAL" ? "bg-orange-100 text-orange-800" :
+                      "bg-red-100 text-red-800"
+                    }`}>
+                      {sale.status}
+                    </span>
+                  </div>
+
+                  <div className="space-y-2 mb-3">
+                    {sale.saleitems && sale.saleitems.length > 0 && (
+                      <div className="text-sm">
+                        {sale.saleitems.map((item, idx) => (
+                          <div key={idx} className="text-black">
+                            <span className="font-medium">{item.product.name}</span>
+                            <span> (×{item.quantity})</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2 text-sm mb-3">
+                    <div>
+                      <span className="text-gray-600">Amount:</span>
+                      <span className="font-semibold text-emerald-600 ml-1">Ksh {sale.amount.toFixed(2)}</span>
+                    </div>
+                    <div>
+                      <span className="text-gray-600">Remaining:</span>
+                      <span className="font-semibold text-red-600 ml-1">Ksh {sale.remainingAmount.toFixed(2)}</span>
+                    </div>
+                    <div>
+                      <span className="text-gray-600">Date:</span>
+                      <span className="ml-1 text-black">{new Date(sale.date).toLocaleDateString()}</span>
+                    </div>
+                    {sale.dueDate && (
+                      <div>
+                        <span className="text-gray-600">Due:</span>
+                        <span className="ml-1 text-black">{new Date(sale.dueDate).toLocaleDateString()}</span>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="flex flex-wrap gap-2">
+                    {/* Message Type Selector for Mobile */}
+                    <select
+                      value={selectedMessageType}
+                      onChange={(e) => setSelectedMessageType(e.target.value)}
+                      className="w-full px-2 py-1 text-xs border border-gray-300 rounded text-black mb-2"
+                    >
+                      {messageTypes.map(type => (
+                        <option key={type.value} value={type.value}>
+                          {type.label}
+                        </option>
+                      ))}
+                    </select>
+
+                    <button
+                      onClick={() => {
+                        if (!sale.customer?.phone) {
+                          alert("Customer phone number required");
+                          return;
+                        }
+
+                        const phone = formatPhoneNumber(sale.customer.phone);
+                        const selectedTemplate = messageTypes.find(t => t.value === selectedMessageType);
+                        const message = encodeURIComponent(selectedTemplate?.getTemplate(sale) || "Thank you for your business!");
+
+                        const useWhatsApp = confirm("Send via WhatsApp? (Click Cancel for SMS)");
+
+                        if (useWhatsApp) {
+                          window.open(`https://wa.me/${phone}?text=${message}`, "_blank");
+                        } else {
+                          window.open(`sms:${phone}?body=${message}`, "_blank");
+                        }
+                      }}
+                      className="flex-1 px-3 py-2 text-xs bg-blue-500 text-white rounded hover:bg-blue-600 flex items-center justify-center gap-1"
+                    >
+                      <MessageSquare size={12} />
+                      Manual
+                    </button>
+                    
+                    <button
+                      onClick={() => sendDeliveryConfirmation(sale.id)}
+                      disabled={messagingLoading || !sale.customer?.phone}
+                      className="flex-1 px-3 py-2 text-xs bg-green-500 text-white rounded hover:bg-green-600 disabled:opacity-50 flex items-center justify-center gap-1"
+                    >
+                      <MessageSquare size={12} />
+                      SMS
+                    </button>
+                    
+                    <button
+                      onClick={() => window.open(`/api/receipt/${sale.id}`, "_blank")}
+                      className="flex-1 px-3 py-2 text-xs bg-purple-500 text-white rounded hover:bg-purple-600 flex items-center justify-center gap-1"
+                    >
+                      <Download size={12} />
+                      Receipt
+                    </button>
+                    
+                    <button
+                      onClick={() => handleEditSale(sale)}
+                      className="flex-1 px-3 py-2 text-xs bg-blue-500 text-white rounded hover:bg-blue-600 flex items-center justify-center gap-1"
+                    >
+                      <Edit size={12} />
+                      Edit
+                    </button>
+                    
+                    <button
+                      onClick={() => handleDeleteSale(sale.id)}
+                      disabled={loading}
+                      className="flex-1 px-3 py-2 text-xs bg-red-500 text-white rounded hover:bg-red-600 disabled:opacity-50 flex items-center justify-center gap-1"
+                    >
+                      <Trash2 size={12} />
+                      Delete
+                    </button>
+                  </div>
+                </div>
+              ))}
+              {getFilteredSales().length === 0 && (
+                <div className="text-center py-8 text-black">
+                  No sales found for this category
+                </div>
+              )}
+            </div>
+
+            {/* Desktop Table View */}
+            <div className="hidden lg:block overflow-x-auto">
               <table className="min-w-full border-collapse">
                 <thead>
                   <tr className="bg-slate-100">
-                    <th className="p-3 text-left text-black">
-                      <input
-                        type="checkbox"
-                        onChange={(e) => {
-                          if (e.target.checked) {
-                            setSelectedSales(getFilteredSales().map(s => s.id));
-                          } else {
-                            setSelectedSales([]);
-                          }
-                        }}
-                        checked={selectedSales.length === getFilteredSales().length && getFilteredSales().length > 0}
-                      />
-                    </th>
-                    <th className="p-3 text-left text-black">Product(s)</th>
-                    <th className="p-3 text-left text-black">Customer</th>
-                    <th className="p-3 text-left text-black">Amount</th>
-                    <th className="p-3 text-left text-black">Payment Method(s)</th>
-                    <th className="p-3 text-left text-black">Status</th>
-                    <th className="p-3 text-left text-black">Payments</th>
-                    <th className="p-3 text-left text-black">Remaining</th>
-                    <th className="p-3 text-left text-black">Due Date</th>
-                    <th className="p-3 text-left text-black">Date</th>
-                    <th className="p-3 text-left text-black">Actions</th>
+                    <th className="p-3 text-left text-black text-sm">Product(s)</th>
+                    <th className="p-3 text-left text-black text-sm">Customer</th>
+                    <th className="p-3 text-left text-black text-sm">Amount</th>
+                    <th className="p-3 text-left text-black text-sm">Status</th>
+                    <th className="p-3 text-left text-black text-sm">Remaining</th>
+                    <th className="p-3 text-left text-black text-sm">Date</th>
+                    <th className="p-3 text-left text-black text-sm">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
                   {getFilteredSales().map((sale) => (
                     <tr key={sale.id} className="border-b hover:bg-gray-50">
-                      <td className="p-3">
-                        <input
-                          type="checkbox"
-                          checked={selectedSales.includes(sale.id)}
-                          onChange={() => {
-                            if (selectedSales.includes(sale.id)) {
-                              setSelectedSales(selectedSales.filter(id => id !== sale.id));
-                            } else {
-                              setSelectedSales([...selectedSales, sale.id]);
-                            }
-                          }}
-                        />
-                      </td>
                       <td className="p-3">
                         <div className="max-w-xs">
                           {sale.saleitems && sale.saleitems.length > 0
@@ -1514,7 +1417,6 @@ const EnhancedSalesPage = () => {
                                 <div key={idx} className="text-sm">
                                   <span className="font-medium text-black">{item.product.name}</span>
                                   <span className="text-black"> (×{item.quantity})</span>
-                                  <span className="text-green-600 ml-1">Ksh {(item.quantity * item.price).toFixed(2)}</span>
                                 </div>
                               ))
                             : <span className="text-black">-</span>}
@@ -1532,23 +1434,6 @@ const EnhancedSalesPage = () => {
                         Ksh {sale.amount.toFixed(2)}
                       </td>
                       <td className="p-3">
-                        <div className="flex flex-wrap gap-1">
-                          {sale.payments && sale.payments.length > 0 ? (
-                            sale.payments.map((payment, idx) => (
-                              <span key={idx} className={`px-2 py-1 rounded-full text-xs font-medium ${
-                                paymentMethods.find(m => m.value === payment.method)?.color || "bg-gray-100 text-gray-800"
-                              }`}>
-                                {payment.method}
-                              </span>
-                            ))
-                          ) : (
-                            <span className="px-2 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-800">
-                              No Payment
-                            </span>
-                          )}
-                        </div>
-                      </td>
-                      <td className="p-3">
                         <span className={`px-3 py-1 rounded-full text-xs font-bold ${
                           sale.status === "PAID" ? "bg-green-100 text-green-800" :
                           sale.status === "PARTIAL" ? "bg-orange-100 text-orange-800" :
@@ -1556,22 +1441,6 @@ const EnhancedSalesPage = () => {
                         }`}>
                           {sale.status}
                         </span>
-                      </td>
-                      <td className="p-3">
-                        <div className="text-sm">
-                          {sale.payments && sale.payments.length > 0 ? (
-                            <div>
-                              <div className="font-medium text-green-600">
-                                Ksh {sale.payments.reduce((sum, p) => sum + p.amount, 0).toFixed(2)}
-                              </div>
-                              <div className="text-xs text-black">
-                                {sale.payments.length} payment{sale.payments.length > 1 ? 's' : ''}
-                              </div>
-                            </div>
-                          ) : (
-                            <span className="text-gray-400">No payments</span>
-                          )}
-                        </div>
                       </td>
                       <td className="p-3">
                         {sale.remainingAmount > 0 ? (
@@ -1582,59 +1451,48 @@ const EnhancedSalesPage = () => {
                           <span className="text-green-600 font-medium">Paid in full</span>
                         )}
                       </td>
-                      <td className="p-3">
-                        {sale.dueDate ? (
-                          <span className={`${
-                            new Date(sale.dueDate) < new Date() && sale.status !== "PAID"
-                              ? "text-red-600 font-semibold"
-                              : "text-black"
-                          }`}>
-                            {new Date(sale.dueDate).toLocaleDateString()}
-                          </span>
-                        ) : <span className="text-black">-</span>}
-                      </td>
                       <td className="p-3 text-black">{new Date(sale.date).toLocaleDateString()}</td>
                       <td className="p-3">
-                        {/* Message Type Selector */}
-                        <select
-                          value={selectedMessageType}
-                          onChange={(e) => setSelectedMessageType(e.target.value)}
-                          className="px-2 py-1 text-xs border border-gray-300 rounded text-black mb-2"
-                        >
-                          {messageTypes.map(type => (
-                            <option key={type.value} value={type.value}>
-                              {type.label}
-                            </option>
-                          ))}
-                        </select>
+                        <div className="flex flex-wrap gap-2">
+                          {/* Message Type Selector */}
+                          <select
+                            value={selectedMessageType}
+                            onChange={(e) => setSelectedMessageType(e.target.value)}
+                            className="px-2 py-1 text-xs border border-gray-300 rounded text-black mb-2"
+                          >
+                            {messageTypes.map(type => (
+                              <option key={type.value} value={type.value}>
+                                {type.label}
+                              </option>
+                            ))}
+                          </select>
 
-                        <button
-                          onClick={() => {
-                            if (!sale.customer?.phone) {
-                              alert("Customer phone number required");
-                              return;
-                            }
+                          <button
+                            onClick={() => {
+                              if (!sale.customer?.phone) {
+                                alert("Customer phone number required");
+                                return;
+                              }
 
-                            const phone = formatPhoneNumber(sale.customer.phone);
-                            const selectedTemplate = messageTypes.find(t => t.value === selectedMessageType);
-                            const message = encodeURIComponent(selectedTemplate?.getTemplate(sale) || "Thank you for your business!");
+                              const phone = formatPhoneNumber(sale.customer.phone);
+                              const selectedTemplate = messageTypes.find(t => t.value === selectedMessageType);
+                              const message = encodeURIComponent(selectedTemplate?.getTemplate(sale) || "Thank you for your business!");
 
-                            const useWhatsApp = confirm("Send via WhatsApp? (Click Cancel for SMS)");
+                              const useWhatsApp = confirm("Send via WhatsApp? (Click Cancel for SMS)");
 
-                            if (useWhatsApp) {
-                              window.open(`https://wa.me/${phone}?text=${message}`, "_blank");
-                            } else {
-                              window.open(`sms:${phone}?body=${message}`, "_blank");
-                            }
-                          }}
-                          className="px-3 py-1 text-sm bg-blue-500 text-white rounded hover:bg-blue-600 flex items-center gap-1 mb-2"
-                          title="Open WhatsApp or SMS to send manually"
-                        >
-                          <MessageSquare size={14} />
-                          Manual Message
-                        </button>
-
-                        <div className="flex gap-2 flex-wrap">
+                              if (useWhatsApp) {
+                                window.open(`https://wa.me/${phone}?text=${message}`, "_blank");
+                              } else {
+                                window.open(`sms:${phone}?body=${message}`, "_blank");
+                              }
+                            }}
+                            className="px-3 py-1 text-sm bg-blue-500 text-white rounded hover:bg-blue-600 flex items-center gap-1 mb-2"
+                            title="Open WhatsApp or SMS to send manually"
+                          >
+                            <MessageSquare size={14} />
+                            Manual Message
+                          </button>
+                          
                           <button
                             onClick={() => sendDeliveryConfirmation(sale.id)}
                             disabled={messagingLoading || !sale.customer?.phone}
@@ -1642,48 +1500,17 @@ const EnhancedSalesPage = () => {
                             title={!sale.customer?.phone ? "Customer phone number required" : "Send delivery confirmation SMS"}
                           >
                             <MessageSquare size={14} />
-                            SMS Purchase 
+                            SMS Purchase
                           </button>
                           
-                          {sale.status !== "PAID" && (
-                            <button
-                              onClick={async () => {
-                                try {
-                                  setMessagingLoading(true);
-                                  const res = await fetch("/api/sms/get-overdue-payments", {
-                                    method: "POST",
-                                    headers: { "Content-Type": "application/json" },
-                                    body: JSON.stringify({ saleId: sale.id }),
-                                  });
-                                  const data = await res.json();
-                                  if (res.ok) {
-                                    alert(data.message);
-                                  } else {
-                                    alert(data.error || "Failed to send reminder");
-                                  }
-                                } catch (err) {
-                                  alert("Failed to send reminder");
-                                } finally {
-                                  setMessagingLoading(false);
-                                }
-                              }}
-                              disabled={messagingLoading || !sale.customer?.phone}
-                              className="px-3 py-1 text-sm bg-orange-500 text-white rounded hover:bg-orange-600 disabled:opacity-50 flex items-center gap-1"
-                              title={!sale.customer?.phone ? "Customer phone number required" : "Send payment reminder SMS"}
-                            >
-                              <Clock size={14} />
-                              SMS Remind
-                            </button>
-                          )}
                           <button
-  onClick={() => window.open(`/api/receipt/${sale.id}`, "_blank")}
-  className="px-3 py-1 text-sm bg-purple-500 text-white rounded hover:bg-purple-600 flex items-center gap-1"
-  title="Download receipt"
->
-  <Download size={14} />
-  Receipt
-</button>
-
+                            onClick={() => window.open(`/api/receipt/${sale.id}`, "_blank")}
+                            className="px-3 py-1 text-sm bg-purple-500 text-white rounded hover:bg-purple-600 flex items-center gap-1"
+                            title="Download receipt"
+                          >
+                            <Download size={14} />
+                            Receipt
+                          </button>
                           
                           <button
                             onClick={() => handleEditSale(sale)}
@@ -1693,13 +1520,23 @@ const EnhancedSalesPage = () => {
                             <Edit size={14} />
                             Edit
                           </button>
+                          
+                          <button
+                            onClick={() => handleDeleteSale(sale.id)}
+                            disabled={loading}
+                            className="px-3 py-1 text-sm bg-red-500 text-white rounded hover:bg-red-600 disabled:opacity-50 flex items-center gap-1"
+                            title="Delete sale"
+                          >
+                            <Trash2 size={14} />
+                            Delete
+                          </button>
                         </div>
                       </td>
                     </tr>
                   ))}
                   {getFilteredSales().length === 0 && (
                     <tr>
-                      <td colSpan={11} className="p-8 text-center text-black">
+                      <td colSpan={7} className="p-8 text-center text-black">
                         No sales found for this category
                       </td>
                     </tr>
@@ -1707,43 +1544,6 @@ const EnhancedSalesPage = () => {
                 </tbody>
               </table>
             </div>
-
-            {/* Bulk Actions */}
-            {selectedSales.length > 0 && (
-              <div className="mt-4 p-4 bg-blue-50 rounded-lg">
-                <div className="flex items-center justify-between">
-                  <span className="font-medium text-blue-800">
-                    {selectedSales.length} sale{selectedSales.length > 1 ? 's' : ''} selected
-                  </span>
-                  <div className="flex gap-2">
-                    <button
-                      onClick={async () => {
-                        try {
-                          setMessagingLoading(true);
-                          const result = await sendPaymentReminder();
-                          alert(result.message);
-                        } catch (err) {
-                          alert("Failed to send reminders");
-                        } finally {
-                          setMessagingLoading(false);
-                        }
-                      }}
-                      disabled={messagingLoading}
-                      className="bg-orange-500 text-white px-4 py-2 rounded-lg hover:bg-orange-600 disabled:opacity-50 flex items-center gap-2"
-                    >
-                      <Send size={16} />
-                      Send SMS Payment Reminders
-                    </button>
-                    <button
-                      onClick={() => setSelectedSales([])}
-                      className="bg-gray-500 text-white px-4 py-2 rounded-lg hover:bg-gray-600"
-                    >
-                      Clear Selection
-                    </button>
-                  </div>
-                </div>
-              </div>
-            )}
           </div>
         )}
       </div>

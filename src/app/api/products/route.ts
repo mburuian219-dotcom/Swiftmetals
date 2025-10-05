@@ -151,7 +151,6 @@ export async function PUT(req: NextRequest) {
     );
   }
 }
-
 // ---------------- DELETE a product ----------------
 export async function DELETE(req: NextRequest) {
   try {
@@ -165,11 +164,30 @@ export async function DELETE(req: NextRequest) {
       );
     }
 
-    // Delete related stock first (to avoid FK constraint issues)
+    // Check if product is used in orders or sales
+    const usedInOrder = await prisma.order.count({
+      where: { productId },
+    });
+    const usedInSale = await prisma.saleitem.count({
+      where: { productId },
+    });
+
+    if (usedInOrder > 0 || usedInSale > 0) {
+      return NextResponse.json(
+        {
+          error:
+            "Cannot delete this product because it is linked to existing sales or orders.",
+        },
+        { status: 400 }
+      );
+    }
+
+    // Delete related stock first
     await prisma.stock.deleteMany({
       where: { productId },
     });
 
+    // Now delete the product safely
     await prisma.product.delete({
       where: { id: productId },
     });

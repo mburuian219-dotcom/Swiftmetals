@@ -247,7 +247,7 @@ export default function CatalogProductsPage() {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 to-blue-50">
+    <div className="min-h-screen bg-gradient-to-br from-slate-50 to-gray-100">
       <div className="max-w-7xl mx-auto p-6">
         {/* Header */}
         <div className="mb-8 flex items-center justify-between">
@@ -257,7 +257,7 @@ export default function CatalogProductsPage() {
           </div>
           <button
             onClick={() => setShowForm(!showForm)}
-            className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-xl font-semibold flex items-center space-x-2 transition-colors"
+            className="bg-black hover:bg-gray-800 text-white px-6 py-3 rounded-xl font-semibold flex items-center space-x-2 transition-colors"
           >
             <Plus className="h-5 w-5" />
             <span>Add Product</span>
@@ -297,7 +297,7 @@ export default function CatalogProductsPage() {
                 placeholder="Search products..."
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
-                className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-black focus:border-transparent"
               />
             </div>
             
@@ -317,7 +317,7 @@ export default function CatalogProductsPage() {
               <select
                 value={categoryFilter}
                 onChange={(e) => setCategoryFilter(e.target.value)}
-                className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-black"
               >
                 <option value="">All Categories</option>
                 {getUniqueCategories().map((category) => (
@@ -330,7 +330,7 @@ export default function CatalogProductsPage() {
               <select
                 value={stockFilter}
                 onChange={(e) => setStockFilter(e.target.value)}
-                className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-black"
               >
                 <option value="all">All Stock</option>
                 <option value="instock">In Stock</option>
@@ -365,7 +365,7 @@ export default function CatalogProductsPage() {
                     value={product.name}
                     onChange={handleInputChange}
                     required
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-black"
                   />
                 </div>
 
@@ -376,7 +376,7 @@ export default function CatalogProductsPage() {
                     name="category"
                     value={product.category}
                     onChange={handleInputChange}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-black"
                   />
                 </div>
 
@@ -392,7 +392,7 @@ export default function CatalogProductsPage() {
                       min="0"
                       step="0.01"
                       required
-                      className="w-full pl-10 pr-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                      className="w-full pl-10 pr-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-black"
                     />
                   </div>
                 </div>
@@ -404,7 +404,7 @@ export default function CatalogProductsPage() {
                     name="image"
                     onChange={handleInputChange}
                     accept="image/*"
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-black"
                   />
                 </div>
               </div>
@@ -416,7 +416,7 @@ export default function CatalogProductsPage() {
                   value={product.description}
                   onChange={handleInputChange}
                   rows={3}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-black"
                 />
               </div>
 
@@ -438,7 +438,7 @@ export default function CatalogProductsPage() {
                     name="inStock"
                     checked={product.inStock}
                     onChange={handleInputChange}
-                    className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                    className="rounded border-gray-300 text-black focus:ring-black"
                   />
                   <span className="text-sm font-medium">In Stock</span>
                 </label>
@@ -449,7 +449,7 @@ export default function CatalogProductsPage() {
                     name="isPublic"
                     checked={product.isPublic}
                     onChange={handleInputChange}
-                    className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                    className="rounded border-gray-300 text-black focus:ring-black"
                   />
                   <span className="text-sm font-medium">Public</span>
                 </label>
@@ -460,7 +460,7 @@ export default function CatalogProductsPage() {
                   type="button"
                   onClick={handleSubmit}
                   disabled={uploading}
-                  className="flex items-center space-x-2 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 text-white px-6 py-2 rounded-lg font-semibold transition-colors"
+                  className="flex items-center space-x-2 bg-black hover:bg-gray-800 disabled:bg-gray-400 text-white px-6 py-2 rounded-lg font-semibold transition-colors"
                 >
                   {uploading ? (
                     <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
@@ -485,7 +485,7 @@ export default function CatalogProductsPage() {
         {/* Products Grid */}
         {loading ? (
           <div className="flex justify-center items-center py-12">
-            <div className="w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
+            <div className="w-8 h-8 border-4 border-black border-t-transparent rounded-full animate-spin"></div>
             <span className="ml-3 text-gray-600">Loading products...</span>
           </div>
         ) : filteredProducts.length === 0 ? (
@@ -554,7 +554,7 @@ export default function CatalogProductsPage() {
                   <div className="flex space-x-2">
                     <button 
                       onClick={() => handleEdit(p)} 
-                      className="flex-1 flex items-center justify-center space-x-1 px-3 py-2 bg-blue-100 text-blue-600 rounded-lg hover:bg-blue-200 transition-colors"
+                      className="flex-1 flex items-center justify-center space-x-1 px-3 py-2 bg-gray-100 text-gray-900 rounded-lg hover:bg-gray-200 transition-colors"
                     >
                       <Edit3 className="h-4 w-4" />
                       <span>Edit</span>
