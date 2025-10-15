@@ -671,42 +671,42 @@ export default function OrdersPage() {
           </div>
         )}
 
-        {/* Filters */}
-        <div className="bg-white p-4 sm:p-6 rounded-xl sm:rounded-2xl shadow-lg border border-slate-100 mb-6 sm:mb-8">
-          <div className="flex flex-col gap-3 sm:gap-4">
-            <div className="flex-1 relative">
-              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-slate-400 w-4 h-4 sm:w-5 sm:h-5" />
-              <input
-                type="text"
-                placeholder="Search orders..."
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                className="w-full pl-9 sm:pl-10 pr-4 py-2.5 sm:py-3 border border-slate-200 rounded-lg sm:rounded-xl focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none text-sm sm:text-base"
-              />
-            </div>
-            
-            <div className="flex flex-col sm:flex-row gap-3">
-              <select
-                value={statusFilter}
-                onChange={(e) => setStatusFilter(e.target.value)}
-                className="flex-1 px-3 sm:px-4 py-2.5 sm:py-3 border border-slate-200 rounded-lg sm:rounded-xl focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none bg-white text-sm sm:text-base"
-              >
-                <option value="ALL">All Statuses</option>
-                <option value="PENDING">Pending</option>
-                <option value="PAID">Paid</option>
-                <option value="DELIVERED">Delivered</option>
-                <option value="CANCELLED">Cancelled</option>
-              </select>
-              
-              <input
-                type="date"
-                value={dateFilter}
-                onChange={(e) => setDateFilter(e.target.value)}
-                className="flex-1 px-3 sm:px-4 py-2.5 sm:py-3 border border-slate-200 rounded-lg sm:rounded-xl focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none text-sm sm:text-base"
-              />
-            </div>
-          </div>
-        </div>
+       {/* Filters */}
+<div className="bg-white p-4 sm:p-6 rounded-xl sm:rounded-2xl shadow-lg border border-slate-100 mb-6 sm:mb-8">
+  <div className="flex flex-col gap-3 sm:gap-4">
+    <div className="flex-1 relative">
+      <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-slate-400 w-4 h-4 sm:w-5 sm:h-5" />
+      <input
+        type="text"
+        placeholder="Search orders..."
+        value={searchTerm}
+        onChange={(e) => setSearchTerm(e.target.value)}
+        className="w-full pl-9 sm:pl-10 pr-4 py-2.5 sm:py-3 border border-slate-200 rounded-lg sm:rounded-xl focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none text-sm sm:text-base text-black placeholder-slate-500"
+      />
+    </div>
+    
+    <div className="flex flex-col sm:flex-row gap-3">
+      <select
+        value={statusFilter}
+        onChange={(e) => setStatusFilter(e.target.value)}
+        className="flex-1 px-3 sm:px-4 py-2.5 sm:py-3 border border-slate-200 rounded-lg sm:rounded-xl focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none bg-white text-sm sm:text-base text-black"
+      >
+        <option value="ALL">All Statuses</option>
+        <option value="PENDING">Pending</option>
+        <option value="PAID">Paid</option>
+        <option value="DELIVERED">Delivered</option>
+        <option value="CANCELLED">Cancelled</option>
+      </select>
+      
+      <input
+        type="date"
+        value={dateFilter}
+        onChange={(e) => setDateFilter(e.target.value)}
+        className="flex-1 px-3 sm:px-4 py-2.5 sm:py-3 border border-slate-200 rounded-lg sm:rounded-xl focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none text-sm sm:text-base text-black"
+      />
+    </div>
+  </div>
+</div>
 
         {/* Orders Table - Desktop */}
         <div className="hidden lg:block bg-white rounded-2xl shadow-lg border border-slate-100 overflow-hidden">
