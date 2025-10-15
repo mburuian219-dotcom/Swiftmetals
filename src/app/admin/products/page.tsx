@@ -472,19 +472,19 @@ export default function ProductsPage() {
               <input
                 placeholder="Product Name *"
                 required
-                className="border border-gray-300 p-3 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                className="border border-gray-300 p-3 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-black"
                 value={form.name}
                 onChange={(e) => setForm({ ...form, name: e.target.value })}
               />
               <input
                 placeholder="Category"
-                className="border border-gray-300 p-3 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                className="border border-gray-300 p-3 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-black"
                 value={form.category}
                 onChange={(e) => setForm({ ...form, category: e.target.value })}
               />
               <input
                 placeholder="Description"
-                className="border border-gray-300 p-3 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent md:col-span-2"
+                className="border border-gray-300 p-3 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent md:col-span-2 text-black"
                 value={form.description}
                 onChange={(e) =>
                   setForm({ ...form, description: e.target.value })
@@ -494,7 +494,7 @@ export default function ProductsPage() {
                 placeholder="Production Cost"
                 type="number"
                 step="0.01"
-                className="border border-gray-300 p-3 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                className="border border-gray-300 p-3 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-black"
                 value={form.productionCost}
                 onChange={(e) =>
                   setForm({ ...form, productionCost: e.target.value })
@@ -505,14 +505,14 @@ export default function ProductsPage() {
                 type="number"
                 step="0.01"
                 required
-                className="border border-gray-300 p-3 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                className="border border-gray-300 p-3 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-black"
                 value={form.price}
                 onChange={(e) => setForm({ ...form, price: e.target.value })}
               />
               <input
                 placeholder={editingId ? "Stock (leave empty to keep current)" : "Initial Stock"}
                 type="number"
-                className="border border-gray-300 p-3 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                className="border border-gray-300 p-3 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-black"
                 value={form.stock}
                 onChange={(e) => setForm({ ...form, stock: e.target.value })}
               />
@@ -663,7 +663,7 @@ export default function ProductsPage() {
                     onChange={(e) =>
                       setRestockForm({ ...restockForm, quantity: e.target.value })
                     }
-                    className="w-full border border-gray-300 p-3 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    className="w-full border border-gray-300 p-3 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-black"
                   />
                 </div>
                 <div>
@@ -679,7 +679,7 @@ export default function ProductsPage() {
                     onChange={(e) =>
                       setRestockForm({ ...restockForm, totalCost: e.target.value })
                     }
-                    className="w-full border border-gray-300 p-3 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    className="w-full border border-gray-300 p-3 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-black"
                   />
                 </div>
                 <div>
@@ -698,7 +698,7 @@ export default function ProductsPage() {
                         creditorEmail: "",
                       })
                     }
-                    className="w-full border border-gray-300 p-3 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    className="w-full border border-gray-300 p-3 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-black"
                   >
                     <option value="">Select payment source</option>
                     <option value="cash">Cash (Deduct from balance)</option>
@@ -752,7 +752,7 @@ export default function ProductsPage() {
                                   });
                                 }
                               }}
-                              className="w-full border border-gray-300 p-3 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                              className="w-full border border-gray-300 p-3 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-black"
                             >
                               <option value="">-- Select from saved creditors --</option>
                               {creditors.map((c) => (
@@ -780,7 +780,7 @@ export default function ProductsPage() {
                               creditorName: e.target.value,
                             })
                           }
-                          className="w-full border border-gray-300 p-3 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                          className="w-full border border-gray-300 p-3 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-black"
                           required
                         />
                       </div>
@@ -799,7 +799,7 @@ export default function ProductsPage() {
                               creditorPhone: e.target.value,
                             })
                           }
-                          className="w-full border border-gray-300 p-3 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                          className="w-full border border-gray-300 p-3 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-black"
                           required
                         />
                       </div>
@@ -818,7 +818,7 @@ export default function ProductsPage() {
                               creditorEmail: e.target.value,
                             })
                           }
-                          className="w-full border border-gray-300 p-3 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                          className="w-full border border-gray-300 p-3 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-black"
                         />
                       </div>
 
