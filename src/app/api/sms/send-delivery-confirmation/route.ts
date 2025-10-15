@@ -19,7 +19,7 @@ export async function POST(req: Request) {
       where: { id: saleId },
       include: {
         customer: true,
-        saleitem: {   // ✅ corrected relation name
+        saleitem: {
           include: { product: true },
         },
       },
@@ -35,9 +35,14 @@ export async function POST(req: Request) {
         ? sale.saleitem.map((item) => `${item.product.name} (x${item.quantity})`).join(", ")
         : "your order";
 
-    const msg = `Dear ${sale.customer.name}, your order of ${productList} worth KES ${sale.amount.toFixed(
-      2
-    )} has been successfully delivered. Thank you for choosing SWIFT Metals.`;
+    // Build the personalized delivery confirmation message
+    let msg = `Hey ${sale.customer.name},\n\n`;
+    msg += `We value you as a trusted and loyal customer.\n\n`;
+    msg += `Your order has been successfully delivered!\n\n`;
+    msg += `Items: ${productList}\n`;
+    msg += `Total: KES ${sale.amount.toLocaleString()}\n\n`;
+    msg += `Thank you for choosing SWIFT Metals. We look forward to serving you again.\n\n`;
+    msg += `- SWIFT Metals`;
 
     const response = await sendSMS(phone, msg);
 
@@ -55,7 +60,7 @@ export async function POST(req: Request) {
       });
     }
 
-    // ✅ Optionally update the sale status to DELIVERED
+    // Update the sale status to DELIVERED
     await prisma.sale.update({
       where: { id: sale.id },
       data: { status: "DELIVERED", updatedAt: new Date() },

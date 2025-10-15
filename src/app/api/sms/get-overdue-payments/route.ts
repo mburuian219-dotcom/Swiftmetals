@@ -19,11 +19,11 @@ export async function POST(req: Request) {
       where: { id: saleId },
       include: {
         customer: true,
-        payment: true,           // ✅ corrected
-        paymentschedule: true,   // optional
-        saleitem: true,          // optional
-        smsreminder: true,       // optional
-        invoice: true,           // optional
+        payment: true,
+        paymentschedule: true,
+        saleitem: true,
+        smsreminder: true,
+        invoice: true,
       },
     });
 
@@ -32,13 +32,38 @@ export async function POST(req: Request) {
     const phone = normalizePhone(sale.customer?.phone);
     if (!phone) return NextResponse.json({ error: "Invalid phone" }, { status: 400 });
 
-    // ✅ use `sale.payment` (singular)
     const amountPaid = sale.payment.reduce((sum, p) => sum + p.amount, 0);
     const remaining = sale.amount - amountPaid;
 
-    const msg = `Dear ${sale.customer.name}, this is SWIFT Metals. Outstanding balance for your purchase of KES ${sale.amount} is KES ${remaining}, due on ${
-      sale.dueDate ? new Date(sale.dueDate).toLocaleDateString() : "the due date"
-    }. Kindly clear at your earliest convenience.`;
+    // Format the due date
+    const dueDateStr = sale.dueDate 
+      ? new Date(sale.dueDate).toLocaleDateString('en-GB', { 
+          day: '2-digit', 
+          month: 'short', 
+          year: 'numeric' 
+        })
+      : null;
+
+    // Build the personalized message
+    let msg = `Hey ${sale.customer.name},\n\n`;
+    msg += `We value you as a trusted and loyal customer.\n\n`;
+    
+    if (remaining > 0) {
+      // Overdue/Outstanding balance message
+      msg += `Your total purchase: KES ${sale.amount.toLocaleString()}\n`;
+      msg += `Outstanding balance: KES ${remaining.toLocaleString()}\n\n`;
+      
+      if (dueDateStr) {
+        msg += `To be cleared by: ${dueDateStr}\n\n`;
+      }
+      
+      msg += `Kindly clear at your earliest convenience.\n\n`;
+    } else {
+      // Fully paid message
+      msg += `Thank you for clearing your balance of KES ${sale.amount.toLocaleString()}.\n\n`;
+    }
+    
+    msg += `- SWIFT Metals`;
 
     const response = await sendSMS(phone, msg);
 

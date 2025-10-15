@@ -1,3 +1,4 @@
+
 "use client";
 
 import React, { useEffect, useState } from "react";
@@ -12,12 +13,9 @@ import {
   Eye,
   Search,
   CheckCircle,
-  XCircle,
-  AlertCircle,
   Truck,
   Save,
   X,
-  Menu
 } from "lucide-react";
 
 interface Customer {
@@ -80,33 +78,45 @@ export default function OrdersPage() {
   const [searchTerm, setSearchTerm] = useState("");
   const [statusFilter, setStatusFilter] = useState("ALL");
   const [dateFilter, setDateFilter] = useState("");
+  const [isPlacingOrder, setIsPlacingOrder] = useState(false);
+  const [isUpdatingStatus, setIsUpdatingStatus] = useState(false);
+  const [isDeletingOrder, setIsDeletingOrder] = useState(false);
 
   useEffect(() => {
     const fetchData = async () => {
       setLoading(true);
       try {
         const [ordersRes, customersRes, productsRes] = await Promise.all([
-          fetch("/api/orders"),
-          fetch("/api/customer"),
-          fetch("/api/products")
+          fetch("/api/orders", { cache: 'no-store' }),
+          fetch("/api/customer", { cache: 'no-store' }),
+          fetch("/api/products", { cache: 'no-store' })
         ]);
 
-        if (ordersRes.ok) {
-          const ordersData = await ordersRes.json();
-          setOrders(ordersData);
+        const [ordersData, customersData, productsData] = await Promise.all([
+          ordersRes.ok ? ordersRes.json() : null,
+          customersRes.ok ? customersRes.json() : null,
+          productsRes.ok ? productsRes.json() : null
+        ]);
+
+        if (ordersData) {
+          setOrders(Array.isArray(ordersData) ? ordersData : []);
         }
 
-        if (customersRes.ok) {
-          const customersData = await customersRes.json();
-          setCustomers(customersData);
+        if (customersData) {
+          const customerArray = Array.isArray(customersData) 
+            ? customersData
+            : customersData.data || customersData.customers || [];
+          setCustomers(customerArray);
         }
 
-        if (productsRes.ok) {
-          const productsData = await productsRes.json();
-          setProducts(productsData);
+        if (productsData) {
+          setProducts(Array.isArray(productsData) ? productsData : []);
         }
       } catch (error) {
         console.error("Error fetching data:", error);
+        setOrders([]);
+        setCustomers([]);
+        setProducts([]);
       } finally {
         setLoading(false);
       }
@@ -172,43 +182,112 @@ export default function OrdersPage() {
       return;
     }
 
-    const response = await fetch("/api/orders", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        customerId: selectedCustomerId,
-        items: orderItems,
-        status: orderStatus,
-        paymentMethod: "CASH",
-      }),
+    const lowStockItems: string[] = [];
+    const stockWarnings: string[] = [];
+    
+    orderItems.forEach(item => {
+      const product = products.find(p => p.id === item.productId);
+      if (product && product.stock !== undefined) {
+        const currentStock = product.stock;
+        const orderedQty = item.quantity;
+        
+        if (currentStock === 0) {
+          lowStockItems.push(product.name);
+          stockWarnings.push(
+            `📦 ${product.name}:\n` +
+            `   • Current Stock: 0\n` +
+            `   • Ordered: ${orderedQty}\n` +
+            `   • Need to Restock: ${orderedQty} units`
+          );
+        } else if (currentStock < orderedQty) {
+          const shortage = orderedQty - currentStock;
+          lowStockItems.push(product.name);
+          stockWarnings.push(
+            `📦 ${product.name}:\n` +
+            `   • Current Stock: ${currentStock}\n` +
+            `   • Ordered: ${orderedQty}\n` +
+            `   • Additional Stock Needed: ${shortage} units`
+          );
+        }
+      }
     });
 
-    if (response.ok) {
-      const result = await response.json();
+    if (stockWarnings.length > 0) {
+      const warningMessage = 
+        `⚠️ LOW STOCK WARNING\n\n` +
+        `${stockWarnings.join('\n\n')}\n\n` +
+        `The order will be placed, but you'll need to restock these items to complete fulfillment.\n` +
+        `Stock will be deducted only for available quantities (won't go negative).\n\n` +
+        `Do you want to continue?`;
+      
+      if (!confirm(warningMessage)) {
+        return;
+      }
+    }
 
-      const enrichedItems = result.saleitems?.map((it: any) => ({
-        ...it,
-        productName:
-          it.product?.name ||
-          products.find(p => p.id === it.productId)?.name ||
-          "Unknown Product",
-      }));
+    setIsPlacingOrder(true);
 
-      const newOrder = { ...result, items: enrichedItems };
+    try {
+      const response = await fetch("/api/orders", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          customerId: selectedCustomerId,
+          items: orderItems,
+          status: orderStatus,
+          paymentMethod: "CASH",
+        }),
+      });
 
-      setOrders(prev => [newOrder, ...prev]);
+      if (response.ok) {
+        const result = await response.json();
 
-      setOrderItems([]);
-      setSelectedCustomerId("");
-      setOrderStatus("PENDING");
-      setIsAddingOrder(false);
-      alert("Order placed successfully!");
-    } else {
-      alert("Failed to place order. Please try again.");
+        const enrichedItems = result.saleitems?.map((it: any) => ({
+          ...it,
+          productName:
+            it.product?.name ||
+            products.find(p => p.id === it.productId)?.name ||
+            "Unknown Product",
+        }));
+
+        const newOrder = { ...result, items: enrichedItems };
+        setOrders(prev => [newOrder, ...prev]);
+
+        const productsRes = await fetch("/api/products", { cache: 'no-store' });
+        if (productsRes.ok) {
+          const productsData = await productsRes.json();
+          setProducts(Array.isArray(productsData) ? productsData : []);
+        }
+
+        setOrderItems([]);
+        setSelectedCustomerId("");
+        setOrderStatus("PENDING");
+        setIsAddingOrder(false);
+        
+        if (lowStockItems.length > 0) {
+          alert(
+            "✅ Order placed successfully!\n\n" +
+            "⚠️ STOCK UPDATE:\n" +
+            `The following items need restocking: ${lowStockItems.join(', ')}\n\n` +
+            "Stock has been deducted only for available quantities. " +
+            "Please restock to complete order fulfillment."
+          );
+        } else {
+          alert("✅ Order placed successfully!");
+        }
+      } else {
+        alert("Failed to place order. Please try again.");
+      }
+    } catch (error) {
+      console.error("Error placing order:", error);
+      alert("An error occurred while placing the order. Please try again.");
+    } finally {
+      setIsPlacingOrder(false);
     }
   };
 
   const updateOrderStatus = async (orderId: number, newStatus: string) => {
+    setIsUpdatingStatus(true);
     try {
       const response = await fetch("/api/orders", {
         method: "PATCH",
@@ -224,12 +303,60 @@ export default function OrdersPage() {
               : order
           )
         );
+        
+        if (newStatus === "CANCELLED") {
+          const productsRes = await fetch("/api/products", { cache: 'no-store' });
+          if (productsRes.ok) {
+            const productsData = await productsRes.json();
+            setProducts(Array.isArray(productsData) ? productsData : []);
+          }
+          alert("Order cancelled successfully! Stock has been restored.");
+        } else {
+          alert("Order status updated successfully!");
+        }
       } else {
         const data = await response.json();
         console.error("Failed to update order:", data.error);
+        alert(`Failed to update order: ${data.error || 'Unknown error'}`);
       }
     } catch (error) {
       console.error("Error updating order status:", error);
+      alert("An error occurred while updating the order status.");
+    } finally {
+      setIsUpdatingStatus(false);
+    }
+  };
+
+  const deleteOrder = async (orderId: number) => {
+    if (!confirm("Are you sure you want to delete this order? Stock will be restored automatically.")) {
+      return;
+    }
+
+    setIsDeletingOrder(true);
+    try {
+      const response = await fetch(`/api/orders?id=${orderId}`, {
+        method: "DELETE",
+      });
+
+      if (response.ok) {
+        setOrders((prevOrders) => prevOrders.filter((order) => order.id !== orderId));
+        
+        const productsRes = await fetch("/api/products", { cache: 'no-store' });
+        if (productsRes.ok) {
+          const productsData = await productsRes.json();
+          setProducts(Array.isArray(productsData) ? productsData : []);
+        }
+        
+        alert("Order deleted successfully! Stock has been restored.");
+      } else {
+        const data = await response.json();
+        alert(`Failed to delete order: ${data.error || 'Unknown error'}`);
+      }
+    } catch (error) {
+      console.error("Error deleting order:", error);
+      alert("An error occurred while deleting the order.");
+    } finally {
+      setIsDeletingOrder(false);
     }
   };
 
@@ -246,12 +373,12 @@ export default function OrdersPage() {
     return matchesSearch && matchesStatus && matchesDate;
   });
 
-  const totalOrders = orders.length;
-  const pendingOrders = orders.filter(o => o.status === "PENDING").length;
-  const paidOrders = orders.filter(o => o.status === "PAID").length;
-  const deliveredOrders = orders.filter(o => o.status === "DELIVERED").length;
-  const totalRevenue = orders.filter(o => o.status === "PAID" || o.status === "DELIVERED")
-                            .reduce((sum, order) => sum + (order.amount || order.totalAmount || 0), 0);
+  const totalOrders = Array.isArray(orders) ? orders.length : 0;
+  const pendingOrders = Array.isArray(orders) ? orders.filter(o => o.status === "PENDING").length : 0;
+  const paidOrders = Array.isArray(orders) ? orders.filter(o => o.status === "PAID").length : 0;
+  const deliveredOrders = Array.isArray(orders) ? orders.filter(o => o.status === "DELIVERED").length : 0;
+  const totalRevenue = Array.isArray(orders) ? orders.filter(o => o.status === "PAID" || o.status === "DELIVERED")
+                            .reduce((sum, order) => sum + (order.amount || order.totalAmount || 0), 0) : 0;
 
   const getStatusColor = (status: string) => {
     switch (status) {
@@ -265,8 +392,11 @@ export default function OrdersPage() {
 
   if (loading) {
     return (
-      <div className="flex h-screen bg-slate-50 items-center justify-center">
-        <div className="animate-spin rounded-full h-32 w-32 border-b-2 border-emerald-500"></div>
+      <div className="flex h-screen bg-gradient-to-br from-slate-50 via-emerald-50/30 to-blue-50/30 items-center justify-center">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-16 w-16 border-b-4 border-emerald-500 mx-auto mb-4"></div>
+          <p className="text-slate-600 font-medium">Loading orders...</p>
+        </div>
       </div>
     );
   }
@@ -274,76 +404,73 @@ export default function OrdersPage() {
   return (
     <div className="p-4 sm:p-6 lg:p-8 bg-gradient-to-br from-slate-50 via-emerald-50/30 to-blue-50/30 min-h-screen">
       <div className="max-w-7xl mx-auto">
-        {/* Header */}
         <div className="mb-6 sm:mb-8">
           <h1 className="text-2xl sm:text-3xl lg:text-4xl font-bold text-slate-900 mb-2">Orders Management</h1>
           <p className="text-sm sm:text-base text-slate-600">Manage customer orders and track deliveries</p>
         </div>
 
-        {/* Summary Cards */}
-        <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 sm:gap-4 lg:gap-6 mb-6 sm:mb-8">
-          <div className="bg-white p-4 sm:p-6 rounded-xl sm:rounded-2xl shadow-lg border border-slate-100">
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 sm:gap-4 mb-6 sm:mb-8">
+          <div className="bg-white p-3 sm:p-4 lg:p-6 rounded-xl shadow-lg border border-slate-100 hover:shadow-xl transition-shadow">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-slate-500 text-xs sm:text-sm">Total Orders</p>
+                <p className="text-slate-500 text-xs sm:text-sm mb-1">Total Orders</p>
                 <p className="text-xl sm:text-2xl font-bold text-slate-900">{totalOrders}</p>
               </div>
-              <div className="p-2 sm:p-3 bg-slate-100 rounded-lg sm:rounded-xl">
-                <ShoppingCart className="w-4 h-4 sm:w-6 sm:h-6 text-slate-600" />
+              <div className="p-2 sm:p-3 bg-slate-100 rounded-lg">
+                <ShoppingCart className="w-5 h-5 sm:w-6 sm:h-6 text-slate-600" />
               </div>
             </div>
           </div>
 
-          <div className="bg-white p-4 sm:p-6 rounded-xl sm:rounded-2xl shadow-lg border border-slate-100">
+          <div className="bg-white p-3 sm:p-4 lg:p-6 rounded-xl shadow-lg border border-slate-100 hover:shadow-xl transition-shadow">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-slate-500 text-xs sm:text-sm">Pending</p>
+                <p className="text-slate-500 text-xs sm:text-sm mb-1">Pending</p>
                 <p className="text-xl sm:text-2xl font-bold text-orange-600">{pendingOrders}</p>
               </div>
-              <div className="p-2 sm:p-3 bg-orange-100 rounded-lg sm:rounded-xl">
-                <Clock className="w-4 h-4 sm:w-6 sm:h-6 text-orange-600" />
+              <div className="p-2 sm:p-3 bg-orange-100 rounded-lg">
+                <Clock className="w-5 h-5 sm:w-6 sm:h-6 text-orange-600" />
               </div>
             </div>
           </div>
 
-          <div className="bg-white p-4 sm:p-6 rounded-xl sm:rounded-2xl shadow-lg border border-slate-100">
+          <div className="bg-white p-3 sm:p-4 lg:p-6 rounded-xl shadow-lg border border-slate-100 hover:shadow-xl transition-shadow">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-slate-500 text-xs sm:text-sm">Paid</p>
+                <p className="text-slate-500 text-xs sm:text-sm mb-1">Paid</p>
                 <p className="text-xl sm:text-2xl font-bold text-blue-600">{paidOrders}</p>
               </div>
-              <div className="p-2 sm:p-3 bg-blue-100 rounded-lg sm:rounded-xl">
-                <CheckCircle className="w-4 h-4 sm:w-6 sm:h-6 text-blue-600" />
+              <div className="p-2 sm:p-3 bg-blue-100 rounded-lg">
+                <CheckCircle className="w-5 h-5 sm:w-6 sm:h-6 text-blue-600" />
               </div>
             </div>
           </div>
 
-          <div className="bg-white p-4 sm:p-6 rounded-xl sm:rounded-2xl shadow-lg border border-slate-100">
+          <div className="bg-white p-3 sm:p-4 lg:p-6 rounded-xl shadow-lg border border-slate-100 hover:shadow-xl transition-shadow">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-slate-500 text-xs sm:text-sm">Delivered</p>
+                <p className="text-slate-500 text-xs sm:text-sm mb-1">Delivered</p>
                 <p className="text-xl sm:text-2xl font-bold text-green-600">{deliveredOrders}</p>
               </div>
-              <div className="p-2 sm:p-3 bg-green-100 rounded-lg sm:rounded-xl">
-                <Truck className="w-4 h-4 sm:w-6 sm:h-6 text-green-600" />
+              <div className="p-2 sm:p-3 bg-green-100 rounded-lg">
+                <Truck className="w-5 h-5 sm:w-6 sm:h-6 text-green-600" />
               </div>
             </div>
           </div>
 
-          <div className="bg-white p-4 sm:p-6 rounded-xl sm:rounded-2xl shadow-lg border border-slate-100 col-span-2 lg:col-span-1">
+          <div className="bg-white p-3 sm:p-4 lg:p-6 rounded-xl shadow-lg border border-slate-100 col-span-2 sm:col-span-3 lg:col-span-1 hover:shadow-xl transition-shadow">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-slate-500 text-xs sm:text-sm">Revenue</p>
-                <p className="text-lg sm:text-2xl font-bold text-emerald-600">KSh {totalRevenue.toLocaleString()}</p>
+                <p className="text-slate-500 text-xs sm:text-sm mb-1">Revenue</p>
+                <p className="text-lg sm:text-xl lg:text-2xl font-bold text-emerald-600">KSh {totalRevenue.toLocaleString()}</p>
               </div>
-              <div className="p-2 sm:p-3 bg-emerald-100 rounded-lg sm:rounded-xl">
-                <DollarSign className="w-4 h-4 sm:w-6 sm:h-6 text-emerald-600" />
+              <div className="p-2 sm:p-3 bg-emerald-100 rounded-lg">
+                <DollarSign className="w-5 h-5 sm:w-6 sm:h-6 text-emerald-600" />
               </div>
             </div>
           </div>
         </div>
 
-        {/* New Order Button */}
         <div className="mb-6 sm:mb-8">
           <button
             onClick={() => setIsAddingOrder(!isAddingOrder)}
@@ -353,6 +480,7 @@ export default function OrdersPage() {
             {isAddingOrder ? "Cancel Order" : "Place New Order"}
           </button>
         </div>
+
 
         {/* Add Order Form */}
         {isAddingOrder && (
@@ -370,11 +498,15 @@ export default function OrdersPage() {
                 className="w-full p-3 sm:p-4 border border-slate-300 rounded-lg sm:rounded-xl focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none transition-all duration-200 text-sm sm:text-base"
               >
                 <option value="">Choose a customer...</option>
-                {customers.map((customer) => (
-                  <option key={customer.id} value={customer.id}>
-                    {customer.name}
-                  </option>
-                ))}
+                {customers && customers.length > 0 ? (
+                  customers.map((customer) => (
+                    <option key={customer.id} value={customer.id}>
+                      {customer.name}
+                    </option>
+                  ))
+                ) : (
+                  <option value="" disabled>No customers available</option>
+                )}
               </select>
             </div>
 
@@ -404,11 +536,15 @@ export default function OrdersPage() {
                         className="w-full p-2 sm:p-3 border border-slate-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none text-sm"
                       >
                         <option value="">Select product...</option>
-                        {products.map((product) => (
-                          <option key={product.id} value={product.id}>
-                            {product.name} - KSh {product.price.toLocaleString()}
-                          </option>
-                        ))}
+                        {products && products.length > 0 ? (
+                          products.map((product) => (
+                            <option key={product.id} value={product.id}>
+                              {product.name} - KSh {product.price.toLocaleString()}
+                            </option>
+                          ))
+                        ) : (
+                          <option value="" disabled>No products available</option>
+                        )}
                       </select>
                     </div>
 
@@ -429,10 +565,13 @@ export default function OrdersPage() {
                       <div>
                         <label className="text-xs text-slate-600 mb-1 block">Price</label>
                         <input
-                          type="text"
-                          value={item.price?.toLocaleString() || ''}
-                          readOnly
-                          className="w-full p-2 sm:p-3 bg-gray-100 border border-slate-300 rounded-lg text-slate-600 text-sm"
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          value={item.price || ''}
+                          onChange={(e) => updateOrderItem(index, 'price', e.target.value)}
+                          className="w-full p-2 sm:p-3 border border-slate-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none text-sm"
+                          placeholder="Price"
                         />
                       </div>
 
@@ -501,10 +640,20 @@ export default function OrdersPage() {
             <div className="flex flex-col sm:flex-row gap-3 sm:gap-4">
               <button
                 onClick={handlePlaceOrder}
-                className="w-full sm:w-auto bg-gradient-to-r from-emerald-500 to-blue-600 text-white px-6 sm:px-8 py-3 sm:py-4 rounded-lg sm:rounded-xl hover:shadow-lg transition-all duration-200 flex items-center justify-center gap-2 font-semibold text-sm sm:text-base"
+                disabled={isPlacingOrder}
+                className="w-full sm:w-auto bg-gradient-to-r from-emerald-500 to-blue-600 text-white px-6 sm:px-8 py-3 sm:py-4 rounded-lg sm:rounded-xl hover:shadow-lg transition-all duration-200 flex items-center justify-center gap-2 font-semibold text-sm sm:text-base disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                <Save className="w-4 h-4 sm:w-5 sm:h-5" />
-                Place Order
+                {isPlacingOrder ? (
+                  <>
+                    <div className="animate-spin rounded-full h-4 w-4 sm:h-5 sm:w-5 border-b-2 border-white"></div>
+                    Placing Order...
+                  </>
+                ) : (
+                  <>
+                    <Save className="w-4 h-4 sm:w-5 sm:h-5" />
+                    Place Order
+                  </>
+                )}
               </button>
               <button
                 onClick={() => {
@@ -513,7 +662,8 @@ export default function OrdersPage() {
                   setSelectedCustomerId("");
                   setOrderStatus("PENDING");
                 }}
-                className="w-full sm:w-auto bg-slate-200 text-slate-700 px-6 sm:px-8 py-3 sm:py-4 rounded-lg sm:rounded-xl hover:bg-slate-300 transition-colors font-semibold text-sm sm:text-base"
+                disabled={isPlacingOrder}
+                className="w-full sm:w-auto bg-slate-200 text-slate-700 px-6 sm:px-8 py-3 sm:py-4 rounded-lg sm:rounded-xl hover:bg-slate-300 transition-colors font-semibold text-sm sm:text-base disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 Cancel
               </button>
@@ -618,7 +768,8 @@ export default function OrdersPage() {
                       <select
                         value={order.status}
                         onChange={(e) => updateOrderStatus(order.id, e.target.value)}
-                        className={`px-3 py-2 rounded-full text-sm font-semibold border-0 outline-none cursor-pointer ${getStatusColor(order.status)}`}
+                        disabled={isUpdatingStatus}
+                        className={`px-3 py-2 rounded-full text-sm font-semibold border-0 outline-none cursor-pointer ${getStatusColor(order.status)} disabled:opacity-50 disabled:cursor-not-allowed`}
                       >
                         <option value="PENDING">Pending</option>
                         <option value="PAID">Paid</option>
@@ -635,15 +786,27 @@ export default function OrdersPage() {
                       <div className="flex gap-2">
                         <button 
                           onClick={() => setViewingOrder(order)}
-                          className="p-2 text-slate-500 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-all duration-200"
+                          disabled={isUpdatingStatus || isDeletingOrder}
+                          className="p-2 text-slate-500 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                          title="View Details"
                         >
                           <Eye className="w-4 h-4" />
                         </button>
                         <button
                           onClick={() => setEditingOrder(order)}
-                          className="p-2 text-slate-500 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-all duration-200"
+                          disabled={isUpdatingStatus || isDeletingOrder}
+                          className="p-2 text-slate-500 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                          title="Edit Order"
                         >
                           <Edit3 className="w-4 h-4" />
+                        </button>
+                        <button
+                          onClick={() => deleteOrder(order.id)}
+                          disabled={isUpdatingStatus || isDeletingOrder}
+                          className="p-2 text-slate-500 hover:text-red-600 hover:bg-red-50 rounded-lg transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                          title="Delete Order"
+                        >
+                          <Trash2 className="w-4 h-4" />
                         </button>
                       </div>
                     </td>
@@ -682,7 +845,8 @@ export default function OrdersPage() {
                 <select
                   value={order.status}
                   onChange={(e) => updateOrderStatus(order.id, e.target.value)}
-                  className={`px-3 py-1.5 rounded-full text-xs font-semibold border-0 outline-none cursor-pointer ${getStatusColor(order.status)}`}
+                  disabled={isUpdatingStatus}
+                  className={`px-3 py-1.5 rounded-full text-xs font-semibold border-0 outline-none cursor-pointer ${getStatusColor(order.status)} disabled:opacity-50 disabled:cursor-not-allowed`}
                 >
                   <option value="PENDING">Pending</option>
                   <option value="PAID">Paid</option>
@@ -729,15 +893,27 @@ export default function OrdersPage() {
                 <div className="flex gap-2">
                   <button 
                     onClick={() => setViewingOrder(order)}
-                    className="p-2 text-slate-500 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-all duration-200"
+                    disabled={isUpdatingStatus || isDeletingOrder}
+                    className="p-2 text-slate-500 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                    title="View Details"
                   >
                     <Eye className="w-5 h-5" />
                   </button>
                   <button
                     onClick={() => setEditingOrder(order)}
-                    className="p-2 text-slate-500 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-all duration-200"
+                    disabled={isUpdatingStatus || isDeletingOrder}
+                    className="p-2 text-slate-500 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                    title="Edit Order"
                   >
                     <Edit3 className="w-5 h-5" />
+                  </button>
+                  <button
+                    onClick={() => deleteOrder(order.id)}
+                    disabled={isUpdatingStatus || isDeletingOrder}
+                    className="p-2 text-slate-500 hover:text-red-600 hover:bg-red-50 rounded-lg transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                    title="Delete Order"
+                  >
+                    <Trash2 className="w-5 h-5" />
                   </button>
                 </div>
               </div>
@@ -928,7 +1104,8 @@ export default function OrdersPage() {
               <div className="flex flex-col sm:flex-row justify-end gap-3 pt-4 border-t">
                 <button
                   onClick={() => setEditingOrder(null)}
-                  className="w-full sm:w-auto px-6 py-2.5 rounded-lg bg-slate-200 text-slate-700 hover:bg-slate-300 transition-colors font-medium text-sm sm:text-base"
+                  disabled={isUpdatingStatus}
+                  className="w-full sm:w-auto px-6 py-2.5 rounded-lg bg-slate-200 text-slate-700 hover:bg-slate-300 transition-colors font-medium text-sm sm:text-base disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   Cancel
                 </button>
@@ -937,22 +1114,44 @@ export default function OrdersPage() {
                     try {
                       await updateOrderStatus(editingOrder.id, editingOrder.status);
                       setEditingOrder(null);
-                      alert("Order status updated successfully!");
                     } catch (error) {
                       console.error("Error updating order:", error);
                       alert("Failed to update order status. Please try again.");
                     }
                   }}
-                  className="w-full sm:w-auto px-6 py-2.5 rounded-lg bg-gradient-to-r from-emerald-500 to-blue-600 text-white hover:shadow-lg transition-all duration-200 font-medium flex items-center justify-center gap-2 text-sm sm:text-base"
+                  disabled={isUpdatingStatus}
+                  className="w-full sm:w-auto px-6 py-2.5 rounded-lg bg-gradient-to-r from-emerald-500 to-blue-600 text-white hover:shadow-lg transition-all duration-200 font-medium flex items-center justify-center gap-2 text-sm sm:text-base disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  <Save className="w-4 h-4" />
-                  Save Changes
+                  {isUpdatingStatus ? (
+                    <>
+                      <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
+                      Updating...
+                    </>
+                  ) : (
+                    <>
+                      <Save className="w-4 h-4" />
+                      Save Changes
+                    </>
+                  )}
                 </button>
               </div>
             </div>
           </div>
         )}
       </div>
+
+      {/* Loading/Processing Overlay */}
+      {(isUpdatingStatus || isDeletingOrder) && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white p-6 rounded-xl shadow-2xl flex flex-col items-center gap-4">
+            <div className="animate-spin rounded-full h-12 w-12 border-b-4 border-emerald-500"></div>
+            <p className="text-slate-700 font-semibold text-lg">
+              {isUpdatingStatus ? "Updating order status..." : "Deleting order..."}
+            </p>
+            <p className="text-slate-500 text-sm">Please wait</p>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

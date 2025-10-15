@@ -145,6 +145,7 @@ model product {
   order       order[]
   saleitem    saleitem[]
   stock       stock[]
+  restock       restock[]   // 👈 added relation to restock
 }
 
 model stock {
@@ -203,6 +204,32 @@ model saleitem {
 
   @@index([productId], map: "SaleItem_productId_fkey")
   @@index([saleId], map: "SaleItem_saleId_idx")
+}
+model creditor {
+  id          Int        @id @default(autoincrement())
+  name        String   @unique
+  phone       String?
+  email       String?
+  totalOwed   Float       @default(0)
+  restocks    restock[]   // 👈 linked to purchases/restocks
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+}
+model restock {
+  id              Int        @id @default(autoincrement())
+  productId       Int
+  quantity        Int
+  costPrice       Float
+  totalCost       Float
+  paymentSource   String      // "cash", "credit", "other"
+  creditorId      Int?        // optional link to creditor
+  creditor        creditor?   @relation(fields: [creditorId], references: [id])
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+  product         product     @relation(fields: [productId], references: [id], map: "Restock_productId_fkey")
+
+  @@index([productId])
+  @@index([creditorId])
 }
 
 model smsreminder {

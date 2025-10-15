@@ -1,5 +1,14 @@
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
+import { sendSMS } from "@/lib/sms";
+
+function normalizePhone(phone: string | null | undefined): string | null {
+  if (!phone) return null;
+  let cleaned = phone.replace(/[\s\-()]/g, "");
+  if (cleaned.startsWith("0") && cleaned.length === 10) return "+254" + cleaned.slice(1);
+  if (cleaned.startsWith("+254") && cleaned.length === 13) return cleaned;
+  return null;
+}
 
 // GET /api/receipt/[id] - HTML Receipt Generator
 export async function GET(
@@ -76,7 +85,7 @@ For any inquiries, contact us at support@swiftmetals.com`;
 
     const whatsappPhone = sale.customer?.phone ? formatPhoneForWhatsApp(sale.customer.phone) : '';
 
-    // Generate HTML Receipt
+    // Generate HTML Receipt (Mobile Responsive)
     const html = `
 <!DOCTYPE html>
 <html lang="en">
@@ -139,10 +148,13 @@ For any inquiries, contact us at support@swiftmetals.com`;
       padding: 15px;
       background: #f9fafb;
       border-radius: 8px;
+      flex-wrap: wrap;
+      gap: 15px;
     }
     
     .info-item {
       flex: 1;
+      min-width: 150px;
     }
     
     .info-label {
@@ -191,6 +203,8 @@ For any inquiries, contact us at support@swiftmetals.com`;
       width: 100%;
       border-collapse: collapse;
       margin-bottom: 30px;
+      overflow-x: auto;
+      display: block;
     }
     
     .items-table thead {
@@ -203,6 +217,7 @@ For any inquiries, contact us at support@swiftmetals.com`;
       text-align: left;
       font-size: 14px;
       font-weight: 600;
+      white-space: nowrap;
     }
     
     .items-table th.right {
@@ -239,6 +254,8 @@ For any inquiries, contact us at support@swiftmetals.com`;
       margin-bottom: 8px;
       background: #f9fafb;
       border-radius: 6px;
+      flex-wrap: wrap;
+      gap: 10px;
     }
     
     .payment-method {
@@ -270,13 +287,13 @@ For any inquiries, contact us at support@swiftmetals.com`;
     }
     
     .totals-box {
-      float: right;
-      width: 350px;
+      width: 100%;
+      max-width: 350px;
+      margin: 20px 0 0 auto;
       background: #f9fafb;
       border: 1px solid #e5e7eb;
       padding: 20px;
       border-radius: 8px;
-      margin-top: 20px;
     }
     
     .total-row {
@@ -351,22 +368,6 @@ For any inquiries, contact us at support@swiftmetals.com`;
       text-align: center;
     }
     
-    @media print {
-      body {
-        background: white;
-        padding: 0;
-      }
-      
-      .receipt-container {
-        box-shadow: none;
-        padding: 20px;
-      }
-      
-      @page {
-        margin: 1cm;
-      }
-    }
-    
     .action-buttons {
       position: fixed;
       top: 20px;
@@ -374,6 +375,7 @@ For any inquiries, contact us at support@swiftmetals.com`;
       display: flex;
       gap: 10px;
       z-index: 1000;
+      flex-wrap: wrap;
     }
     
     .action-button {
@@ -413,6 +415,14 @@ For any inquiries, contact us at support@swiftmetals.com`;
       background: #20BA5A;
     }
     
+    .action-button.sms {
+      background: #8b5cf6;
+    }
+    
+    .action-button.sms:hover {
+      background: #7c3aed;
+    }
+    
     .action-button.download {
       background: #dc2626;
     }
@@ -427,9 +437,116 @@ For any inquiries, contact us at support@swiftmetals.com`;
       transform: none;
     }
     
+    /* Mobile Responsive Styles */
+    @media (max-width: 768px) {
+      body {
+        padding: 10px;
+      }
+      
+      .receipt-container {
+        padding: 20px;
+      }
+      
+      .company-name {
+        font-size: 28px;
+      }
+      
+      .receipt-title {
+        font-size: 22px;
+      }
+      
+      .action-buttons {
+        position: static;
+        margin-bottom: 20px;
+        justify-content: center;
+      }
+      
+      .action-button {
+        padding: 10px 16px;
+        font-size: 12px;
+        flex: 1;
+        min-width: 120px;
+        justify-content: center;
+      }
+      
+      .receipt-info {
+        flex-direction: column;
+      }
+      
+      .info-item {
+        width: 100%;
+      }
+      
+      .items-table {
+        font-size: 12px;
+      }
+      
+      .items-table th,
+      .items-table td {
+        padding: 8px 4px;
+      }
+      
+      .totals-box {
+        width: 100%;
+        max-width: 100%;
+      }
+      
+      .section-title {
+        font-size: 16px;
+      }
+    }
+    
+    @media (max-width: 480px) {
+      .company-name {
+        font-size: 24px;
+      }
+      
+      .receipt-title {
+        font-size: 20px;
+      }
+      
+      .action-button {
+        padding: 8px 12px;
+        font-size: 11px;
+        min-width: 100px;
+      }
+      
+      .items-table th,
+      .items-table td {
+        font-size: 11px;
+        padding: 6px 2px;
+      }
+      
+      .customer-box {
+        padding: 15px;
+      }
+      
+      .payment-item {
+        padding: 8px 10px;
+      }
+      
+      .totals-box {
+        padding: 15px;
+      }
+    }
+    
     @media print {
+      body {
+        background: white;
+        padding: 0;
+      }
+      
+      .receipt-container {
+        box-shadow: none;
+        padding: 20px;
+      }
+      
       .action-buttons {
         display: none;
+      }
+      
+      @page {
+        margin: 1cm;
       }
     }
   </style>
@@ -445,7 +562,6 @@ For any inquiries, contact us at support@swiftmetals.com`;
         jsPDF: { unit: 'in', format: 'letter', orientation: 'portrait' }
       };
       
-      // Hide action buttons before generating PDF
       const buttons = document.querySelector('.action-buttons');
       const originalDisplay = buttons.style.display;
       buttons.style.display = 'none';
@@ -454,28 +570,60 @@ For any inquiries, contact us at support@swiftmetals.com`;
         buttons.style.display = originalDisplay;
       });
     }
+    
+    async function sendReceiptSMS() {
+      const button = event.target;
+      const originalText = button.innerHTML;
+      button.disabled = true;
+      button.innerHTML = '⏳ Sending...';
+      
+      try {
+        const response = await fetch('/api/receipt/${sale.id}/sms', {
+          method: 'POST',
+        });
+        
+        const result = await response.json();
+        
+        if (response.ok) {
+          button.innerHTML = '✅ SMS Sent!';
+          setTimeout(() => {
+            button.innerHTML = originalText;
+            button.disabled = false;
+          }, 3000);
+        } else {
+          alert('Failed to send SMS: ' + (result.error || 'Unknown error'));
+          button.innerHTML = originalText;
+          button.disabled = false;
+        }
+      } catch (error) {
+        alert('Error sending SMS: ' + error.message);
+        button.innerHTML = originalText;
+        button.disabled = false;
+      }
+    }
   </script>
 </head>
 <body>
   <div class="action-buttons">
     <button class="action-button print" onclick="window.print()">
-      🖨️ Print Receipt
+      🖨️ Print
     </button>
     <button class="action-button download" onclick="downloadPDF()">
-      📥 Download PDF
+      📥 PDF
     </button>
     ${whatsappPhone ? `
     <a href="https://wa.me/${whatsappPhone}?text=${encodeURIComponent(whatsappMessage)}" 
        class="action-button whatsapp" 
        target="_blank"
        rel="noopener noreferrer">
-      📱 Share via WhatsApp
+      📱 WhatsApp
     </a>
-    ` : `
-    <button class="action-button whatsapp" disabled title="Customer phone number not available">
-      📱 Share via WhatsApp
+    ` : ''}
+    ${sale.customer?.phone ? `
+    <button class="action-button sms" onclick="sendReceiptSMS()">
+      💬 SMS
     </button>
-    `}
+    ` : ''}
   </div>
   
   <div class="receipt-container">
@@ -520,8 +668,8 @@ For any inquiries, contact us at support@swiftmetals.com`;
       <thead>
         <tr>
           <th>Product</th>
-          <th class="center">Quantity</th>
-          <th class="right">Unit Price</th>
+          <th class="center">Qty</th>
+          <th class="right">Price</th>
           <th class="right">Total</th>
         </tr>
       </thead>
@@ -568,7 +716,7 @@ For any inquiries, contact us at support@swiftmetals.com`;
     <!-- Footer -->
     <div class="footer">
       <div class="footer-message">Thank you for your business!</div>
-      <div class="footer-contact">For inquiries, please contact us at support@swiftmetals.com</div>
+      <div class="footer-contact">For inquiries, contact us at support@swiftmetals.com</div>
     </div>
   </div>
 </body>
@@ -584,6 +732,93 @@ For any inquiries, contact us at support@swiftmetals.com`;
     console.error("Receipt generation error:", err);
     return NextResponse.json(
       { success: false, error: err.message || "Failed to generate receipt" },
+      { status: 500 }
+    );
+  }
+}
+
+// POST /api/receipt/[id]/sms - Send Receipt SMS
+export async function POST(
+  req: Request,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  try {
+    const { id } = await params;
+    const saleId = parseInt(id, 10);
+    
+    if (isNaN(saleId)) {
+      return NextResponse.json(
+        { success: false, error: "Invalid sale ID" },
+        { status: 400 }
+      );
+    }
+
+    const sale = await prisma.sale.findUnique({
+      where: { id: saleId },
+      include: {
+        customer: true,
+        saleitem: { include: { product: true } },
+        payment: true,
+      },
+    });
+
+    if (!sale) {
+      return NextResponse.json({ error: "Sale not found" }, { status: 404 });
+    }
+
+    const phone = normalizePhone(sale.customer?.phone);
+    if (!phone) {
+      return NextResponse.json({ error: "Invalid phone number" }, { status: 400 });
+    }
+
+    const totalPaid = sale.payment.reduce((sum, p) => sum + p.amount, 0);
+    const remaining = sale.amount - totalPaid;
+
+    const host = req.headers.get('host') || '';
+    const protocol = req.headers.get('x-forwarded-proto') || 'https';
+    const receiptUrl = `${protocol}://${host}/api/receipt/${sale.id}`;
+
+    // Format SMS message
+    let msg = `Hey ${sale.customer.name},\n\n`;
+    msg += `We value you as a trusted and loyal customer.\n\n`;
+    msg += `Receipt #${String(sale.id).padStart(6, '0')}\n`;
+    msg += `Total: KES ${sale.amount.toLocaleString()}\n`;
+    msg += `Paid: KES ${totalPaid.toLocaleString()}\n`;
+    
+    if (remaining > 0) {
+      msg += `Balance: KES ${remaining.toLocaleString()}\n\n`;
+    } else {
+      msg += `Status: PAID IN FULL ✓\n\n`;
+    }
+    
+    msg += `View receipt: ${receiptUrl}\n\n`;
+    msg += `Thank you for choosing SWIFT Metals!`;
+
+    const response = await sendSMS(phone, msg);
+
+    const failedRecipient = response?.failedRecipients?.find(
+      (r: any) => r.error?.includes("UserInBlacklist")
+    );
+
+    if (failedRecipient) {
+      return NextResponse.json({
+        blacklist: true,
+        error: "User is in blacklist",
+        customer: sale.customer.name,
+        phone,
+        context: "Receipt SMS",
+      });
+    }
+
+    return NextResponse.json({
+      success: true,
+      message: `Receipt SMS sent to ${sale.customer.name}`,
+      response,
+    });
+  } catch (err: any) {
+    console.error("SMS sending error:", err);
+    return NextResponse.json(
+      { success: false, error: err.message || "Failed to send SMS" },
       { status: 500 }
     );
   }

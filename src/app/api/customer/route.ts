@@ -1,89 +1,92 @@
 import { NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+import prisma from "@/lib/prisma";
 
-// ===================== GET =====================
-export async function GET() {
+// ✅ GET: Fetch all customers or one by ID
+export async function GET(req: Request) {
   try {
+    const { searchParams } = new URL(req.url);
+    const id = searchParams.get("id");
+
+    if (id) {
+      const customer = await prisma.customer.findUnique({
+        where: { id: parseInt(id) },
+      });
+      if (!customer) {
+        return NextResponse.json({ error: "Customer not found" }, { status: 404 });
+      }
+      return NextResponse.json(customer);
+    }
+
     const customers = await prisma.customer.findMany({
-      include: { sale: true },
-      orderBy: { createdAt: "desc" },
+      orderBy: { id: "desc" },
     });
     return NextResponse.json(customers);
-  } catch (err) {
-    console.error(err);
+  } catch (error) {
+    console.error("GET /api/customer error:", error);
     return NextResponse.json({ error: "Failed to fetch customers" }, { status: 500 });
   }
 }
 
-// ===================== POST =====================
+// ✅ POST: Create a new customer
 export async function POST(req: Request) {
   try {
-    const data = await req.json();
+    const body = await req.json();
+    const { name, email, phone } = body;
 
-    if (!data.name) {
-      return NextResponse.json({ error: "Customer name is required" }, { status: 400 });
+    if (!name || !email || !phone) {
+      return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
     }
 
     const newCustomer = await prisma.customer.create({
-      data: {
-        name: data.name,
-        phone: data.phone ?? null,
-        email: data.email ?? null,
-        totalCredit: data.totalCredit ?? 0,
-      },
+      data: { name, email, phone },
     });
 
     return NextResponse.json(newCustomer, { status: 201 });
-  } catch (err) {
-    console.error(err);
+  } catch (error) {
+    console.error("POST /api/customer error:", error);
     return NextResponse.json({ error: "Failed to create customer" }, { status: 500 });
   }
 }
 
-// ===================== PUT =====================
+// ✅ PUT: Update existing customer
 export async function PUT(req: Request) {
   try {
-    const data = await req.json();
+    const body = await req.json();
+    const { id, name, email, phone } = body;
 
-    if (!data.id) {
-      return NextResponse.json({ error: "Customer ID is required" }, { status: 400 });
+    if (!id) {
+      return NextResponse.json({ error: "Missing customer ID" }, { status: 400 });
     }
 
     const updatedCustomer = await prisma.customer.update({
-      where: { id: Number(data.id) },
-      data: {
-        name: data.name,
-        phone: data.phone ?? null,
-        email: data.email ?? null,
-        totalCredit: data.totalCredit ?? undefined,
-      },
+      where: { id: parseInt(id) },
+      data: { name, email, phone },
     });
 
     return NextResponse.json(updatedCustomer);
-  } catch (err) {
-    console.error(err);
+  } catch (error) {
+    console.error("PUT /api/customer error:", error);
     return NextResponse.json({ error: "Failed to update customer" }, { status: 500 });
   }
 }
 
-// ===================== DELETE =====================
+// ✅ DELETE: Delete a customer by ID
 export async function DELETE(req: Request) {
   try {
-    // Get ID from query parameter
-    const url = new URL(req.url);
-    const id = url.searchParams.get("id");
+    const { searchParams } = new URL(req.url);
+    const id = searchParams.get("id");
 
     if (!id) {
-      return NextResponse.json({ error: "Customer ID is required" }, { status: 400 });
+      return NextResponse.json({ error: "Missing customer ID" }, { status: 400 });
     }
 
     await prisma.customer.delete({
-      where: { id: Number(id) },
+      where: { id: parseInt(id) },
     });
 
     return NextResponse.json({ message: "Customer deleted successfully" });
-  } catch (err) {
-    console.error(err);
+  } catch (error) {
+    console.error("DELETE /api/customer error:", error);
     return NextResponse.json({ error: "Failed to delete customer" }, { status: 500 });
   }
 }

@@ -25,20 +25,22 @@ interface SaleItem {
 interface Payment {
   id?: number;
   amount: number;
-  method: "CASH" | "MPESA" | "BANK" | "CHECK" | "CARD";
+  method: "CASH" | "MPESA" | "BANK" | "CHECK" | "CARD" | "CREDIT";
   date: string;
   referenceId?: string | null;
   checkDepositDate?: string | null;
+  dueDate?: string | null;
   status?: "PENDING" | "COMPLETED" | "BOUNCED";
 }
 
 interface NewPayment {
   id?: number;
   amount: string;
-  method: "CASH" | "MPESA" | "BANK" | "CHECK" | "CARD";
+  method: "CASH" | "MPESA" | "BANK" | "CHECK" | "CARD" | "CREDIT";
   referenceId?: string;
   checkDepositDate?: string;
   checkNumber?: string;
+  dueDate?: string;
   bankName?: string;
   checkDate?: string;
   isVerified?: boolean;
@@ -55,7 +57,7 @@ interface Sale {
   customer: Customer;
   payments: Payment[];
   remainingAmount: number;
-  paymentMethod?: "CASH" | "MPESA" | "BANK" | "CHECK" | "CARD" | "MULTIPLE";
+  paymentMethod?: "CASH" | "MPESA" | "BANK" | "CHECK" | "CARD" | "CREDIT" | "MULTIPLE"; // ADD "CREDIT" here
   checkDepositDate?: string | null;
 }
 
@@ -91,7 +93,8 @@ const EnhancedSalesPage = () => {
     amount: "",
     method: "CASH",
     referenceId: "",
-    checkDepositDate: ""
+    checkDepositDate: "",
+    dueDate: ""
   });
   
   const [editingSale, setEditingSale] = useState<Sale | null>(null);
@@ -112,29 +115,32 @@ const EnhancedSalesPage = () => {
     return cleanPhone;
   };
 
-  const messageTypes = [
-    { 
-      value: "delivery", 
-      label: "Delivery Confirmation",
-      getTemplate: (sale: Sale) => `Hi ${sale.customer.name}, thank you for your purchase of ${
-        sale.saleitems?.map(item => `${item.product?.name || "Product"} (×${item.quantity})`).join(", ") || "your recent purchase"
-      }. Your order has been confirmed for delivery.`
-    },
-    { 
-      value: "payment", 
-      label: "Payment Reminder",
-      getTemplate: (sale: Sale) => `Hi ${sale.customer.name}, you have an outstanding balance of Ksh ${sale.remainingAmount.toFixed(2)} for ${
-        sale.saleitems?.map(item => item.product?.name || "Product").join(", ") || "your order"
-      }. ${sale.dueDate && sale.status !== "PAID" ? `Payment is due on ${new Date(sale.dueDate).toLocaleDateString()}.` : ""} Please clear your balance at your earliest convenience.`
-    },
-    { 
-      value: "check", 
-      label: "Check Deposit Reminder",
-      getTemplate: (sale: Sale) => `Hi ${sale.customer.name}, this is a reminder that your check payment for ${
-        sale.saleitems?.map(item => item.product?.name || "Product").join(", ") || "your order"
-      } is scheduled for deposit. Please ensure sufficient funds are available in your account.`
-    }
-  ];
+ const messageTypes = [
+  { 
+    value: "delivery", 
+    label: "Delivery Confirmation",
+    getTemplate: (sale: Sale) => 
+      `Hello ${sale.customer.name}, we truly appreciate your trust in us. Your purchase of ${
+        sale.saleitems?.map(item => `${item.product?.name || "Product"} (×${item.quantity})`).join(", ") || "our products"
+      } has been confirmed for delivery. Thank you for choosing us!`
+  },
+  { 
+    value: "payment", 
+    label: "Payment Reminder",
+    getTemplate: (sale: Sale) => 
+      `Dear ${sale.customer.name}, thank you for being our valued customer. We’d like to remind you of your outstanding balance of Ksh ${sale.remainingAmount.toFixed(2)} for ${
+        sale.saleitems?.map(item => item.product?.name || "your order").join(", ") || "your recent purchase"
+      }. ${sale.dueDate && sale.status !== "PAID" ? `Kindly note, payment is due on ${new Date(sale.dueDate).toLocaleDateString()}. ` : ""}We truly appreciate your prompt attention to this matter.`
+  },
+  { 
+    value: "check", 
+    label: "Check Deposit Reminder",
+    getTemplate: (sale: Sale) => 
+      `Hello ${sale.customer.name}, we value your continued partnership. This is a friendly reminder that your check payment for ${
+        sale.saleitems?.map(item => item.product?.name || "Product").join(", ") || "your recent order"
+      } is scheduled for deposit soon. Please ensure sufficient funds are available. Thank you for your cooperation.`
+  }
+];
 
   const calculateSaleStatus = (sale: any): Sale => {
     const totalPayments = sale.payments && sale.payments.length > 0
@@ -176,29 +182,77 @@ const EnhancedSalesPage = () => {
     const fetchData = async () => {
       setLoading(true);
       try {
+        // Try both /api/customer and /api/customers
         const [salesRes, customersRes, productsRes] = await Promise.all([
           fetch("/api/sales"),
-          fetch("/api/customer"),
+          fetch("/api/customers"), // Trying plural first
           fetch("/api/products")
         ]);
 
-        if (!salesRes.ok || !customersRes.ok || !productsRes.ok) {
+        console.log("🔍 API Response Status:");
+        console.log("  Sales:", salesRes.status, salesRes.ok ? "✅" : "❌");
+        console.log("  Customers:", customersRes.status, customersRes.ok ? "✅" : "❌");
+        console.log("  Products:", productsRes.status, productsRes.ok ? "✅" : "❌");
+
+        // If customers endpoint fails, try singular
+        let customersData = [];
+        if (!customersRes.ok) {
+          console.log("⚠️ Trying /api/customer (singular)...");
+          const altCustomersRes = await fetch("/api/customer");
+          console.log("  Alternative endpoint:", altCustomersRes.status, altCustomersRes.ok ? "✅" : "❌");
+          if (altCustomersRes.ok) {
+            customersData = await altCustomersRes.json();
+          }
+        } else {
+          customersData = await customersRes.json();
+        }
+
+        if (!salesRes.ok || !productsRes.ok) {
           throw new Error("Failed to fetch data");
         }
 
-        const [salesData, customersData, productsData] = await Promise.all([
+        const [salesData, productsData] = await Promise.all([
           salesRes.json(),
-          customersRes.json(),
           productsRes.json()
         ]);
 
-        const processedSales = salesData.map(calculateSaleStatus);
+        console.log("📦 Raw API Responses:");
+        console.log("  Sales data type:", typeof salesData, "Is array:", Array.isArray(salesData));
+        console.log("  Customers data:", customersData);
+        console.log("  Customers type:", typeof customersData, "Is array:", Array.isArray(customersData));
+        console.log("  Products data type:", typeof productsData, "Is array:", Array.isArray(productsData));
+
+        // Handle different response formats
+        let validCustomers = [];
+        if (Array.isArray(customersData)) {
+          validCustomers = customersData;
+        } else if (customersData && typeof customersData === 'object') {
+          // Check if data is nested
+          validCustomers = customersData.customers || customersData.data || [];
+          console.log("  ⚠️ Customers data was nested, extracted:", validCustomers.length, "customers");
+        }
+
+        const processedSales = Array.isArray(salesData) ? salesData.map(calculateSaleStatus) : [];
+        const validProducts = Array.isArray(productsData) ? productsData : [];
+        
+        console.log("✅ Final counts:");
+        console.log("  Sales:", processedSales.length);
+        console.log("  Customers:", validCustomers.length);
+        console.log("  Products:", validProducts.length);
+        
         setSales(processedSales);
-        setCustomers(customersData);
-        setProducts(productsData);
+        setCustomers(validCustomers);
+        setProducts(validProducts);
+
+        if (validCustomers.length === 0) {
+          console.warn("⚠️ WARNING: No customers found! Check your database or API endpoint.");
+        }
       } catch (err) {
         setError("Failed to load data from database");
-        console.error("Error fetching data:", err);
+        console.error("❌ Error fetching data:", err);
+        setSales([]);
+        setCustomers([]);
+        setProducts([]);
       } finally {
         setLoading(false);
       }
@@ -207,13 +261,14 @@ const EnhancedSalesPage = () => {
     fetchData();
   }, []);
 
-  const paymentMethods = [
-    { value: "CASH", label: "Cash", color: "bg-green-100 text-green-800" },
-    { value: "MPESA", label: "M-Pesa", color: "bg-blue-100 text-blue-800" },
-    { value: "BANK", label: "Bank Transfer", color: "bg-purple-100 text-purple-800" },
-    { value: "CHECK", label: "Check", color: "bg-orange-100 text-orange-800" },
-    { value: "CARD", label: "Card Payment", color: "bg-pink-100 text-pink-800" }
-  ];
+const paymentMethods = [
+  { value: "CASH", label: "Cash", color: "bg-green-100 text-green-800" },
+  { value: "MPESA", label: "M-Pesa", color: "bg-blue-100 text-blue-800" },
+  { value: "BANK", label: "Bank Transfer", color: "bg-purple-100 text-purple-800" },
+  { value: "CHECK", label: "Check", color: "bg-orange-100 text-orange-800" },
+  { value: "CARD", label: "Card Payment", color: "bg-pink-100 text-pink-800" },
+  { value: "CREDIT", label: "Credit/Pay Later", color: "bg-yellow-100 text-yellow-800" } // ADD THIS LINE
+];
 
   const handleAddItemToSale = () => {
     if (!currentItem.productId || currentItem.quantity <= 0 || currentItem.price <= 0) {
@@ -266,18 +321,26 @@ const EnhancedSalesPage = () => {
     const amount = parseFloat(currentPayment.amount);
     const remainingAmount = getRemainingAmount();
     
-    if (!amount || amount <= 0) {
-      setError("Please enter a valid payment amount");
-      return;
-    }
+    if (currentPayment.method !== "CREDIT") {
+      if (!amount || amount <= 0) {
+        setError("Please enter a valid payment amount");
+        return;
+      }
 
-    if (amount > remainingAmount) {
-      setError(`Payment amount cannot exceed remaining balance of Ksh ${remainingAmount.toFixed(2)}`);
-      return;
+      if (amount > remainingAmount) {
+        setError(`Payment amount cannot exceed remaining balance of Ksh ${remainingAmount.toFixed(2)}`);
+        return;
+      }
     }
 
     if (currentPayment.method === "CHECK" && !currentPayment.checkDepositDate) {
       setError("Please specify check deposit date");
+      return;
+    }
+
+    // MANDATORY: Due date required for credit payments
+    if (currentPayment.method === "CREDIT" && !currentPayment.dueDate) {
+      setError("Due date is MANDATORY for credit/pay later payments");
       return;
     }
 
@@ -290,9 +353,10 @@ const EnhancedSalesPage = () => {
       ...payments,
       {
         ...currentPayment,
-        amount: currentPayment.amount,
+        amount: currentPayment.method === "CREDIT" ? "0" : currentPayment.amount,
         referenceId: currentPayment.referenceId || "",
         checkDepositDate: currentPayment.checkDepositDate || "",
+        dueDate: currentPayment.dueDate || "",
       },
     ]);
 
@@ -301,6 +365,7 @@ const EnhancedSalesPage = () => {
       method: "CASH",
       referenceId: "",
       checkDepositDate: "",
+      dueDate: "",
     });
     setError(null);
   };
@@ -340,6 +405,12 @@ const EnhancedSalesPage = () => {
       const totalAmount = calculateTotalAmount();
       const totalPayments = calculateTotalPayments();
       const remainingAmount = totalAmount - totalPayments;
+
+       // MANDATORY: Due date check for credit sales or partial payments
+    if (remainingAmount > 0 && !newSale.dueDate) {
+      setError("Due date is MANDATORY when there's an outstanding balance");
+      return;
+    }
 
       let status: "PAID" | "PARTIAL" | "UNPAID";
       if (remainingAmount <= 0.01) {
@@ -590,7 +661,13 @@ const EnhancedSalesPage = () => {
       setError(`Payment amount cannot exceed remaining balance of Ksh ${editingSale.remainingAmount.toFixed(2)}`);
       return;
     }
-
+    if (editingSale) {
+      const newRemaining = editingSale.remainingAmount - amount;
+      if (newRemaining > 0.01 && !currentPayment.dueDate) {
+        setError("Due date is MANDATORY when there's still a remaining balance after this payment");
+        return;
+      }
+    }
     setEditPayments([...editPayments, {
       ...currentPayment,
       amount: currentPayment.amount
@@ -704,35 +781,7 @@ const EnhancedSalesPage = () => {
         </div>
       )}
 
-      {/* Overview Stats */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4 md:gap-6 mb-6 md:mb-8">
-        <div className="bg-white p-4 md:p-6 rounded-xl shadow-lg border-l-4 border-emerald-500">
-          <div className="text-slate-500 text-xs md:text-sm font-medium">Total Sales</div>
-          <div className="text-xl md:text-2xl font-bold text-emerald-600">Ksh {totalSales.toFixed(2)}</div>
-          <div className="text-xs md:text-sm text-black">{sales.length} orders</div>
-        </div>
-        <div className="bg-white p-4 md:p-6 rounded-xl shadow-lg border-l-4 border-blue-500">
-          <div className="text-slate-500 text-xs md:text-sm font-medium">Fully Paid</div>
-          <div className="text-xl md:text-2xl font-bold text-blue-600">Ksh {paidSales.toFixed(2)}</div>
-          <div className="text-xs md:text-sm text-black">{sales.filter(s => s.status === "PAID").length} orders</div>
-        </div>
-        <div className="bg-white p-4 md:p-6 rounded-xl shadow-lg border-l-4 border-orange-500">
-          <div className="text-slate-500 text-xs md:text-sm font-medium">Partially Paid</div>
-          <div className="text-xl md:text-2xl font-bold text-orange-600">Ksh {partialSales.toFixed(2)}</div>
-          <div className="text-xs md:text-sm text-black">{sales.filter(s => s.status === "PARTIAL").length} orders</div>
-        </div>
-        <div className="bg-white p-4 md:p-6 rounded-xl shadow-lg border-l-4 border-red-500">
-          <div className="text-slate-500 text-xs md:text-sm font-medium">Unpaid</div>
-          <div className="text-xl md:text-2xl font-bold text-red-600">Ksh {unpaidSales.toFixed(2)}</div>
-          <div className="text-xs md:text-sm text-black">{sales.filter(s => s.status === "UNPAID").length} orders</div>
-        </div>
-        <div className="bg-white p-4 md:p-6 rounded-xl shadow-lg border-l-4 border-purple-500">
-          <div className="text-slate-500 text-xs md:text-sm font-medium">Outstanding Amount</div>
-          <div className="text-xl md:text-2xl font-bold text-purple-600">Ksh {totalOutstanding.toFixed(2)}</div>
-          <div className="text-xs md:text-sm text-black">Total remaining</div>
-        </div>
-      </div>
-
+      
       {/* Overview Stats */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4 md:gap-6 mb-6 md:mb-8">
         <div className="bg-white p-4 md:p-6 rounded-xl shadow-lg border-l-4 border-emerald-500">
@@ -894,122 +943,207 @@ const EnhancedSalesPage = () => {
                 )}
               </div>
 
-              <div>
-                <h3 className="text-lg font-semibold mb-4 text-black">Payments</h3>
-                
-                <div className="space-y-3 mb-4 p-4 bg-gray-50 rounded-lg">
-                  <div className="grid grid-cols-1 gap-3">
-                    <div className="grid grid-cols-2 gap-3">
-                      <div>
-                        <label className="block text-sm font-medium text-black mb-1">Amount</label>
-                        <input
-                          type="number"
-                          min="0"
-                          step="0.01"
-                          max={getRemainingAmount()}
-                          value={currentPayment.amount}
-                          onChange={(e) => setCurrentPayment({...currentPayment, amount: e.target.value})}
-                          className="w-full p-2 border border-gray-300 rounded text-black"
-                          placeholder="0.00"
-                        />
-                        <div className="text-xs text-gray-600 mt-1">
-                          Max: Ksh {getRemainingAmount().toFixed(2)}
-                        </div>
-                      </div>
-                      
-                      <div>
-                        <label className="block text-sm font-medium text-black mb-1">Method</label>
-                        <select
-                          value={currentPayment.method}
-                          onChange={(e) => setCurrentPayment({...currentPayment, method: e.target.value as any})}
-                          className="w-full p-2 border border-gray-300 rounded text-black"
-                        >
-                          {paymentMethods.map(method => (
-                            <option key={method.value} value={method.value}>{method.label}</option>
-                          ))}
-                        </select>
-                      </div>
-                    </div>
-                    
-                    <div>
-                      <label className="block text-sm font-medium text-black mb-1">Reference</label>
-                      <input
-                        type="text"
-                        value={currentPayment.referenceId}
-                        onChange={(e) => setCurrentPayment({...currentPayment, referenceId: e.target.value})}
-                        className="w-full p-2 border border-gray-300 rounded text-black"
-                        placeholder="Transaction ID"
-                      />
-                    </div>
-                    
-                    {currentPayment.method === "CHECK" && (
-                      <div>
-                        <label className="block text-sm font-medium text-black mb-1">Deposit Date</label>
-                        <input
-                          type="date"
-                          value={currentPayment.checkDepositDate}
-                          onChange={(e) => setCurrentPayment({...currentPayment, checkDepositDate: e.target.value})}
-                          className="w-full p-2 border border-gray-300 rounded text-black"
-                        />
-                      </div>
-                    )}
-                    
-                    <button
-                      type="button"
-                      onClick={handleAddPayment}
-                      className="w-full bg-green-500 text-white px-4 py-2 rounded hover:bg-green-600 flex items-center justify-center gap-2"
-                    >
-                      <Plus size={16} />
-                      Add Payment
-                    </button>
-                  </div>
-                </div>
+              {/* Payment Section */}
+<div className="border-t pt-4 mb-4">
+  <h3 className="text-lg font-semibold mb-4 text-black">Payments</h3>
 
-                {payments.length > 0 && (
-                  <div className="space-y-2 mb-4">
-                    {payments.map((payment, index) => (
-                      <div key={index} className="flex justify-between items-center bg-white p-3 rounded-lg border">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span className={`px-2 py-1 rounded-full text-xs font-medium ${
-                            paymentMethods.find(m => m.value === payment.method)?.color
-                          }`}>
-                            {payment.method}
-                          </span>
-                          <span className="font-medium text-black">Ksh {parseFloat(payment.amount).toFixed(2)}</span>
-                          {payment.referenceId && (
-                            <span className="text-black text-sm">Ref: {payment.referenceId}</span>
-                          )}
-                        </div>
-                        <button
-                          onClick={() => removePayment(index)}
-                          className="text-red-500 hover:text-red-700 ml-2"
-                        >
-                          <Trash2 size={16} />
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                )}
+  <div className="space-y-3 mb-4 p-4 bg-gray-50 rounded-lg">
+    <div className="grid grid-cols-1 md:grid-cols-6 gap-3">
+      {/* Payment Method */}
+      <select
+        value={currentPayment.method}
+        onChange={(e) =>
+          setCurrentPayment({
+            ...currentPayment,
+            method: e.target.value as any,
+            amount: e.target.value === "CREDIT" ? "0" : currentPayment.amount,
+          })
+        }
+        className="p-3 border rounded-lg text-black"
+      >
+        {paymentMethods.map((method) => (
+          <option key={method.value} value={method.value}>
+            {method.label}
+          </option>
+        ))}
+      </select>
 
-                {saleItems.length > 0 && (
-                  <div className="bg-blue-50 p-4 rounded-lg">
-                    <div className="flex justify-between items-center mb-2">
-                      <span className="font-medium text-black">Total Sale Amount:</span>
-                      <span className="font-bold text-blue-600">Ksh {calculateTotalAmount().toFixed(2)}</span>
-                    </div>
-                    <div className="flex justify-between items-center mb-2">
-                      <span className="font-medium text-black">Total Payments:</span>
-                      <span className="font-bold text-green-600">Ksh {calculateTotalPayments().toFixed(2)}</span>
-                    </div>
-                    <div className="flex justify-between items-center pt-2 border-t">
-                      <span className="font-medium text-black">Remaining Amount:</span>
-                      <span className={`font-bold ${getRemainingAmount() > 0 ? 'text-red-600' : 'text-green-600'}`}>
-                        Ksh {getRemainingAmount().toFixed(2)}
-                      </span>
-                    </div>
-                  </div>
-                )}
-              </div>
+      {/* Amount (not for credit) */}
+      {currentPayment.method !== "CREDIT" && (
+        <input
+          type="number"
+          placeholder="Amount"
+          min="0"
+          step="0.01"
+          max={getRemainingAmount()}
+          value={currentPayment.amount}
+          onChange={(e) =>
+            setCurrentPayment({
+              ...currentPayment,
+              amount: e.target.value,
+            })
+          }
+          className="p-3 border rounded-lg text-black"
+        />
+      )}
+
+      {/* Reference ID for MPESA, BANK, CARD */}
+      {["MPESA", "BANK", "CARD"].includes(currentPayment.method) && (
+        <input
+          type="text"
+          placeholder="Reference ID *"
+          value={currentPayment.referenceId}
+          onChange={(e) =>
+            setCurrentPayment({
+              ...currentPayment,
+              referenceId: e.target.value,
+            })
+          }
+          className="p-3 border rounded-lg text-black"
+        />
+      )}
+
+      {/* Deposit Date for CHECK */}
+      {currentPayment.method === "CHECK" && (
+        <input
+          type="date"
+          placeholder="Check Deposit Date"
+          value={currentPayment.checkDepositDate}
+          onChange={(e) =>
+            setCurrentPayment({
+              ...currentPayment,
+              checkDepositDate: e.target.value,
+            })
+          }
+          className="p-3 border rounded-lg text-black"
+        />
+      )}
+
+      {/* Due Date (for CREDIT or partial payment) */}
+      {(currentPayment.method === "CREDIT" ||
+        getRemainingAmount() > parseFloat(currentPayment.amount || "0")) && (
+        <input
+          type="date"
+          placeholder="Due Date *"
+          value={currentPayment.dueDate}
+          onChange={(e) =>
+            setCurrentPayment({
+              ...currentPayment,
+              dueDate: e.target.value,
+            })
+          }
+          className="p-3 border rounded-lg text-black col-span-2"
+          title="MANDATORY for credit/partial payments"
+          min={new Date().toISOString().split("T")[0]}
+        />
+      )}
+
+      {/* Add Payment Button */}
+      <button
+        type="button"
+        onClick={handleAddPayment}
+        className="bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 flex items-center justify-center gap-2 col-span-1"
+      >
+        <Plus size={20} /> Add Payment
+      </button>
+    </div>
+  </div>
+
+  {/* Payments List */}
+  {payments.length > 0 && (
+    <div className="border rounded-lg p-3 bg-gray-50">
+      <h4 className="font-semibold mb-2 text-black">Payments:</h4>
+      {payments.map((payment, index) => (
+        <div
+          key={index}
+          className="flex justify-between items-center p-2 bg-white rounded mb-2"
+        >
+          <div>
+            <span className="text-black font-medium">
+              {payment.method}
+            </span>
+            {payment.referenceId && (
+              <span className="text-gray-600 text-sm ml-2">
+                Ref: {payment.referenceId}
+              </span>
+            )}
+            {payment.dueDate && (
+              <span className="text-orange-600 text-sm ml-2">
+                Due: {payment.dueDate}
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-3">
+            <span className="text-black">
+              Ksh {Number(payment.amount).toFixed(2)}
+            </span>
+            <button
+              onClick={() => removePayment(index)}
+              className="text-red-600 hover:text-red-800"
+            >
+              <Trash2 size={20} />
+            </button>
+          </div>
+        </div>
+      ))}
+      <div className="border-t pt-2 mt-2">
+        <div className="flex justify-between text-black">
+          <span>Total Paid:</span>
+          <span>Ksh {calculateTotalPayments().toFixed(2)}</span>
+        </div>
+        <div className="flex justify-between font-bold text-black">
+          <span>Remaining:</span>
+          <span
+            className={
+              getRemainingAmount() > 0
+                ? "text-red-600"
+                : "text-green-600"
+            }
+          >
+            Ksh {getRemainingAmount().toFixed(2)}
+          </span>
+        </div>
+      </div>
+    </div>
+  )}
+
+  {/* Global Due Date (if there’s still a remaining balance) */}
+  {getRemainingAmount() > 0 && (
+    <div className="mt-4 p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
+      <label className="block text-sm font-medium text-gray-700 mb-2">
+        Payment Due Date *{" "}
+        <span className="text-red-600">
+          (MANDATORY for outstanding balance)
+        </span>
+      </label>
+      <input
+        type="date"
+        value={newSale.dueDate}
+        onChange={(e) =>
+          setNewSale({
+            ...newSale,
+            dueDate: e.target.value,
+          })
+        }
+        className="w-full p-3 border rounded-lg text-black"
+        min={new Date().toISOString().split("T")[0]}
+      />
+    </div>
+  )}
+
+  {/* Action Buttons */}
+  <div className="flex flex-col sm:flex-row gap-3 pt-6 border-t">
+    <button
+      onClick={() => setShowAddSale(false)}
+      disabled={loading}
+      className="flex-1 bg-gray-500 text-white px-6 py-3 rounded-lg hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed"
+    >
+      Cancel
+    </button>
+ 
+  </div>
+</div>
+
 
               <div className="flex flex-col sm:flex-row gap-3 pt-6 border-t">
                 <button
