@@ -26,15 +26,7 @@ const Navbar: React.FC<NavbarProps> = ({ onMenuClick }) => {
 
         {/* Right Section */}
         <div className="flex items-center gap-6">
-          {/* Notifications */}
-          <button className="relative">
-            <Bell className="h-5 w-5 text-gray-600" />
-            <span className="absolute -top-1 -right-1 bg-red-500 text-white rounded-full px-1 text-xs">
-              3
-            </span>
-          </button>
-
-          {/* Profile */}
+         {/* Profile */}
           <div className="flex items-center gap-3 cursor-pointer">
             <div className="h-8 w-8 rounded-full bg-blue-500 flex items-center justify-center text-white font-bold">
               OLA
