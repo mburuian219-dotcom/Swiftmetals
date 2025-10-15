@@ -401,11 +401,11 @@ export default function ProductsPage() {
   }
 
   return (
-    <div className="min-h-screen bg-black-50 p-6">
+    <div className="min-h-screen bg-gray-50 p-6">
       <div className="max-w-7xl mx-auto">
         {/* Header */}
         <div className="flex justify-between items-center mb-6">
-          <h1 className="text-3xl font-bold text-black-800 flex items-center gap-2">
+          <h1 className="text-3xl font-bold text-black flex items-center gap-2">
             <Package className="w-8 h-8" />
             Products Management
           </h1>
@@ -435,19 +435,19 @@ export default function ProductsPage() {
         <div className="bg-white rounded-lg shadow-sm p-4 mb-6">
           <div className="flex flex-col md:flex-row gap-4">
             <div className="flex-1 relative">
-              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-black-400 w-5 h-5" />
+              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-5 h-5" />
               <input
                 type="text"
                 placeholder="Search products by name or description..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-full pl-10 pr-4 py-2 border border-black-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
               />
             </div>
             <select
               value={selectedCategory}
               onChange={(e) => setSelectedCategory(e.target.value)}
-              className="px-4 py-2 border border-black-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
             >
               <option value="all">All Categories</option>
               {categories.map((cat) => (
@@ -457,7 +457,7 @@ export default function ProductsPage() {
               ))}
             </select>
           </div>
-          <div className="mt-2 text-sm text-black-600">
+          <div className="mt-2 text-sm text-gray-600">
             Showing {filteredProducts.length} of {products.length} products
           </div>
         </div>
@@ -465,7 +465,7 @@ export default function ProductsPage() {
         {/* Add/Edit Form */}
         {showForm && (
           <div className="bg-white rounded-lg shadow-sm p-6 mb-6">
-            <h2 className="text-xl font-semibold mb-4 text-black-800">
+            <h2 className="text-xl font-semibold mb-4 text-black">
               {editingId ? "Edit Product" : "Add New Product"}
             </h2>
             <div className="grid md:grid-cols-2 gap-4">
@@ -536,8 +536,8 @@ export default function ProductsPage() {
         {/* Products Grid */}
         {filteredProducts.length === 0 ? (
           <div className="bg-white rounded-lg shadow-sm p-12 text-center">
-            <Package className="w-16 h-16 text-black-300 mx-auto mb-4" />
-            <p className="text-black-500 text-lg">
+            <Package className="w-16 h-16 text-gray-300 mx-auto mb-4" />
+            <p className="text-gray-500 text-lg">
               {searchQuery || selectedCategory !== "all"
                 ? "No products found matching your search"
                 : "No products yet. Add your first product to get started!"}
@@ -559,7 +559,7 @@ export default function ProductsPage() {
                     <div className="flex-1">
                       <div className="flex items-start justify-between mb-2">
                         <div>
-                          <h2 className="text-xl font-semibold text-black-800">
+                          <h2 className="text-xl font-semibold text-black">
                             {p.name}
                           </h2>
                           {p.category && (
@@ -570,34 +570,34 @@ export default function ProductsPage() {
                         </div>
                       </div>
                       {p.description && (
-                        <p className="text-black-600 mb-3">{p.description}</p>
+                        <p className="text-gray-600 mb-3">{p.description}</p>
                       )}
                       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
                         <div>
-                          <span className="text-black-500">Production Cost:</span>
-                          <p className="font-semibold text-gray-800">
+                          <span className="text-gray-500">Production Cost:</span>
+                          <p className="font-semibold text-black">
                             KSh {p.productionCost?.toFixed(2) || "N/A"}
                           </p>
                         </div>
                         <div>
-                          <span className="text-black-500">Selling Price:</span>
-                          <p className="font-semibold text-gray-800">
+                          <span className="text-gray-500">Selling Price:</span>
+                          <p className="font-semibold text-black">
                             KSh {p.price.toFixed(2)}
                           </p>
                         </div>
                         {profit !== null && (
                           <div>
-                            <span className="text-black-500">Profit/Unit:</span>
+                            <span className="text-gray-500">Profit/Unit:</span>
                             <p className="font-semibold text-green-600">
                               KSh {profit.toFixed(2)} ({profitMargin}%)
                             </p>
                           </div>
                         )}
                         <div>
-                          <span className="text-black-500">Stock:</span>
+                          <span className="text-gray-500">Stock:</span>
                           <p
                             className={`font-semibold ${
-                              isLowStock ? "text-red-600" : "text-gray-800"
+                              isLowStock ? "text-red-600" : "text-black"
                             }`}
                           >
                             {p.stockQuantity} units
@@ -641,18 +641,18 @@ export default function ProductsPage() {
         {restockModal.show && restockModal.product && (
           <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
             <div className="bg-white rounded-lg shadow-xl max-w-md w-full p-6 max-h-[90vh] overflow-y-auto">
-              <h2 className="text-2xl font-bold mb-4 text-gray-800">
+              <h2 className="text-2xl font-bold mb-4 text-black">
                 Restock {restockModal.product.name}
               </h2>
               <div className="mb-4 p-3 bg-gray-100 rounded">
-                <p className="text-sm text-black-600">Current Stock:</p>
-                <p className="text-xl font-semibold text-black-800">
+                <p className="text-sm text-gray-600">Current Stock:</p>
+                <p className="text-xl font-semibold text-black">
                   {restockModal.product.stockQuantity} units
                 </p>
               </div>
               <div className="space-y-4">
                 <div>
-                  <label className="block text-sm font-medium text-black-700 mb-1">
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
                     Quantity to Add *
                   </label>
                   <input
@@ -667,7 +667,7 @@ export default function ProductsPage() {
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-black-700 mb-1">
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
                     Total Cost *
                   </label>
                   <input
@@ -683,7 +683,7 @@ export default function ProductsPage() {
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-black-700 mb-1">
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
                     Payment Source *
                   </label>
 
@@ -718,7 +718,7 @@ export default function ProductsPage() {
                   {restockForm.paymentSource === "credit" && (
                     <div className="mt-4 space-y-4 p-4 bg-blue-50 rounded-lg">
                       <div className="flex items-center justify-between mb-2">
-                        <h3 className="font-semibold text-black-800">Creditor Information</h3>
+                        <h3 className="font-semibold text-black">Creditor Information</h3>
                         <button
                           type="button"
                           onClick={importContact}
@@ -731,11 +731,11 @@ export default function ProductsPage() {
                       {/* Select existing creditor */}
                       {Array.isArray(creditors) && creditors.length > 0 && (
                         <div>
-                          <label className="block text-sm font-medium text-black-700 mb-1">
+                          <label className="block text-sm font-medium text-gray-700 mb-1">
                             Select Existing Creditor (optional)
                           </label>
                           {loadingCreditors ? (
-                            <p className="text-black-500 text-sm">Loading contacts...</p>
+                            <p className="text-gray-500 text-sm">Loading contacts...</p>
                           ) : (
                             <select
                               value=""
@@ -767,7 +767,7 @@ export default function ProductsPage() {
 
                       {/* Manual creditor entry */}
                       <div>
-                        <label className="block text-sm font-medium text-black-700 mb-1">
+                        <label className="block text-sm font-medium text-gray-700 mb-1">
                           Creditor Name *
                         </label>
                         <input
@@ -786,7 +786,7 @@ export default function ProductsPage() {
                       </div>
 
                       <div>
-                        <label className="block text-sm font-medium text-black-700 mb-1">
+                        <label className="block text-sm font-medium text-gray-700 mb-1">
                           Phone Number *
                         </label>
                         <input
@@ -805,7 +805,7 @@ export default function ProductsPage() {
                       </div>
 
                       <div>
-                        <label className="block text-sm font-medium text-black-700 mb-1">
+                        <label className="block text-sm font-medium text-gray-700 mb-1">
                           Email (optional)
                         </label>
                         <input
@@ -822,7 +822,7 @@ export default function ProductsPage() {
                         />
                       </div>
 
-                      <p className="text-xs text-black-600 mt-2">
+                      <p className="text-xs text-gray-600 mt-2">
                         💡 The total cost (KSh {restockForm.totalCost || "0"}) will be added to this creditor's balance
                       </p>
                     </div>
@@ -857,7 +857,7 @@ export default function ProductsPage() {
                     });
                   }}
                   disabled={restocking}
-                  className="flex-1 bg-gray-300 hover:bg-gray-400 text-black-800 px-4 py-3 rounded-lg font-medium transition disabled:bg-gray-200 disabled:cursor-not-allowed"
+                  className="flex-1 bg-gray-300 hover:bg-gray-400 text-gray-800 px-4 py-3 rounded-lg font-medium transition disabled:bg-gray-200 disabled:cursor-not-allowed"
                 >
                   Cancel
                 </button>
