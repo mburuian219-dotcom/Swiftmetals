@@ -228,125 +228,153 @@ export default function ProductsPage() {
   };
 
   // Handle restock
-  const handleRestock = async () => {
-    if (!restockModal.product) return;
+ // Updated handleRestock function for your ProductsPage component
 
-    const quantity = parseInt(restockForm.quantity);
-    const totalCost = parseFloat(restockForm.totalCost);
+const handleRestock = async () => {
+  if (!restockModal.product) return;
 
-    if (isNaN(quantity) || quantity <= 0) {
-      return alert("Please enter a valid quantity");
+  const quantity = parseInt(restockForm.quantity);
+  const totalCost = parseFloat(restockForm.totalCost);
+
+  if (isNaN(quantity) || quantity <= 0) {
+    return alert("Please enter a valid quantity");
+  }
+
+  if (isNaN(totalCost) || totalCost < 0) {
+    return alert("Please enter a valid total cost");
+  }
+
+  if (!restockForm.paymentSource) {
+    return alert("Please select a payment source");
+  }
+
+  if (restockForm.paymentSource === "credit") {
+    if (!restockForm.creditorName.trim()) {
+      return alert("Please enter the creditor name");
+    }
+    if (!restockForm.creditorPhone.trim()) {
+      return alert("Please enter the creditor phone number");
+    }
+  }
+
+  setRestocking(true);
+
+  try {
+    // Step 1: Restock the product
+    const res = await fetch("/api/products", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action: "restock",
+        productId: restockModal.product.id,
+        quantity,
+        totalCost,
+        paymentSource: restockForm.paymentSource,
+        creditorName:
+          restockForm.paymentSource === "credit"
+            ? restockForm.creditorName
+            : null,
+      }),
+    });
+
+    if (!res.ok) {
+      const data = await res.json();
+      return alert(data.error || "Failed to restock");
     }
 
-    if (isNaN(totalCost) || totalCost < 0) {
-      return alert("Please enter a valid total cost");
-    }
+    const updatedProduct = await res.json();
+    updatedProduct.stockQuantity = updatedProduct.stock?.[0]?.quantity || 0;
 
-    if (!restockForm.paymentSource) {
-      return alert("Please select a payment source");
-    }
+    // Step 2: Record cash transaction if payment source is "cash"
+    if (restockForm.paymentSource === "cash") {
+      try {
+        const ledgerRes = await fetch("/api/cash-ledger", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            description: `Stock purchase: ${restockModal.product.name} (${quantity} units)`,
+            type: "OUTFLOW",
+            category: "Inventory Purchase",
+            amount: totalCost,
+            relatedTo: `Product: ${restockModal.product.name}`,
+            affectedAccounts: "Cash (-) | Inventory (+)",
+            referenceId: restockModal.product.id,
+            referenceType: "restock",
+          }),
+        });
 
-    if (restockForm.paymentSource === "credit") {
-      if (!restockForm.creditorName.trim()) {
-        return alert("Please enter the creditor name");
-      }
-      if (!restockForm.creditorPhone.trim()) {
-        return alert("Please enter the creditor phone number");
-      }
-    }
-
-    setRestocking(true);
-
-    try {
-      // Step 1: Restock the product
-      const res = await fetch("/api/products", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          action: "restock",
-          productId: restockModal.product.id,
-          quantity,
-          totalCost,
-          paymentSource: restockForm.paymentSource,
-          creditorName:
-            restockForm.paymentSource === "credit"
-              ? restockForm.creditorName
-              : null,
-        }),
-      });
-
-      if (!res.ok) {
-        const data = await res.json();
-        return alert(data.error || "Failed to restock");
-      }
-
-      const updatedProduct = await res.json();
-      updatedProduct.stockQuantity = updatedProduct.stock?.[0]?.quantity || 0;
-
-      // Step 2: If paymentSource = credit, record or update creditor
-      if (restockForm.paymentSource === "credit" && restockForm.creditorName) {
-        // Ensure creditors is an array
-        const creditorsList = Array.isArray(creditors) ? creditors : [];
-        
-        // Check if creditor already exists
-        const existingCreditor = creditorsList.find(
-          (c) => c.name && c.name.toLowerCase() === restockForm.creditorName.toLowerCase()
-        );
-
-        if (existingCreditor) {
-          // Update existing creditor - add to their balance
-          await fetch("/api/creditors", {
-            method: "PUT",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              id: existingCreditor.id,
-              amountOwed: (existingCreditor.amountOwed || 0) + totalCost,
-            }),
-          });
-        } else {
-          // Create new creditor
-          await fetch("/api/creditors", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              name: restockForm.creditorName,
-              phone: restockForm.creditorPhone,
-              email: restockForm.creditorEmail || null,
-              amountOwed: totalCost,
-            }),
-          });
+        if (!ledgerRes.ok) {
+          const error = await ledgerRes.json();
+          console.warn("Cash ledger entry warning:", error);
+          // Still proceed - restock was successful, just log the warning
         }
-
-        // Refresh creditors list
-        await fetchCreditors();
+      } catch (ledgerError) {
+        console.error("Failed to record cash transaction:", ledgerError);
+        // Don't fail the restock if ledger recording fails
       }
+    }
 
-      // Step 3: Update UI
-      setProducts((prev) =>
-        prev.map((p) =>
-          p.id === restockModal.product!.id ? updatedProduct : p
-        )
+    // Step 3: If paymentSource = credit, record or update creditor
+    if (restockForm.paymentSource === "credit" && restockForm.creditorName) {
+      const creditorsList = Array.isArray(creditors) ? creditors : [];
+
+      const existingCreditor = creditorsList.find(
+        (c) => c.name && c.name.toLowerCase() === restockForm.creditorName.toLowerCase()
       );
 
-      // Step 4: Reset form & modal
-      setRestockForm({
-        quantity: "",
-        paymentSource: "cash",
-        totalCost: "",
-        creditorName: "",
-        creditorPhone: "",
-        creditorEmail: "",
-      });
-      setRestockModal({ show: false, product: null });
-      alert("✅ Stock updated successfully!");
-    } catch (error) {
-      console.error("Error restocking:", error);
-      alert("❌ Failed to restock product");
-    } finally {
-      setRestocking(false);
-    }
-  };
+      if (existingCreditor) {
+        // Update existing creditor - add to their balance
+        await fetch("/api/creditors", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            id: existingCreditor.id,
+            amountOwed: (existingCreditor.amountOwed || 0) + totalCost,
+          }),
+        });
+      } else {
+        // Create new creditor
+        await fetch("/api/creditors", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            name: restockForm.creditorName,
+            phone: restockForm.creditorPhone,
+            email: restockForm.creditorEmail || null,
+            amountOwed: totalCost,
+          }),
+        });
+      }
 
+      // Refresh creditors list
+      await fetchCreditors();
+    }
+
+    // Step 4: Update UI
+    setProducts((prev) =>
+      prev.map((p) =>
+        p.id === restockModal.product!.id ? updatedProduct : p
+      )
+    );
+
+    // Step 5: Reset form & modal
+    setRestockForm({
+      quantity: "",
+      paymentSource: "cash",
+      totalCost: "",
+      creditorName: "",
+      creditorPhone: "",
+      creditorEmail: "",
+    });
+    setRestockModal({ show: false, product: null });
+    alert("✅ Stock updated successfully and cash deducted!");
+  } catch (error) {
+    console.error("Error restocking:", error);
+    alert("❌ Failed to restock product");
+  } finally {
+    setRestocking(false);
+  }
+};
   // Open restock modal
   const openRestockModal = (product: Product) => {
     setRestockModal({ show: true, product });
