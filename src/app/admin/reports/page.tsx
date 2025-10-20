@@ -908,26 +908,26 @@ const expensesData = Array.isArray(expenses?.expenses)
                     </div>
                   </div>
 
-                  <div className="bg-gradient-to-br from-blue-50 to-indigo-50 rounded-xl p-4 sm:p-6 border border-blue-200">
-                    <h3 className="text-lg sm:text-xl font-bold text-gray-800 mb-4">Balance Sheet Summary</h3>
-                    <div className="space-y-3">
-                      <div>
-                        <p className="text-sm text-gray-600 mb-2">Assets</p>
-                        <div className="space-y-1 text-xs sm:text-sm">
-                          <div className="flex justify-between">
-                            <span>Cash</span>
-                            <span className="font-semibold break-all">KES {Number(stats.cashBalance || 0).toLocaleString()}</span>
-                          </div>
-                          <div className="flex justify-between">
-                            <span>Inventory</span>
-                            <span className="font-semibold break-all">KES {Number(stats.inventoryValue || 0).toLocaleString()}</span>
-                          </div>
-                          <div className="flex justify-between">
-                            <span>Receivables</span>
-                            <span className="font-semibold break-all">KES {Number(stats.totalDebtors || 0).toLocaleString()}</span>
-                          </div>
-                        </div>
-                      </div>
+                 <div className="bg-gradient-to-br from-blue-50 to-indigo-50 rounded-xl p-4 sm:p-6 border border-blue-200">
+  <h3 className="text-lg sm:text-xl font-bold text-black mb-4">Balance Sheet Summary</h3>
+  <div className="space-y-3">
+    <div>
+      <p className="text-sm text-black mb-2">Assets</p>
+      <div className="space-y-1 text-xs sm:text-sm text-black">
+        <div className="flex justify-between">
+          <span>Cash</span>
+          <span className="font-semibold break-all">KES {Number(stats.cashBalance || 0).toLocaleString()}</span>
+        </div>
+        <div className="flex justify-between">
+          <span>Inventory</span>
+          <span className="font-semibold break-all">KES {Number(stats.inventoryValue || 0).toLocaleString()}</span>
+        </div>
+        <div className="flex justify-between">
+          <span>Receivables</span>
+          <span className="font-semibold break-all">KES {Number(stats.totalDebtors || 0).toLocaleString()}</span>
+        </div>
+      </div>
+    </div>
                       <div className="h-px bg-gray-300"></div>
                       <div className="flex justify-between items-center">
                         <span className="font-bold text-gray-800 text-sm sm:text-base">Total Assets</span>

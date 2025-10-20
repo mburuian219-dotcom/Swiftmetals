@@ -861,7 +861,7 @@ const paymentMethods = [
                   <div className="grid grid-cols-1 gap-3">
                     <div>
                       <label className="block text-sm font-medium text-black mb-1">Product</label>
-                      <select
+                     <select
                         value={currentItem.productId}
                         onChange={(e) => {
                           const productId = parseInt(e.target.value);
@@ -876,7 +876,7 @@ const paymentMethods = [
                         className="w-full p-2 border border-gray-300 rounded text-black"
                       >
                         <option value={0}>Select product</option>
-                        {products.map(product => (
+                        {[...products].sort((a, b) => a.name.localeCompare(b.name)).map(product => (
                           <option key={product.id} value={product.id}>
                             {product.name} (Ksh {product.price})
                           </option>
@@ -889,7 +889,7 @@ const paymentMethods = [
                         <label className="block text-sm font-medium text-black mb-1">Quantity</label>
                         <input
                           type="number"
-                          min="1"
+                          min="0"
                           value={currentItem.quantity}
                           onChange={(e) => setCurrentItem({...currentItem, quantity: parseInt(e.target.value) || 1})}
                           className="w-full p-2 border border-gray-300 rounded text-black"
@@ -901,7 +901,7 @@ const paymentMethods = [
                         <input
                           type="number"
                           min="0"
-                          step="0.01"
+                          step="1"
                           value={currentItem.price}
                           onChange={(e) => setCurrentItem({...currentItem, price: parseFloat(e.target.value) || 0})}
                           className="w-full p-2 border border-gray-300 rounded text-black"
@@ -1110,7 +1110,7 @@ const paymentMethods = [
   {/* Global Due Date (if there’s still a remaining balance) */}
   {getRemainingAmount() > 0 && (
     <div className="mt-4 p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
-      <label className="block text-sm font-medium text-gray-700 mb-2">
+      <label className="block text-sm font-medium text-black-700 mb-2">
         Payment Due Date *{" "}
         <span className="text-red-600">
           (MANDATORY for outstanding balance)
@@ -1130,18 +1130,6 @@ const paymentMethods = [
       />
     </div>
   )}
-
-  {/* Action Buttons */}
-  <div className="flex flex-col sm:flex-row gap-3 pt-6 border-t">
-    <button
-      onClick={() => setShowAddSale(false)}
-      disabled={loading}
-      className="flex-1 bg-gray-500 text-white px-6 py-3 rounded-lg hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed"
-    >
-      Cancel
-    </button>
- 
-  </div>
 </div>
 
 

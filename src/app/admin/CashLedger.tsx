@@ -34,7 +34,7 @@ export default function CashLedger({
   const [dateTo, setDateTo] = useState("");
   const [category, setCategory] = useState("all");
 
-  // Fetch transactions and expenses on mount
+  // Fetch transactions on mount
   useEffect(() => {
     fetchAllTransactions(dateFrom, dateTo, category);
   }, []);
@@ -54,15 +54,11 @@ export default function CashLedger({
     try {
       let allTransactions: CashTransaction[] = [];
 
-      // Fetch sales with cleared payments
+      // ---------------- Sales (INFLOW) ----------------
       try {
-        console.log("Fetching sales from: /api/sales");
         const salesRes = await fetch("/api/sales");
-
         if (salesRes.ok) {
           const salesData = await salesRes.json();
-          console.log("Sales Response:", salesData);
-
           const transformedSales = (Array.isArray(salesData) ? salesData : [])
             .map((sale: any) => {
               const totalPaid = (sale.payment || sale.payments || [])
@@ -84,37 +80,59 @@ export default function CashLedger({
             .filter((txn: CashTransaction) => txn.amount > 0);
 
           allTransactions.push(...transformedSales);
-          console.log("Transformed sales:", transformedSales);
-        } else {
-          console.warn("Failed to fetch sales:", salesRes.status);
         }
       } catch (err) {
         console.error("Error fetching sales:", err);
       }
 
-      // Fetch expenses
+      // ---------------- Cash Ledger (INFLOW/OUTFLOW) ----------------
+      try {
+        const ledgerRes = await fetch("/api/cash-ledger");
+        if (ledgerRes.ok) {
+          const ledgerData = await ledgerRes.json();
+          const transformedLedger = (Array.isArray(ledgerData) ? ledgerData : [])
+            .map((entry: any) => {
+              const amount = Number(entry.amount || 0);
+              const type = entry.type || (amount < 0 ? "OUTFLOW" : "INFLOW");
+              return {
+                id: `ledger-${entry.id}`,
+                date: entry.date || new Date().toISOString(),
+                description: entry.description || "Cash transaction",
+                type: type as "INFLOW" | "OUTFLOW",
+                category: entry.category || "General",
+                amount: Math.abs(amount),
+                runningBalance: 0,
+                relatedTo: entry.relatedTo || "",
+                affectedAccounts: entry.affectedAccounts || "",
+              };
+            })
+            .filter((txn: CashTransaction) => txn.amount > 0);
+          allTransactions.push(...transformedLedger);
+        }
+      } catch (err) {
+        console.error("Error fetching cash ledger:", err);
+      }
+
+      // ---------------- Expenses (OUTFLOW) ----------------
       try {
         let expenseUrl = "/api/expenses";
-        const expenseParams = new URLSearchParams();
-
-        if (from) expenseParams.append("from", from);
-        if (to) expenseParams.append("to", to);
-
-        const queryStr = expenseParams.toString();
+        const params = new URLSearchParams();
+        if (from) params.append("from", from);
+        if (to) params.append("to", to);
+        const queryStr = params.toString();
         if (queryStr) expenseUrl += "?" + queryStr;
 
         console.log("Fetching expenses from:", expenseUrl);
         const expenseRes = await fetch(expenseUrl);
-
         if (expenseRes.ok) {
           const expenseData = await expenseRes.json();
           console.log("Expenses Response:", expenseData);
-
+          
           const transformedExpenses = (expenseData.expenses || expenseData.entries || expenseData || [])
             .map((expense: any) => ({
               id: `expense-${expense.id}`,
               date: expense.date || new Date().toISOString(),
-              description: expense.description || `Expense: ${expense.name || "Unnamed"}`,
+              description: expense.title || expense.description || `Expense: ${expense.name || "Unnamed"}`,
               type: "OUTFLOW" as const,
               category: expense.category || "Operating Expense",
               amount: Number(expense.amount || 0),
@@ -123,7 +141,7 @@ export default function CashLedger({
               affectedAccounts: expense.affectedAccounts || "",
             }))
             .filter((txn: CashTransaction) => txn.amount > 0);
-
+          
           allTransactions.push(...transformedExpenses);
           console.log("Transformed expenses:", transformedExpenses);
         } else {
@@ -133,9 +151,40 @@ export default function CashLedger({
         console.error("Error fetching expenses:", err);
       }
 
-      // Filter by date range if provided
+      // ---------------- Restocks (OUTFLOW: Inventory Purchase) ----------------
+      try {
+        console.log("Fetching restocks from: /api/restock");
+        const restockRes = await fetch("/api/restock");
+        if (restockRes.ok) {
+          const restockData = await restockRes.json();
+          const restocks = restockData.restocks || [];
+
+          const transformedRestocks = restocks.map((restock: any) => ({
+            id: `restock-${restock.id}`,
+            date: restock.createdAt || new Date().toISOString(),
+            description: `Inventory Purchase - ${restock.product?.name || "Product"}`,
+            type: "OUTFLOW" as const,
+            category: "Inventory Purchase",
+            amount: Number(restock.totalCost || 0),
+            runningBalance: 0,
+            relatedTo: `Restock #${restock.id}`,
+            affectedAccounts:
+              restock.paymentSource === "credit"
+                ? `Creditor: ${restock.creditor?.name || "Unknown"}`
+                : "Cash Account",
+          }));
+
+          allTransactions.push(...transformedRestocks);
+        } else {
+          console.warn("Failed to fetch restocks:", restockRes.status);
+        }
+      } catch (err) {
+        console.error("Error fetching restocks:", err);
+      }
+
+      // ---------------- Filtering & Sorting ----------------
       if (from || to) {
-        allTransactions = allTransactions.filter((txn: CashTransaction) => {
+        allTransactions = allTransactions.filter((txn) => {
           const txnDate = new Date(txn.date);
           if (from && txnDate < new Date(from)) return false;
           if (to && txnDate > new Date(to)) return false;
@@ -143,39 +192,26 @@ export default function CashLedger({
         });
       }
 
-      // Filter by category if provided
       if (cat && cat !== "all") {
-        allTransactions = allTransactions.filter((txn: CashTransaction) => txn.category === cat);
+        allTransactions = allTransactions.filter((txn) => txn.category === cat);
       }
 
-      // Sort by date
       allTransactions.sort(
-        (a: CashTransaction, b: CashTransaction) =>
-          new Date(a.date).getTime() - new Date(b.date).getTime()
+        (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()
       );
 
-      // Recalculate running balances
+      // ---------------- Running Balance ----------------
       let runningBalance = 0;
-      const txnsWithBalance: CashTransaction[] = [];
+      const txnsWithBalance = allTransactions.map((txn) => {
+        if (txn.type === "INFLOW") runningBalance += txn.amount;
+        else runningBalance -= txn.amount;
+        return { ...txn, runningBalance };
+      });
 
-      for (const txn of allTransactions) {
-        if (txn.type === "INFLOW") {
-          runningBalance += txn.amount;
-        } else {
-          runningBalance -= txn.amount;
-        }
-        txnsWithBalance.push({
-          ...txn,
-          runningBalance,
-        });
-      }
-
-      allTransactions = txnsWithBalance;
-
-      console.log("Final combined transactions:", allTransactions);
+      console.log("Final combined transactions:", txnsWithBalance);
       console.log("Final balance:", runningBalance);
 
-      setTransactions(allTransactions);
+      setTransactions(txnsWithBalance);
       setCashBalance(runningBalance);
     } catch (err) {
       console.error("Error in fetchAllTransactions:", err);

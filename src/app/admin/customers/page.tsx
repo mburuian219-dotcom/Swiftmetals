@@ -101,6 +101,7 @@ const AddCustomerForm = ({
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [email, setEmail] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   useEffect(() => {
     if (initialData) {
@@ -112,13 +113,22 @@ const AddCustomerForm = ({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!name) return;
+    if (!name.trim()) {
+      alert("Customer name is required");
+      return;
+    }
+
+    setIsSubmitting(true);
 
     try {
+      const payload: any = { name: name.trim() };
+      if (phone.trim()) payload.phone = phone.trim();
+      if (email.trim()) payload.email = email.trim();
+
       const res = await fetch("/api/customer", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, phone, email }),
+        body: JSON.stringify(payload),
       });
 
       if (!res.ok) throw new Error("Failed to create customer");
@@ -133,6 +143,8 @@ const AddCustomerForm = ({
     } catch (err) {
       console.error("Error adding customer:", err);
       alert("Failed to add customer. Please try again.");
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -141,7 +153,7 @@ const AddCustomerForm = ({
       <h2 className="text-xl font-semibold text-black">Add New Customer</h2>
       <input
         type="text"
-        placeholder="Customer Name"
+        placeholder="Customer Name *"
         value={name}
         onChange={(e) => setName(e.target.value)}
         className="p-3 border border-slate-300 rounded-lg focus:ring-2 focus:ring-black focus:border-black w-full text-black"
@@ -163,9 +175,19 @@ const AddCustomerForm = ({
       />
       <button
         onClick={handleSubmit}
-        className="w-full bg-black text-white py-3 rounded-xl font-semibold hover:bg-slate-900 hover:shadow-lg transition-all duration-200 flex items-center justify-center gap-2"
+        disabled={isSubmitting}
+        className="w-full bg-black text-white py-3 rounded-xl font-semibold hover:bg-slate-900 hover:shadow-lg transition-all duration-200 flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
       >
-        <Plus className="w-5 h-5" /> Add Customer
+        {isSubmitting ? (
+          <>
+            <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
+            Adding Customer, Please Wait...
+          </>
+        ) : (
+          <>
+            <Plus className="w-5 h-5" /> Add Customer
+          </>
+        )}
       </button>
     </div>
   );
@@ -238,12 +260,14 @@ const CustomerList = ({
                 value={editData.phone}
                 onChange={(e) => setEditData({ ...editData, phone: e.target.value })}
                 className="p-2 border border-slate-300 rounded w-full text-black"
+                placeholder="Phone (optional)"
               />
               <input
                 type="email"
                 value={editData.email}
                 onChange={(e) => setEditData({ ...editData, email: e.target.value })}
                 className="p-2 border border-slate-300 rounded w-full text-black"
+                placeholder="Email (optional)"
               />
               <div className="flex gap-2 mt-2">
                 <button onClick={() => saveEdit(customer.id)} className="p-2 bg-black text-white rounded-lg hover:bg-slate-900">

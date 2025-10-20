@@ -23,7 +23,7 @@ model catalogproduct {
 model customer {
   id                Int                 @id @default(autoincrement())
   name              String
-  email             String
+  email             String?
   createdAt         DateTime            @default(now())
   phone             String?
   totalCredit       Float               @default(0)
@@ -166,36 +166,55 @@ model stock {
 
   @@index([productId], map: "Stock_productId_idx")
 }
+model restock {
+  id              Int          @id @default(autoincrement())
+  productId       Int
+  quantity        Int
+  costPrice       Float
+  totalCost       Float
+  paymentSource   String       // "cash", "credit", etc.
+  creditorId      Int?
+  creditor        creditor?    @relation(fields: [creditorId], references: [id])
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+  product         product      @relation(fields: [productId], references: [id], map: "Restock_productId_fkey")
+
+  cashledger      cashledger[] @relation("RestockToLedger") // ✅ add relation name
+
+  @@index([productId])
+  @@index([creditorId])
+}
+
 model cashledger {
   id               Int       @id @default(autoincrement())
   date             DateTime  @default(now())
   description      String
-  type             String    // "INFLOW" or "OUTFLOW"
-  category         String    // e.g., "Sales Revenue", "Inventory Purchase", etc.
+  type             String
+  category         String
   amount           Float
   runningBalance   Float     @default(0)
-  relatedTo        String?   // e.g., "Product: Name" or "Sale #123"
-  affectedAccounts String?   // e.g., "Cash (+) | Inventory (-)"
-  referenceId      Int?      // Optional link to sale, expense, or restock
-  referenceType    String?   // "sale", "expense", "restock", "payment"
+  relatedTo        String?
+  affectedAccounts String?
+  referenceId      Int?
+  referenceType    String?
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt
 
-  // 🔗 Optional foreign keys for relations
-  saleId     Int? 
+  saleId     Int?
   sale       sale?       @relation(fields: [saleId], references: [id])
 
   expenseId  Int?
   expense    expense?    @relation(fields: [expenseId], references: [id])
 
   restockId  Int?
-  restock    restock?    @relation(fields: [restockId], references: [id])
+  restock    restock?    @relation("RestockToLedger", fields: [restockId], references: [id]) // ✅ link back to restock
 
   @@index([date])
   @@index([type])
   @@index([category])
   @@index([referenceType])
 }
+
 
 
 
@@ -252,24 +271,7 @@ model creditor {
   createdAt   DateTime    @default(now())
   updatedAt   DateTime    @updatedAt
 }
-model restock {
-  id              Int        @id @default(autoincrement())
-  productId       Int
-  quantity        Int
-  costPrice       Float
-  totalCost       Float
-  paymentSource   String      // "cash", "credit", "other"
-  creditorId      Int?        // optional link to creditor
-  creditor        creditor?   @relation(fields: [creditorId], references: [id])
-  createdAt       DateTime    @default(now())
-  updatedAt       DateTime    @updatedAt
-  product         product     @relation(fields: [productId], references: [id], map: "Restock_productId_fkey")
 
-  @@index([productId])
-  @@index([creditorId])
-  cashledger cashledger[]
-
-}
 
 model smsreminder {
   id          Int       @id @default(autoincrement())

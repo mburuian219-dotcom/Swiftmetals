@@ -33,12 +33,18 @@ export async function POST(req: Request) {
     const body = await req.json();
     const { name, email, phone } = body;
 
-    if (!name || !email || !phone) {
-      return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
+    // Only name is required, email and phone are optional
+    if (!name || !name.trim()) {
+      return NextResponse.json({ error: "Customer name is required" }, { status: 400 });
     }
 
+    // Build data object with only provided fields
+    const data: any = { name: name.trim() };
+    if (email && email.trim()) data.email = email.trim();
+    if (phone && phone.trim()) data.phone = phone.trim();
+
     const newCustomer = await prisma.customer.create({
-      data: { name, email, phone },
+      data,
     });
 
     return NextResponse.json(newCustomer, { status: 201 });
@@ -58,9 +64,18 @@ export async function PUT(req: Request) {
       return NextResponse.json({ error: "Missing customer ID" }, { status: 400 });
     }
 
+    if (!name || !name.trim()) {
+      return NextResponse.json({ error: "Customer name is required" }, { status: 400 });
+    }
+
+    // Build update data with only provided fields
+    const data: any = { name: name.trim() };
+    if (email !== undefined) data.email = email.trim() || null;
+    if (phone !== undefined) data.phone = phone.trim() || null;
+
     const updatedCustomer = await prisma.customer.update({
       where: { id: parseInt(id) },
-      data: { name, email, phone },
+      data,
     });
 
     return NextResponse.json(updatedCustomer);

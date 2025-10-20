@@ -3,7 +3,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 
-// GET: Fetch all cash ledger entries with optional filtering
+// GET: Fetch all cash ledger entries with linked references
 export async function GET(request: NextRequest) {
   try {
     const searchParams = request.nextUrl.searchParams;
@@ -29,8 +29,23 @@ export async function GET(request: NextRequest) {
       if (to) filters.date.lte = new Date(to);
     }
 
+    // Fetch entries with related models
     const entries = await prisma.cashledger.findMany({
       where: filters,
+      include: {
+        restock: {
+          include: { 
+            product: true 
+          },
+        },
+        sale: {
+         
+  include: { saleitem: true },
+
+
+        },
+        expense: true,
+      },
       orderBy: { date: "desc" },
       take: parseInt(limit),
     });

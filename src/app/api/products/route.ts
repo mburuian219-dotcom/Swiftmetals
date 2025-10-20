@@ -29,9 +29,32 @@ export async function POST(req: Request) {
   try {
     const body = await req.json();
 
-    // Check if this is a restock request
+    // Check if this is a restock request - delegate to /api/restock
     if (body.action === "restock") {
-      return handleRestock(body);
+      try {
+        const restockResponse = await fetch(
+          new URL("/api/restock", req.url).toString(),
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify(body),
+          }
+        );
+
+        const restockData = await restockResponse.json();
+
+        return NextResponse.json(restockData, {
+          status: restockResponse.status,
+        });
+      } catch (error) {
+        console.error("Failed to call /api/restock:", error);
+        return NextResponse.json(
+          { error: "Failed to process restock" },
+          { status: 500 }
+        );
+      }
     }
 
     // Regular product creation
@@ -84,196 +107,6 @@ export async function POST(req: Request) {
     console.error("POST /api/products error:", error);
     return NextResponse.json(
       { error: "Failed to create product" },
-      { status: 500 }
-    );
-  }
-}
-
-// ---------------- RESTOCK handler ----------------
-async function handleRestock(body: any) {
-  try {
-    const { productId, quantity, totalCost, paymentSource, creditorName } = body;
-
-    const productIdNum = Number(productId);
-    const quantityNum = Number(quantity);
-    const totalCostNum = Number(totalCost);
-
-    if (!productId || isNaN(productIdNum)) {
-      return NextResponse.json(
-        { error: "Valid product ID is required" },
-        { status: 400 }
-      );
-    }
-
-    if (!quantity || isNaN(quantityNum) || quantityNum <= 0) {
-      return NextResponse.json(
-        { error: "Valid quantity is required" },
-        { status: 400 }
-      );
-    }
-
-    if (totalCost === undefined || isNaN(totalCostNum) || totalCostNum < 0) {
-      return NextResponse.json(
-        { error: "Valid total cost is required" },
-        { status: 400 }
-      );
-    }
-
-    if (!paymentSource) {
-      return NextResponse.json(
-        { error: "Payment source is required" },
-        { status: 400 }
-      );
-    }
-
-    // If payment source is credit, validate creditor name
-    if (paymentSource === "credit" && !creditorName?.trim()) {
-      return NextResponse.json(
-        { error: "Creditor name is required for credit purchases" },
-        { status: 400 }
-      );
-    }
-
-    // Get the product with its stock
-    const product = await prisma.product.findUnique({
-      where: { id: productIdNum },
-      include: { stock: true },
-    });
-
-    if (!product) {
-      return NextResponse.json(
-        { error: "Product not found" },
-        { status: 404 }
-      );
-    }
-
-    // Calculate new stock values
-    const currentStock = product.stock.reduce((sum, s) => sum + s.quantity, 0);
-    const currentTotalValue = product.stock.reduce(
-      (sum, s) => sum + s.quantity * s.costPrice,
-      0
-    );
-    const newTotalValue = currentTotalValue + totalCostNum;
-    const newTotalQuantity = currentStock + quantityNum;
-    const newCostPrice = newTotalQuantity > 0 ? newTotalValue / newTotalQuantity : 0;
-
-    // Handle creditor if payment source is credit
-    let creditorId = null;
-    if (paymentSource === "credit" && creditorName) {
-      // Find or create creditor
-      let creditor = await prisma.creditor.findUnique({
-        where: { name: creditorName.trim() },
-      });
-
-      if (creditor) {
-        // Update existing creditor's total owed
-        creditor = await prisma.creditor.update({
-          where: { id: creditor.id },
-          data: {
-            totalOwed: {
-              increment: totalCostNum,
-            },
-          },
-        });
-      } else {
-        // This shouldn't happen as frontend creates it, but handle anyway
-        creditor = await prisma.creditor.create({
-          data: {
-            name: creditorName.trim(),
-            phone: null,
-            email: null,
-            totalOwed: totalCostNum,
-          },
-        });
-      }
-
-      creditorId = creditor.id;
-    }
-
-    // Update or create stock entry and create restock record
-    let updatedProduct;
-    if (product.stock.length > 0) {
-      // Update the first stock entry with new quantity and weighted average cost price
-      updatedProduct = await prisma.product.update({
-        where: { id: productIdNum },
-        data: {
-          stock: {
-            update: {
-              where: { id: product.stock[0].id },
-              data: {
-                quantity: newTotalQuantity,
-                costPrice: newCostPrice,
-              },
-            },
-          },
-          restock: {
-            create: {
-              quantity: quantityNum,
-              costPrice: totalCostNum / quantityNum,
-              totalCost: totalCostNum,
-              paymentSource,
-              creditorId,
-            },
-          },
-        },
-        include: { stock: true },
-      });
-    } else {
-      // Create new stock entry if none exists
-      updatedProduct = await prisma.product.update({
-        where: { id: productIdNum },
-        data: {
-          stock: {
-            create: {
-              name: `${product.name} stock`,
-              quantity: quantityNum,
-              costPrice: totalCostNum / quantityNum,
-              sellingPrice: product.price,
-            },
-          },
-          restock: {
-            create: {
-              quantity: quantityNum,
-              costPrice: totalCostNum / quantityNum,
-              totalCost: totalCostNum,
-              paymentSource,
-              creditorId,
-            },
-          },
-        },
-        include: { stock: true },
-      });
-    }
-
-    // Record expense if payment source is cash
-    if (paymentSource === "cash") {
-      try {
-        await prisma.expense.create({
-          data: {
-            title: `Restocked ${quantityNum} units of ${product.name}`,
-            amount: totalCostNum,
-            category: "inventory",
-            notes: `Restock purchase - ${quantityNum} units at KSh ${(totalCostNum / quantityNum).toFixed(2)} per unit`,
-            date: new Date(),
-          },
-        });
-      } catch (expenseError) {
-        console.error("Failed to create expense record:", expenseError);
-        // Continue even if expense creation fails
-      }
-    }
-
-    return NextResponse.json({
-      ...updatedProduct,
-      stockQuantity: updatedProduct.stock.reduce(
-        (sum, s) => sum + s.quantity,
-        0
-      ),
-    });
-  } catch (error) {
-    console.error("Restock error:", error);
-    return NextResponse.json(
-      { error: "Failed to restock product" },
       { status: 500 }
     );
   }

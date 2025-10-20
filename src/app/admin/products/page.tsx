@@ -227,154 +227,105 @@ export default function ProductsPage() {
     }
   };
 
-  // Handle restock
- // Updated handleRestock function for your ProductsPage component
+  // Handle restock - Updated to use /api/restock directly
+  const handleRestock = async () => {
+    if (!restockModal.product) return;
 
-const handleRestock = async () => {
-  if (!restockModal.product) return;
+    const quantity = parseInt(restockForm.quantity);
+    const totalCost = parseFloat(restockForm.totalCost);
 
-  const quantity = parseInt(restockForm.quantity);
-  const totalCost = parseFloat(restockForm.totalCost);
-
-  if (isNaN(quantity) || quantity <= 0) {
-    return alert("Please enter a valid quantity");
-  }
-
-  if (isNaN(totalCost) || totalCost < 0) {
-    return alert("Please enter a valid total cost");
-  }
-
-  if (!restockForm.paymentSource) {
-    return alert("Please select a payment source");
-  }
-
-  if (restockForm.paymentSource === "credit") {
-    if (!restockForm.creditorName.trim()) {
-      return alert("Please enter the creditor name");
-    }
-    if (!restockForm.creditorPhone.trim()) {
-      return alert("Please enter the creditor phone number");
-    }
-  }
-
-  setRestocking(true);
-
-  try {
-    // Step 1: Restock the product
-    const res = await fetch("/api/products", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        action: "restock",
-        productId: restockModal.product.id,
-        quantity,
-        totalCost,
-        paymentSource: restockForm.paymentSource,
-        creditorName:
-          restockForm.paymentSource === "credit"
-            ? restockForm.creditorName
-            : null,
-      }),
-    });
-
-    if (!res.ok) {
-      const data = await res.json();
-      return alert(data.error || "Failed to restock");
+    if (isNaN(quantity) || quantity <= 0) {
+      return alert("Please enter a valid quantity");
     }
 
-    const updatedProduct = await res.json();
-    updatedProduct.stockQuantity = updatedProduct.stock?.[0]?.quantity || 0;
+    if (isNaN(totalCost) || totalCost < 0) {
+      return alert("Please enter a valid total cost");
+    }
 
-    // Step 2: Record cash transaction if payment source is "cash"
-    if (restockForm.paymentSource === "cash") {
-      try {
-        const ledgerRes = await fetch("/api/cash-ledger", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            description: `Stock purchase: ${restockModal.product.name} (${quantity} units)`,
-            type: "OUTFLOW",
-            category: "Inventory Purchase",
-            amount: totalCost,
-            relatedTo: `Product: ${restockModal.product.name}`,
-            affectedAccounts: "Cash (-) | Inventory (+)",
-            referenceId: restockModal.product.id,
-            referenceType: "restock",
-          }),
-        });
+    if (!restockForm.paymentSource) {
+      return alert("Please select a payment source");
+    }
 
-        if (!ledgerRes.ok) {
-          const error = await ledgerRes.json();
-          console.warn("Cash ledger entry warning:", error);
-          // Still proceed - restock was successful, just log the warning
-        }
-      } catch (ledgerError) {
-        console.error("Failed to record cash transaction:", ledgerError);
-        // Don't fail the restock if ledger recording fails
+    if (restockForm.paymentSource === "credit") {
+      if (!restockForm.creditorName.trim()) {
+        return alert("Please enter the creditor name");
+      }
+      if (!restockForm.creditorPhone.trim()) {
+        return alert("Please enter the creditor phone number");
       }
     }
 
-    // Step 3: If paymentSource = credit, record or update creditor
-    if (restockForm.paymentSource === "credit" && restockForm.creditorName) {
-      const creditorsList = Array.isArray(creditors) ? creditors : [];
+    setRestocking(true);
 
-      const existingCreditor = creditorsList.find(
-        (c) => c.name && c.name.toLowerCase() === restockForm.creditorName.toLowerCase()
+    try {
+      // Call the dedicated /api/restock endpoint
+      const res = await fetch("/api/restock", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          productId: restockModal.product.id,
+          quantity,
+          totalCost,
+          paymentSource: restockForm.paymentSource,
+          creditorName:
+            restockForm.paymentSource === "credit"
+              ? restockForm.creditorName
+              : null,
+          creditorPhone:
+            restockForm.paymentSource === "credit"
+              ? restockForm.creditorPhone
+              : null,
+          creditorEmail:
+            restockForm.paymentSource === "credit" && restockForm.creditorEmail
+              ? restockForm.creditorEmail
+              : null,
+        }),
+      });
+
+      if (!res.ok) {
+        const data = await res.json();
+        return alert(data.error || "Failed to restock");
+      }
+
+      const updatedProduct = await res.json();
+      updatedProduct.stockQuantity = updatedProduct.stock?.[0]?.quantity || 0;
+
+      // Update UI
+      setProducts((prev) =>
+        prev.map((p) =>
+          p.id === restockModal.product!.id ? updatedProduct : p
+        )
       );
 
-      if (existingCreditor) {
-        // Update existing creditor - add to their balance
-        await fetch("/api/creditors", {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            id: existingCreditor.id,
-            amountOwed: (existingCreditor.amountOwed || 0) + totalCost,
-          }),
-        });
-      } else {
-        // Create new creditor
-        await fetch("/api/creditors", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            name: restockForm.creditorName,
-            phone: restockForm.creditorPhone,
-            email: restockForm.creditorEmail || null,
-            amountOwed: totalCost,
-          }),
-        });
+      // Refresh creditors list if credit was used
+      if (restockForm.paymentSource === "credit") {
+        await fetchCreditors();
       }
 
-      // Refresh creditors list
-      await fetchCreditors();
+      // Reset form & modal
+      setRestockForm({
+        quantity: "",
+        paymentSource: "cash",
+        totalCost: "",
+        creditorName: "",
+        creditorPhone: "",
+        creditorEmail: "",
+      });
+      setRestockModal({ show: false, product: null });
+      
+      alert(
+        restockForm.paymentSource === "cash"
+          ? "✅ Stock updated successfully and cash deducted!"
+          : "✅ Stock updated successfully and added to creditor balance!"
+      );
+    } catch (error) {
+      console.error("Error restocking:", error);
+      alert("❌ Failed to restock product");
+    } finally {
+      setRestocking(false);
     }
+  };
 
-    // Step 4: Update UI
-    setProducts((prev) =>
-      prev.map((p) =>
-        p.id === restockModal.product!.id ? updatedProduct : p
-      )
-    );
-
-    // Step 5: Reset form & modal
-    setRestockForm({
-      quantity: "",
-      paymentSource: "cash",
-      totalCost: "",
-      creditorName: "",
-      creditorPhone: "",
-      creditorEmail: "",
-    });
-    setRestockModal({ show: false, product: null });
-    alert("✅ Stock updated successfully and cash deducted!");
-  } catch (error) {
-    console.error("Error restocking:", error);
-    alert("❌ Failed to restock product");
-  } finally {
-    setRestocking(false);
-  }
-};
   // Open restock modal
   const openRestockModal = (product: Product) => {
     setRestockModal({ show: true, product });
@@ -785,7 +736,7 @@ const handleRestock = async () => {
                               <option value="">-- Select from saved creditors --</option>
                               {creditors.map((c) => (
                                 <option key={c.id} value={c.id}>
-                                  {c.name} {c.phone ? `(${c.phone})` : ""} - Owed: KSh {c.amountOwed?.toFixed(2) || "0.00"}
+                                  {c.name} {c.phone ? `(${c.phone})` : ""} - Owed: KSh {c.totalOwed?.toFixed(2) || "0.00"}
                                 </option>
                               ))}
                             </select>
