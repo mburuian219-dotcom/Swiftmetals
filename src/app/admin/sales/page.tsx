@@ -1,5 +1,5 @@
 "use client";
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useCallback, useMemo } from "react";
 import { Download, MessageSquare, Send, Clock, CreditCard, AlertTriangle, CheckCircle, Plus, X, Edit, Trash2, Calculator, Save, Menu, ChevronDown, ChevronUp } from "lucide-react";
 
 interface Customer {
@@ -57,7 +57,7 @@ interface Sale {
   customer: Customer;
   payments: Payment[];
   remainingAmount: number;
-  paymentMethod?: "CASH" | "MPESA" | "BANK" | "CHECK" | "CARD" | "CREDIT" | "MULTIPLE"; // ADD "CREDIT" here
+  paymentMethod?: "CASH" | "MPESA" | "BANK" | "CHECK" | "CARD" | "CREDIT" | "MULTIPLE";
   checkDepositDate?: string | null;
 }
 
@@ -79,6 +79,7 @@ const EnhancedSalesPage = () => {
     dueDate: new Date().toISOString().split('T')[0],
   });
   const [stockError, setStockError] = useState<string | null>(null);
+  const [stockValidationTimeout, setStockValidationTimeout] = useState<NodeJS.Timeout | null>(null);
   
   const [saleItems, setSaleItems] = useState<NewSaleItem[]>([]);
   const [currentItem, setCurrentItem] = useState<NewSaleItem>({
@@ -115,51 +116,46 @@ const EnhancedSalesPage = () => {
     return cleanPhone;
   };
 
- const messageTypes = [
-  { 
-    value: "delivery", 
-    label: "Delivery Confirmation",
-    getTemplate: (sale: Sale) => 
-      `Hello ${sale.customer.name}, we truly appreciate your trust in us. Your purchase of ${
-        sale.saleitems?.map(item => `${item.product?.name || "Product"} (×${item.quantity})`).join(", ") || "our products"
-      } has been confirmed for delivery. Thank you for choosing us!`
-  },
-  { 
-    value: "payment", 
-    label: "Payment Reminder",
-    getTemplate: (sale: Sale) => 
-      `Dear ${sale.customer.name}, thank you for being our valued customer. We’d like to remind you of your outstanding balance of Ksh ${sale.remainingAmount.toFixed(2)} for ${
-        sale.saleitems?.map(item => item.product?.name || "your order").join(", ") || "your recent purchase"
-      }. ${sale.dueDate && sale.status !== "PAID" ? `Kindly note, payment is due on ${new Date(sale.dueDate).toLocaleDateString()}. ` : ""}We truly appreciate your prompt attention to this matter.`
-  },
-  { 
-    value: "check", 
-    label: "Check Deposit Reminder",
-    getTemplate: (sale: Sale) => 
-      `Hello ${sale.customer.name}, we value your continued partnership. This is a friendly reminder that your check payment for ${
-        sale.saleitems?.map(item => item.product?.name || "Product").join(", ") || "your recent order"
-      } is scheduled for deposit soon. Please ensure sufficient funds are available. Thank you for your cooperation.`
-  }
-];
+  const messageTypes = [
+    { 
+      value: "delivery", 
+      label: "Delivery Confirmation",
+      getTemplate: (sale: Sale) => 
+        `Hello ${sale.customer.name}, we truly appreciate your trust in us. Your purchase of ${
+          sale.saleitems?.map(item => `${item.product?.name || "Product"} (×${item.quantity})`).join(", ") || "our products"
+        } has been confirmed for delivery. Thank you for choosing us!`
+    },
+    { 
+      value: "payment", 
+      label: "Payment Reminder",
+      getTemplate: (sale: Sale) => 
+        `Dear ${sale.customer.name}, thank you for being our valued customer. We'd like to remind you of your outstanding balance of Ksh ${sale.remainingAmount.toFixed(2)} for ${
+          sale.saleitems?.map(item => item.product?.name || "your order").join(", ") || "your recent purchase"
+        }. ${sale.dueDate && sale.status !== "PAID" ? `Kindly note, payment is due on ${new Date(sale.dueDate).toLocaleDateString()}. ` : ""}We truly appreciate your prompt attention to this matter.`
+    },
+    { 
+      value: "check", 
+      label: "Check Deposit Reminder",
+      getTemplate: (sale: Sale) => 
+        `Hello ${sale.customer.name}, we value your continued partnership. This is a friendly reminder that your check payment for ${
+          sale.saleitems?.map(item => item.product?.name || "Product").join(", ") || "your recent order"
+        } is scheduled for deposit soon. Please ensure sufficient funds are available. Thank you for your cooperation.`
+    }
+  ];
 
-  const calculateSaleStatus = (sale: any): Sale => {
-    const totalPayments = sale.payments && sale.payments.length > 0
-      ? sale.payments.reduce((sum: number, p: Payment) => sum + Number(p.amount || 0), 0)
-      : 0;
+  const calculateSaleStatus = useCallback((sale: any): Sale => {
+    const totalPayments = sale.payments?.reduce((sum: number, p: Payment) => 
+      sum + Number(p.amount || 0), 0) || 0;
     
     const remainingAmount = Math.max(0, Number(sale.amount) - totalPayments);
     
     const hasPendingChecks = sale.payments?.some((p: Payment) => {
       if (p.method !== "CHECK") return false;
       const today = new Date().toISOString().split('T')[0];
-      const hasDepositDate = p.checkDepositDate;
-      const isDepositDateFuture = hasDepositDate && p.checkDepositDate! > today;
-      const isPendingStatus = p.status === "PENDING";
-      return !hasDepositDate || isDepositDateFuture || isPendingStatus;
+      return !p.checkDepositDate || p.checkDepositDate > today || p.status === "PENDING";
     }) || false;
 
     let status: "PAID" | "PARTIAL" | "UNPAID";
-    
     if (hasPendingChecks && remainingAmount <= 0.01) {
       status = "PARTIAL";
     } else if (remainingAmount <= 0.01) {
@@ -170,45 +166,55 @@ const EnhancedSalesPage = () => {
       status = "UNPAID";
     }
 
-    return {
-      ...sale,
-      remainingAmount,
-      status,
-      payments: sale.payments || []
-    };
-  };
+    return { ...sale, remainingAmount, status, payments: sale.payments || [] };
+  }, []);
 
   useEffect(() => {
     const fetchData = async () => {
       setLoading(true);
+      setError(null);
+      
       try {
-        // Try both /api/customer and /api/customers
+        const endpoints = [
+          { url: "/api/sales", name: "Sales" },
+          { url: "/api/customers", name: "Customers", fallback: "/api/customer" },
+          { url: "/api/products", name: "Products" }
+        ];
+
         const [salesRes, customersRes, productsRes] = await Promise.all([
-          fetch("/api/sales"),
-          fetch("/api/customers"), // Trying plural first
-          fetch("/api/products")
+          fetch(endpoints[0].url).catch(err => {
+            console.error(`❌ ${endpoints[0].name} fetch failed:`, err);
+            return null;
+          }),
+          fetch(endpoints[1].url).catch(err => {
+            console.error(`❌ ${endpoints[1].name} fetch failed:`, err);
+            return null;
+          }),
+          fetch(endpoints[2].url).catch(err => {
+            console.error(`❌ ${endpoints[2].name} fetch failed:`, err);
+            return null;
+          })
         ]);
 
-        console.log("🔍 API Response Status:");
-        console.log("  Sales:", salesRes.status, salesRes.ok ? "✅" : "❌");
-        console.log("  Customers:", customersRes.status, customersRes.ok ? "✅" : "❌");
-        console.log("  Products:", productsRes.status, productsRes.ok ? "✅" : "❌");
-
-        // If customers endpoint fails, try singular
+        // Handle customers with fallback
         let customersData = [];
-        if (!customersRes.ok) {
-          console.log("⚠️ Trying /api/customer (singular)...");
-          const altCustomersRes = await fetch("/api/customer");
-          console.log("  Alternative endpoint:", altCustomersRes.status, altCustomersRes.ok ? "✅" : "❌");
-          if (altCustomersRes.ok) {
-            customersData = await altCustomersRes.json();
+        if (!customersRes || !customersRes.ok) {
+          console.log("⚠️ Trying fallback /api/customer...");
+          try {
+            const altRes = await fetch("/api/customer");
+            if (altRes.ok) customersData = await altRes.json();
+          } catch (err) {
+            console.error("❌ Fallback also failed:", err);
           }
         } else {
           customersData = await customersRes.json();
         }
 
-        if (!salesRes.ok || !productsRes.ok) {
-          throw new Error("Failed to fetch data");
+        if (!salesRes || !salesRes.ok) {
+          throw new Error("Failed to fetch sales data");
+        }
+        if (!productsRes || !productsRes.ok) {
+          throw new Error("Failed to fetch products data");
         }
 
         const [salesData, productsData] = await Promise.all([
@@ -216,39 +222,28 @@ const EnhancedSalesPage = () => {
           productsRes.json()
         ]);
 
-        console.log("📦 Raw API Responses:");
-        console.log("  Sales data type:", typeof salesData, "Is array:", Array.isArray(salesData));
-        console.log("  Customers data:", customersData);
-        console.log("  Customers type:", typeof customersData, "Is array:", Array.isArray(customersData));
-        console.log("  Products data type:", typeof productsData, "Is array:", Array.isArray(productsData));
-
-        // Handle different response formats
-        let validCustomers = [];
-        if (Array.isArray(customersData)) {
-          validCustomers = customersData;
-        } else if (customersData && typeof customersData === 'object') {
-          // Check if data is nested
-          validCustomers = customersData.customers || customersData.data || [];
-          console.log("  ⚠️ Customers data was nested, extracted:", validCustomers.length, "customers");
-        }
-
-        const processedSales = Array.isArray(salesData) ? salesData.map(calculateSaleStatus) : [];
-        const validProducts = Array.isArray(productsData) ? productsData : [];
+        // Validate and process data
+        const validCustomers = Array.isArray(customersData) 
+          ? customersData 
+          : (customersData?.customers || customersData?.data || []);
         
-        console.log("✅ Final counts:");
-        console.log("  Sales:", processedSales.length);
-        console.log("  Customers:", validCustomers.length);
-        console.log("  Products:", validProducts.length);
+        const processedSales = Array.isArray(salesData) 
+          ? salesData.map(calculateSaleStatus) 
+          : [];
+        
+        const validProducts = Array.isArray(productsData) ? productsData : [];
         
         setSales(processedSales);
         setCustomers(validCustomers);
         setProducts(validProducts);
 
         if (validCustomers.length === 0) {
-          console.warn("⚠️ WARNING: No customers found! Check your database or API endpoint.");
+          console.warn("⚠️ No customers found");
+          setError("No customers found. Please add customers first.");
         }
-      } catch (err) {
-        setError("Failed to load data from database");
+      } catch (err: any) {
+        const errorMsg = err.message || "Failed to load data";
+        setError(errorMsg);
         console.error("❌ Error fetching data:", err);
         setSales([]);
         setCustomers([]);
@@ -259,22 +254,26 @@ const EnhancedSalesPage = () => {
     };
 
     fetchData();
-  }, []);
+  }, [calculateSaleStatus]);
 
-const paymentMethods = [
-  { value: "CASH", label: "Cash", color: "bg-green-100 text-green-800" },
-  { value: "MPESA", label: "M-Pesa", color: "bg-blue-100 text-blue-800" },
-  { value: "BANK", label: "Bank Transfer", color: "bg-purple-100 text-purple-800" },
-  { value: "CHECK", label: "Check", color: "bg-orange-100 text-orange-800" },
-  { value: "CARD", label: "Card Payment", color: "bg-pink-100 text-pink-800" },
-  { value: "CREDIT", label: "Credit/Pay Later", color: "bg-yellow-100 text-yellow-800" } // ADD THIS LINE
-];
+  const paymentMethods = [
+    { value: "CASH", label: "Cash", color: "bg-green-100 text-green-800" },
+    { value: "MPESA", label: "M-Pesa", color: "bg-blue-100 text-blue-800" },
+    { value: "BANK", label: "Bank Transfer", color: "bg-purple-100 text-purple-800" },
+    { value: "CHECK", label: "Check", color: "bg-orange-100 text-orange-800" },
+    { value: "CARD", label: "Card Payment", color: "bg-pink-100 text-pink-800" },
+    { value: "CREDIT", label: "Credit/Pay Later", color: "bg-yellow-100 text-yellow-800" }
+  ];
 
   const handleAddItemToSale = () => {
+    // Clear previous timeout
+    if (stockValidationTimeout) clearTimeout(stockValidationTimeout);
+    
     if (!currentItem.productId || currentItem.quantity <= 0 || currentItem.price <= 0) {
       setError("Please fill in all item details");
       return;
     }
+    
     const product = products.find(p => p.id === currentItem.productId);
     if (!product) {
       setError("Product not found");
@@ -287,13 +286,21 @@ const paymentMethods = [
     const totalQuantity = existingQuantity + currentItem.quantity;
     
     if (totalQuantity > productStock) {
-      setStockError(`Insufficient stock for ${product.name}. Available: ${productStock}, Requested: ${totalQuantity}`);
-      setError(`Insufficient stock for ${product.name}. Available: ${productStock}, Requested: ${totalQuantity}`);
+      const errorMsg = `Insufficient stock for ${product.name}. Available: ${productStock}, Requested: ${totalQuantity}`;
+      setStockError(errorMsg);
+      setError(errorMsg);
+      
+      // Auto-clear error after 5 seconds
+      const timeout = setTimeout(() => {
+        setStockError(null);
+        setError(null);
+      }, 5000);
+      setStockValidationTimeout(timeout);
       return;
     }
     
     const existingItemIndex = saleItems.findIndex(item => item.productId === currentItem.productId);
-  
+
     if (existingItemIndex >= 0) {
       const updatedItems = [...saleItems];
       updatedItems[existingItemIndex].quantity += currentItem.quantity;
@@ -338,7 +345,6 @@ const paymentMethods = [
       return;
     }
 
-    // MANDATORY: Due date required for credit payments
     if (currentPayment.method === "CREDIT" && !currentPayment.dueDate) {
       setError("Due date is MANDATORY for credit/pay later payments");
       return;
@@ -406,11 +412,12 @@ const paymentMethods = [
       const totalPayments = calculateTotalPayments();
       const remainingAmount = totalAmount - totalPayments;
 
-       // MANDATORY: Due date check for credit sales or partial payments
-    if (remainingAmount > 0 && !newSale.dueDate) {
-      setError("Due date is MANDATORY when there's an outstanding balance");
-      return;
-    }
+      if (remainingAmount > 0 && !newSale.dueDate) {
+        setError("Due date is MANDATORY when there's an outstanding balance");
+        setLoading(false);
+        setSuccess(null);
+        return;
+      }
 
       let status: "PAID" | "PARTIAL" | "UNPAID";
       if (remainingAmount <= 0.01) {
@@ -536,6 +543,7 @@ const paymentMethods = [
           checkDepositDate: newPayment.checkDepositDate || null,
           date: new Date().toISOString(),
         },
+        dueDate: editingSale.dueDate || null,
       };
 
       const response = await fetch(`/api/sales/${editingSale.id}`, {
@@ -572,7 +580,8 @@ const paymentMethods = [
         amount: "",
         method: "CASH",
         referenceId: "",
-        checkDepositDate: ""
+        checkDepositDate: "",
+        dueDate: ""
       });
 
       setSuccess("Sale updated successfully!");
@@ -650,7 +659,7 @@ const paymentMethods = [
     }
   };
 
-  const addEditPayment = () => {
+const addEditPayment = () => {
     const amount = parseFloat(currentPayment.amount);
     if (!amount || amount <= 0) {
       setError("Please enter a valid payment amount");
@@ -661,13 +670,18 @@ const paymentMethods = [
       setError(`Payment amount cannot exceed remaining balance of Ksh ${editingSale.remainingAmount.toFixed(2)}`);
       return;
     }
-    if (editingSale) {
-      const newRemaining = editingSale.remainingAmount - amount;
-      if (newRemaining > 0.01 && !currentPayment.dueDate) {
-        setError("Due date is MANDATORY when there's still a remaining balance after this payment");
-        return;
-      }
+    
+    // Validate required fields for specific payment methods
+    if (currentPayment.method === "CHECK" && !currentPayment.checkDepositDate) {
+      setError("Please specify check deposit date");
+      return;
     }
+
+    if (["MPESA", "BANK", "CARD"].includes(currentPayment.method) && !currentPayment.referenceId?.trim()) {
+      setError("Please enter transaction reference");
+      return;
+    }
+    
     setEditPayments([...editPayments, {
       ...currentPayment,
       amount: currentPayment.amount
@@ -677,24 +691,31 @@ const paymentMethods = [
       amount: "",
       method: "CASH",
       referenceId: "",
-      checkDepositDate: ""
+      checkDepositDate: "",
+     
     });
     setError(null);
   };
-
+    
+    
   const clearMessages = () => {
     setError(null);
     setSuccess(null);
     setStockError(null);
   };
 
-  const totalSales = sales.reduce((acc, s) => acc + Number(s.amount), 0);
-  const paidSales = sales.filter((s) => s.status === "PAID").reduce((acc, s) => acc + Number(s.amount), 0);
-  const partialSales = sales.filter((s) => s.status === "PARTIAL").reduce((acc, s) => acc + Number(s.amount), 0);
-  const unpaidSales = sales.filter((s) => s.status === "UNPAID").reduce((acc, s) => acc + Number(s.amount), 0);
-  const totalOutstanding = sales.reduce((acc, s) => acc + Number(s.remainingAmount), 0);
+  const stats = useMemo(() => ({
+    totalSales: sales.reduce((acc, s) => acc + Number(s.amount), 0),
+    paidSales: sales.filter(s => s.status === "PAID").reduce((acc, s) => acc + Number(s.amount), 0),
+    partialSales: sales.filter(s => s.status === "PARTIAL").reduce((acc, s) => acc + Number(s.amount), 0),
+    unpaidSales: sales.filter(s => s.status === "UNPAID").reduce((acc, s) => acc + Number(s.amount), 0),
+    totalOutstanding: sales.reduce((acc, s) => acc + Number(s.remainingAmount), 0),
+    paidCount: sales.filter(s => s.status === "PAID").length,
+    partialCount: sales.filter(s => s.status === "PARTIAL").length,
+    unpaidCount: sales.filter(s => s.status === "UNPAID").length
+  }), [sales]);
 
-  const getFilteredSales = () => {
+  const filteredSales = useMemo(() => {
     switch (activeTab) {
       case "paid":
         return sales.filter(s => s.status === "PAID");
@@ -703,11 +724,10 @@ const paymentMethods = [
       case "unpaid":
         return sales.filter(s => s.status === "UNPAID");
       case "overview":
-        return sales;
       default:
         return sales;
     }
-  };
+  }, [sales, activeTab]);
 
   const sendDeliveryConfirmation = async (saleId: number) => {
     setMessagingLoading(true);
@@ -781,37 +801,34 @@ const paymentMethods = [
         </div>
       )}
 
-      
-      {/* Overview Stats */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4 md:gap-6 mb-6 md:mb-8">
         <div className="bg-white p-4 md:p-6 rounded-xl shadow-lg border-l-4 border-emerald-500">
           <div className="text-slate-500 text-xs md:text-sm font-medium">Total Sales</div>
-          <div className="text-xl md:text-2xl font-bold text-emerald-600">Ksh {totalSales.toFixed(2)}</div>
+          <div className="text-xl md:text-2xl font-bold text-emerald-600">Ksh {stats.totalSales.toFixed(2)}</div>
           <div className="text-xs md:text-sm text-black">{sales.length} orders</div>
         </div>
         <div className="bg-white p-4 md:p-6 rounded-xl shadow-lg border-l-4 border-blue-500">
           <div className="text-slate-500 text-xs md:text-sm font-medium">Fully Paid</div>
-          <div className="text-xl md:text-2xl font-bold text-blue-600">Ksh {paidSales.toFixed(2)}</div>
-          <div className="text-xs md:text-sm text-black">{sales.filter(s => s.status === "PAID").length} orders</div>
+          <div className="text-xl md:text-2xl font-bold text-blue-600">Ksh {stats.paidSales.toFixed(2)}</div>
+          <div className="text-xs md:text-sm text-black">{stats.paidCount} orders</div>
         </div>
         <div className="bg-white p-4 md:p-6 rounded-xl shadow-lg border-l-4 border-orange-500">
           <div className="text-slate-500 text-xs md:text-sm font-medium">Partially Paid</div>
-          <div className="text-xl md:text-2xl font-bold text-orange-600">Ksh {partialSales.toFixed(2)}</div>
-          <div className="text-xs md:text-sm text-black">{sales.filter(s => s.status === "PARTIAL").length} orders</div>
+          <div className="text-xl md:text-2xl font-bold text-orange-600">Ksh {stats.partialSales.toFixed(2)}</div>
+          <div className="text-xs md:text-sm text-black">{stats.partialCount} orders</div>
         </div>
         <div className="bg-white p-4 md:p-6 rounded-xl shadow-lg border-l-4 border-red-500">
           <div className="text-slate-500 text-xs md:text-sm font-medium">Unpaid</div>
-          <div className="text-xl md:text-2xl font-bold text-red-600">Ksh {unpaidSales.toFixed(2)}</div>
-          <div className="text-xs md:text-sm text-black">{sales.filter(s => s.status === "UNPAID").length} orders</div>
+          <div className="text-xl md:text-2xl font-bold text-red-600">Ksh {stats.unpaidSales.toFixed(2)}</div>
+          <div className="text-xs md:text-sm text-black">{stats.unpaidCount} orders</div>
         </div>
         <div className="bg-white p-4 md:p-6 rounded-xl shadow-lg border-l-4 border-purple-500">
           <div className="text-slate-500 text-xs md:text-sm font-medium">Outstanding Amount</div>
-          <div className="text-xl md:text-2xl font-bold text-purple-600">Ksh {totalOutstanding.toFixed(2)}</div>
+          <div className="text-xl md:text-2xl font-bold text-purple-600">Ksh {stats.totalOutstanding.toFixed(2)}</div>
           <div className="text-xs md:text-sm text-black">Total remaining</div>
         </div>
       </div>
 
-      {/* Add Sale Modal */}
       {showAddSale && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50 overflow-y-auto">
           <div className="bg-white rounded-xl max-w-4xl w-full max-h-[90vh] overflow-y-auto my-4">
@@ -861,7 +878,7 @@ const paymentMethods = [
                   <div className="grid grid-cols-1 gap-3">
                     <div>
                       <label className="block text-sm font-medium text-black mb-1">Product</label>
-                     <select
+                      <select
                         value={currentItem.productId}
                         onChange={(e) => {
                           const productId = parseInt(e.target.value);
@@ -943,195 +960,185 @@ const paymentMethods = [
                 )}
               </div>
 
-              {/* Payment Section */}
-<div className="border-t pt-4 mb-4">
-  <h3 className="text-lg font-semibold mb-4 text-black">Payments</h3>
+              <div className="border-t pt-4 mb-4">
+                <h3 className="text-lg font-semibold mb-4 text-black">Payments</h3>
 
-  <div className="space-y-3 mb-4 p-4 bg-gray-50 rounded-lg">
-    <div className="grid grid-cols-1 md:grid-cols-6 gap-3">
-      {/* Payment Method */}
-      <select
-        value={currentPayment.method}
-        onChange={(e) =>
-          setCurrentPayment({
-            ...currentPayment,
-            method: e.target.value as any,
-            amount: e.target.value === "CREDIT" ? "0" : currentPayment.amount,
-          })
-        }
-        className="p-3 border rounded-lg text-black"
-      >
-        {paymentMethods.map((method) => (
-          <option key={method.value} value={method.value}>
-            {method.label}
-          </option>
-        ))}
-      </select>
+                <div className="space-y-3 mb-4 p-4 bg-gray-50 rounded-lg">
+                  <div className="grid grid-cols-1 md:grid-cols-6 gap-3">
+                    <select
+                      value={currentPayment.method}
+                      onChange={(e) =>
+                        setCurrentPayment({
+                          ...currentPayment,
+                          method: e.target.value as any,
+                          amount: e.target.value === "CREDIT" ? "0" : currentPayment.amount,
+                        })
+                      }
+                      className="p-3 border rounded-lg text-black"
+                    >
+                      {paymentMethods.map((method) => (
+                        <option key={method.value} value={method.value}>
+                          {method.label}
+                        </option>
+                      ))}
+                    </select>
 
-      {/* Amount (not for credit) */}
-      {currentPayment.method !== "CREDIT" && (
-        <input
-          type="number"
-          placeholder="Amount"
-          min="0"
-          step="0.01"
-          max={getRemainingAmount()}
-          value={currentPayment.amount}
-          onChange={(e) =>
-            setCurrentPayment({
-              ...currentPayment,
-              amount: e.target.value,
-            })
-          }
-          className="p-3 border rounded-lg text-black"
-        />
-      )}
+                    {currentPayment.method !== "CREDIT" && (
+                      <input
+                        type="number"
+                        placeholder="Amount"
+                        min="0"
+                        step="0.01"
+                        max={getRemainingAmount()}
+                        value={currentPayment.amount}
+                        onChange={(e) =>
+                          setCurrentPayment({
+                            ...currentPayment,
+                            amount: e.target.value,
+                          })
+                        }
+                        className="p-3 border rounded-lg text-black"
+                      />
+                    )}
 
-      {/* Reference ID for MPESA, BANK, CARD */}
-      {["MPESA", "BANK", "CARD"].includes(currentPayment.method) && (
-        <input
-          type="text"
-          placeholder="Reference ID *"
-          value={currentPayment.referenceId}
-          onChange={(e) =>
-            setCurrentPayment({
-              ...currentPayment,
-              referenceId: e.target.value,
-            })
-          }
-          className="p-3 border rounded-lg text-black"
-        />
-      )}
+                    {["MPESA", "BANK", "CARD"].includes(currentPayment.method) && (
+                      <input
+                        type="text"
+                        placeholder="Reference ID *"
+                        value={currentPayment.referenceId}
+                        onChange={(e) =>
+                          setCurrentPayment({
+                            ...currentPayment,
+                            referenceId: e.target.value,
+                          })
+                        }
+                        className="p-3 border rounded-lg text-black"
+                      />
+                    )}
 
-      {/* Deposit Date for CHECK */}
-      {currentPayment.method === "CHECK" && (
-        <input
-          type="date"
-          placeholder="Check Deposit Date"
-          value={currentPayment.checkDepositDate}
-          onChange={(e) =>
-            setCurrentPayment({
-              ...currentPayment,
-              checkDepositDate: e.target.value,
-            })
-          }
-          className="p-3 border rounded-lg text-black"
-        />
-      )}
+                    {currentPayment.method === "CHECK" && (
+                      <input
+                        type="date"
+                        placeholder="Check Deposit Date"
+                        value={currentPayment.checkDepositDate}
+                        onChange={(e) =>
+                          setCurrentPayment({
+                            ...currentPayment,
+                            checkDepositDate: e.target.value,
+                          })
+                        }
+                        className="p-3 border rounded-lg text-black"
+                      />
+                    )}
 
-      {/* Due Date (for CREDIT or partial payment) */}
-      {(currentPayment.method === "CREDIT" ||
-        getRemainingAmount() > parseFloat(currentPayment.amount || "0")) && (
-        <input
-          type="date"
-          placeholder="Due Date *"
-          value={currentPayment.dueDate}
-          onChange={(e) =>
-            setCurrentPayment({
-              ...currentPayment,
-              dueDate: e.target.value,
-            })
-          }
-          className="p-3 border rounded-lg text-black col-span-2"
-          title="MANDATORY for credit/partial payments"
-          min={new Date().toISOString().split("T")[0]}
-        />
-      )}
+                    {(currentPayment.method === "CREDIT" ||
+                      getRemainingAmount() > parseFloat(currentPayment.amount || "0")) && (
+                      <input
+                        type="date"
+                        placeholder="Due Date *"
+                        value={currentPayment.dueDate}
+                        onChange={(e) =>
+                          setCurrentPayment({
+                            ...currentPayment,
+                            dueDate: e.target.value,
+                          })
+                        }
+                        className="p-3 border rounded-lg text-black col-span-2"
+                        title="MANDATORY for credit/partial payments"
+                        min={new Date().toISOString().split("T")[0]}
+                      />
+                    )}
 
-      {/* Add Payment Button */}
-      <button
-        type="button"
-        onClick={handleAddPayment}
-        className="bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 flex items-center justify-center gap-2 col-span-1"
-      >
-        <Plus size={20} /> Add Payment
-      </button>
-    </div>
-  </div>
+                    <button
+                      type="button"
+                      onClick={handleAddPayment}
+                      className="bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 flex items-center justify-center gap-2 col-span-1"
+                    >
+                      <Plus size={20} /> Add Payment
+                    </button>
+                  </div>
+                </div>
 
-  {/* Payments List */}
-  {payments.length > 0 && (
-    <div className="border rounded-lg p-3 bg-gray-50">
-      <h4 className="font-semibold mb-2 text-black">Payments:</h4>
-      {payments.map((payment, index) => (
-        <div
-          key={index}
-          className="flex justify-between items-center p-2 bg-white rounded mb-2"
-        >
-          <div>
-            <span className="text-black font-medium">
-              {payment.method}
-            </span>
-            {payment.referenceId && (
-              <span className="text-gray-600 text-sm ml-2">
-                Ref: {payment.referenceId}
-              </span>
-            )}
-            {payment.dueDate && (
-              <span className="text-orange-600 text-sm ml-2">
-                Due: {payment.dueDate}
-              </span>
-            )}
-          </div>
-          <div className="flex items-center gap-3">
-            <span className="text-black">
-              Ksh {Number(payment.amount).toFixed(2)}
-            </span>
-            <button
-              onClick={() => removePayment(index)}
-              className="text-red-600 hover:text-red-800"
-            >
-              <Trash2 size={20} />
-            </button>
-          </div>
-        </div>
-      ))}
-      <div className="border-t pt-2 mt-2">
-        <div className="flex justify-between text-black">
-          <span>Total Paid:</span>
-          <span>Ksh {calculateTotalPayments().toFixed(2)}</span>
-        </div>
-        <div className="flex justify-between font-bold text-black">
-          <span>Remaining:</span>
-          <span
-            className={
-              getRemainingAmount() > 0
-                ? "text-red-600"
-                : "text-green-600"
-            }
-          >
-            Ksh {getRemainingAmount().toFixed(2)}
-          </span>
-        </div>
-      </div>
-    </div>
-  )}
+                {payments.length > 0 && (
+                  <div className="border rounded-lg p-3 bg-gray-50">
+                    <h4 className="font-semibold mb-2 text-black">Payments:</h4>
+                    {payments.map((payment, index) => (
+                      <div
+                        key={index}
+                        className="flex justify-between items-center p-2 bg-white rounded mb-2"
+                      >
+                        <div>
+                          <span className="text-black font-medium">
+                            {payment.method}
+                          </span>
+                          {payment.referenceId && (
+                            <span className="text-gray-600 text-sm ml-2">
+                              Ref: {payment.referenceId}
+                            </span>
+                          )}
+                          {payment.dueDate && (
+                            <span className="text-orange-600 text-sm ml-2">
+                              Due: {payment.dueDate}
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-3">
+                          <span className="text-black">
+                            Ksh {Number(payment.amount).toFixed(2)}
+                          </span>
+                          <button
+                            onClick={() => removePayment(index)}
+                            className="text-red-600 hover:text-red-800"
+                          >
+                            <Trash2 size={20} />
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                    <div className="border-t pt-2 mt-2">
+                      <div className="flex justify-between text-black">
+                        <span>Total Paid:</span>
+                        <span>Ksh {calculateTotalPayments().toFixed(2)}</span>
+                      </div>
+                      <div className="flex justify-between font-bold text-black">
+                        <span>Remaining:</span>
+                        <span
+                          className={
+                            getRemainingAmount() > 0
+                              ? "text-red-600"
+                              : "text-green-600"
+                          }
+                        >
+                          Ksh {getRemainingAmount().toFixed(2)}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                )}
 
-  {/* Global Due Date (if there’s still a remaining balance) */}
-  {getRemainingAmount() > 0 && (
-    <div className="mt-4 p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
-      <label className="block text-sm font-medium text-black-700 mb-2">
-        Payment Due Date *{" "}
-        <span className="text-red-600">
-          (MANDATORY for outstanding balance)
-        </span>
-      </label>
-      <input
-        type="date"
-        value={newSale.dueDate}
-        onChange={(e) =>
-          setNewSale({
-            ...newSale,
-            dueDate: e.target.value,
-          })
-        }
-        className="w-full p-3 border rounded-lg text-black"
-        min={new Date().toISOString().split("T")[0]}
-      />
-    </div>
-  )}
-</div>
-
+                {getRemainingAmount() > 0 && (
+                  <div className="mt-4 p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
+                    <label className="block text-sm font-medium text-black mb-2">
+                      Payment Due Date *{" "}
+                      <span className="text-red-600">
+                        (MANDATORY for outstanding balance)
+                      </span>
+                    </label>
+                    <input
+                      type="date"
+                      value={newSale.dueDate}
+                      onChange={(e) =>
+                        setNewSale({
+                          ...newSale,
+                          dueDate: e.target.value,
+                        })
+                      }
+                      className="w-full p-3 border rounded-lg text-black"
+                      min={new Date().toISOString().split("T")[0]}
+                    />
+                  </div>
+                )}
+              </div>
 
               <div className="flex flex-col sm:flex-row gap-3 pt-6 border-t">
                 <button
@@ -1160,8 +1167,7 @@ const paymentMethods = [
           </div>
         </div>
       )}
-  
-      {/* Edit Sale Modal */}
+
       {editingSale && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50 overflow-y-auto">
           <div className="bg-white rounded-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto my-4">
@@ -1179,7 +1185,7 @@ const paymentMethods = [
 
             <div className="p-4 md:p-6 space-y-6">
               <div className="bg-gray-50 p-4 rounded-lg">
-                <h3 className="font-semibold mb-2 text-black">Sale Information</h3>
+                <h3 className="font-semibold mb-3 text-black">Sale Information</h3>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
                   <div>
                     <span className="text-black">Customer:</span>
@@ -1204,6 +1210,24 @@ const paymentMethods = [
                     </span>
                   </div>
                 </div>
+                
+                {editingSale.remainingAmount > 0 && (
+                  <div className="mt-4 p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
+                    <label className="block text-sm font-medium text-black mb-2">
+                      Payment Due Date {editingSale.remainingAmount > 0 && <span className="text-red-600">*</span>}
+                    </label>
+                    <input
+                      type="date"
+                      value={editingSale.dueDate || ""}
+                      onChange={(e) => setEditingSale({...editingSale, dueDate: e.target.value})}
+                      className="w-full p-2 border border-gray-300 rounded-lg text-black"
+                      min={new Date().toISOString().split('T')[0]}
+                    />
+                    {!editingSale.dueDate && editingSale.remainingAmount > 0 && (
+                      <p className="text-xs text-red-600 mt-1">Due date is required for outstanding balance</p>
+                    )}
+                  </div>
+                )}
               </div>
 
               <div>
@@ -1381,15 +1405,14 @@ const paymentMethods = [
         </div>
       )}
 
-      {/* Navigation Tabs */}
       <div className="bg-white rounded-xl shadow mb-6">
         <div className="flex overflow-x-auto">
           {[
             { key: "messaging", label: "SMS", icon: <MessageSquare size={16} />, count: 0 },
             { key: "overview", label: "All", count: sales.length },
-            { key: "paid", label: "Paid", count: sales.filter(s => s.status === "PAID").length },
-            { key: "partial", label: "Partial", count: sales.filter(s => s.status === "PARTIAL").length },
-            { key: "unpaid", label: "Unpaid", count: sales.filter(s => s.status === "UNPAID").length }
+            { key: "paid", label: "Paid", count: stats.paidCount },
+            { key: "partial", label: "Partial", count: stats.partialCount },
+            { key: "unpaid", label: "Unpaid", count: stats.unpaidCount }
           ].map((tab) => (
             <button
               key={tab.key}
@@ -1420,9 +1443,8 @@ const paymentMethods = [
 
         {activeTab !== "messaging" && (
           <div className="p-4 md:p-6">
-            {/* Mobile Card View */}
             <div className="block lg:hidden space-y-4">
-              {getFilteredSales().map((sale) => (
+              {filteredSales.map((sale) => (
                 <div key={sale.id} className="bg-white border rounded-lg p-4 shadow-sm">
                   <div className="flex justify-between items-start mb-3">
                     <div>
@@ -1475,7 +1497,6 @@ const paymentMethods = [
                   </div>
 
                   <div className="flex flex-wrap gap-2">
-                    {/* Message Type Selector for Mobile */}
                     <select
                       value={selectedMessageType}
                       onChange={(e) => setSelectedMessageType(e.target.value)}
@@ -1491,7 +1512,8 @@ const paymentMethods = [
                     <button
                       onClick={() => {
                         if (!sale.customer?.phone) {
-                          alert("Customer phone number required");
+                          setError("Customer phone number required");
+                          setTimeout(() => setError(null), 3000);
                           return;
                         }
 
@@ -1507,7 +1529,8 @@ const paymentMethods = [
                           window.open(`sms:${phone}?body=${message}`, "_blank");
                         }
                       }}
-                      className="flex-1 px-3 py-2 text-xs bg-blue-500 text-white rounded hover:bg-blue-600 flex items-center justify-center gap-1"
+                      disabled={!sale.customer?.phone}
+                      className="flex-1 px-3 py-2 text-xs bg-blue-500 text-white rounded hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-1"
                     >
                       <MessageSquare size={12} />
                       Manual
@@ -1549,14 +1572,13 @@ const paymentMethods = [
                   </div>
                 </div>
               ))}
-              {getFilteredSales().length === 0 && (
+              {filteredSales.length === 0 && (
                 <div className="text-center py-8 text-black">
                   No sales found for this category
                 </div>
               )}
             </div>
 
-            {/* Desktop Table View */}
             <div className="hidden lg:block overflow-x-auto">
               <table className="min-w-full border-collapse">
                 <thead>
@@ -1571,7 +1593,7 @@ const paymentMethods = [
                   </tr>
                 </thead>
                 <tbody>
-                  {getFilteredSales().map((sale) => (
+                  {filteredSales.map((sale) => (
                     <tr key={sale.id} className="border-b hover:bg-gray-50">
                       <td className="p-3">
                         <div className="max-w-xs">
@@ -1617,7 +1639,6 @@ const paymentMethods = [
                       <td className="p-3 text-black">{new Date(sale.date).toLocaleDateString()}</td>
                       <td className="p-3">
                         <div className="flex flex-wrap gap-2">
-                          {/* Message Type Selector */}
                           <select
                             value={selectedMessageType}
                             onChange={(e) => setSelectedMessageType(e.target.value)}
@@ -1633,7 +1654,8 @@ const paymentMethods = [
                           <button
                             onClick={() => {
                               if (!sale.customer?.phone) {
-                                alert("Customer phone number required");
+                                setError("Customer phone number required");
+                                setTimeout(() => setError(null), 3000);
                                 return;
                               }
 
@@ -1649,8 +1671,9 @@ const paymentMethods = [
                                 window.open(`sms:${phone}?body=${message}`, "_blank");
                               }
                             }}
-                            className="px-3 py-1 text-sm bg-blue-500 text-white rounded hover:bg-blue-600 flex items-center gap-1 mb-2"
-                            title="Open WhatsApp or SMS to send manually"
+                            disabled={!sale.customer?.phone}
+                            className="px-3 py-1 text-sm bg-blue-500 text-white rounded hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1 mb-2"
+                            title={!sale.customer?.phone ? "Customer phone number required" : "Open WhatsApp or SMS to send manually"}
                           >
                             <MessageSquare size={14} />
                             Manual Message
@@ -1697,7 +1720,7 @@ const paymentMethods = [
                       </td>
                     </tr>
                   ))}
-                  {getFilteredSales().length === 0 && (
+                  {filteredSales.length === 0 && (
                     <tr>
                       <td colSpan={7} className="p-8 text-center text-black">
                         No sales found for this category

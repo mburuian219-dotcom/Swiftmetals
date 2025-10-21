@@ -87,30 +87,46 @@ export default function AdminDashboard() {
     setIsLoading(true);
     try {
       // Parallel fetch for better performance
-      const [ordersRes, productsRes] = await Promise.all([
+      const [ordersRes, productsRes, salesRes] = await Promise.all([
         fetch("/api/orders"),
-        fetch("/api/products")
+        fetch("/api/products"),
+        fetch("/api/sales")
       ]);
 
-      const [ordersText, productsText] = await Promise.all([
+      const [ordersText, productsText, salesText] = await Promise.all([
         ordersRes.text(),
-        productsRes.text()
+        productsRes.text(),
+        salesRes.text()
       ]);
 
       const orders = ordersText ? JSON.parse(ordersText) : [];
       const products = productsText ? JSON.parse(productsText) : [];
+      const sales = salesText ? JSON.parse(salesText) : [];
 
       const today = new Date();
       today.setHours(0, 0, 0, 0);
 
-      // Optimized calculations
-      const todayRevenue = orders
-        .filter((o: any) => {
-          const orderDate = new Date(o.createdAt);
-          orderDate.setHours(0, 0, 0, 0);
-          return orderDate.getTime() === today.getTime();
+      // Optimized calculations - check multiple date fields and amount fields
+      console.log("Total sales records:", sales.length);
+      console.log("Sample sale:", sales[0]); // Debug: see the structure
+      
+      const todayRevenue = sales
+        .filter((s: any) => {
+          // Try multiple possible date fields
+          const dateStr = s.createdAt || s.saleDate || s.date || s.created_at;
+          if (!dateStr) return false;
+          
+          const saleDate = new Date(dateStr);
+          saleDate.setHours(0, 0, 0, 0);
+          return saleDate.getTime() === today.getTime();
         })
-        .reduce((sum: number, o: any) => sum + (o.amount || 0), 0);
+        .reduce((sum: number, s: any) => {
+          // Try multiple possible amount fields
+          const amount = s.totalAmount || s.total || s.amount || s.total_amount || 0;
+          return sum + amount;
+        }, 0);
+      
+      console.log("Today's revenue calculated:", todayRevenue);
 
       const activeOrders = orders.filter(
         (o: any) => o.status === "PENDING"

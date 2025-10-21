@@ -99,8 +99,12 @@ export default function ProductsPage() {
   }, [products]);
 
   // Filter products based on search and category
+  // Filter products based on search and category
   const filteredProducts = useMemo(() => {
     return products.filter((p) => {
+      // Safety check for undefined name
+      if (!p.name) return false;
+      
       const matchesSearch =
         p.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
         p.description?.toLowerCase().includes(searchQuery.toLowerCase());
