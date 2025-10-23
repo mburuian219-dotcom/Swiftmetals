@@ -48,6 +48,7 @@ export default function BalanceSheetSection({ balanceSheet, onDownload }: Balanc
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
+        {/* ASSETS */}
         <div className="bg-gradient-to-br from-blue-50 to-indigo-50 rounded-xl p-4 sm:p-6 border-2 border-blue-200">
           <h4 className="text-lg sm:text-xl font-bold text-black mb-4 flex items-center gap-2">
             <TrendingUp className="w-5 h-5 sm:w-6 sm:h-6 text-blue-600" />
@@ -60,15 +61,21 @@ export default function BalanceSheetSection({ balanceSheet, onDownload }: Balanc
               <div className="space-y-2">
                 <div className="flex justify-between items-center text-xs sm:text-sm">
                   <span className="text-black">Cash</span>
-                  <span className="font-bold break-all">{Number(balanceSheet.assets.currentAssets.cash || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}</span>
+                  <span className="font-bold text-black break-all">
+                    {Number(balanceSheet.assets.currentAssets.cash || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                  </span>
                 </div>
                 <div className="flex justify-between items-center text-xs sm:text-sm">
                   <span className="text-black">A/R</span>
-                  <span className="font-bold break-all">{Number(balanceSheet.assets.currentAssets.accountsReceivable || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}</span>
+                  <span className="font-bold text-black break-all">
+                    {Number(balanceSheet.assets.currentAssets.accountsReceivable || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                  </span>
                 </div>
                 <div className="flex justify-between items-center text-xs sm:text-sm">
                   <span className="text-black">Inventory</span>
-                  <span className="font-bold break-all">{Number(balanceSheet.assets.currentAssets.inventory || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}</span>
+                  <span className="font-bold text-black break-all">
+                    {Number(balanceSheet.assets.currentAssets.inventory || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                  </span>
                 </div>
                 <div className="h-px bg-gray-300 my-2"></div>
                 <div className="flex justify-between items-center text-xs sm:text-sm">
@@ -91,6 +98,7 @@ export default function BalanceSheetSection({ balanceSheet, onDownload }: Balanc
           </div>
         </div>
 
+        {/* LIABILITIES */}
         <div className="space-y-4 sm:space-y-6">
           <div className="bg-gradient-to-br from-red-50 to-orange-50 rounded-xl p-4 sm:p-6 border-2 border-red-200">
             <h4 className="text-lg sm:text-xl font-bold text-black mb-4 flex items-center gap-2">
@@ -104,7 +112,7 @@ export default function BalanceSheetSection({ balanceSheet, onDownload }: Balanc
                 <div className="space-y-2">
                   <div className="flex justify-between items-center text-xs sm:text-sm">
                     <span className="text-black">A/P</span>
-                    <span className="font-bold break-all">
+                    <span className="font-bold text-black break-all">
                       {Number(balanceSheet.liabilities.currentLiabilities.accountsPayable || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}
                     </span>
                   </div>
@@ -129,6 +137,7 @@ export default function BalanceSheetSection({ balanceSheet, onDownload }: Balanc
             </div>
           </div>
 
+          {/* EQUITY */}
           <div className="bg-gradient-to-br from-green-50 to-emerald-50 rounded-xl p-4 sm:p-6 border-2 border-green-200">
             <h4 className="text-lg sm:text-xl font-bold text-black mb-4 flex items-center gap-2">
               <DollarSign className="w-5 h-5 sm:w-6 sm:h-6 text-green-600" />
@@ -140,7 +149,7 @@ export default function BalanceSheetSection({ balanceSheet, onDownload }: Balanc
                 <div className="space-y-2">
                   <div className="flex justify-between items-center text-xs sm:text-sm">
                     <span className="text-black">Capital</span>
-                    <span className="font-bold break-all">
+                    <span className="font-bold text-black break-all">
                       {Number(balanceSheet.equity.capital || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}
                     </span>
                   </div>
@@ -173,17 +182,14 @@ export default function BalanceSheetSection({ balanceSheet, onDownload }: Balanc
         </div>
       </div>
 
+      {/* BALANCE CHECK */}
       <div className="mt-6 p-4 bg-gray-50 rounded-lg border border-gray-300">
         <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2">
           <span className="font-semibold text-black text-sm">Balance Check: Assets = Liabilities + Equity</span>
           {Math.abs(balanceSheet.assets.totalAssets - (balanceSheet.liabilities.totalLiabilities + balanceSheet.equity.totalEquity)) < 0.01 ? (
-            <span className="flex items-center gap-2 text-green-600 font-semibold text-sm">
-              ✓ Balanced
-            </span>
+            <span className="flex items-center gap-2 text-green-600 font-semibold text-sm">✓ Balanced</span>
           ) : (
-            <span className="flex items-center gap-2 text-red-600 font-semibold text-sm">
-              ✗ Not Balanced
-            </span>
+            <span className="flex items-center gap-2 text-red-600 font-semibold text-sm">✗ Not Balanced</span>
           )}
         </div>
       </div>

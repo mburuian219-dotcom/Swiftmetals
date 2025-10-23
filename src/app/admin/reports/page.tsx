@@ -87,9 +87,9 @@ export default function AccountingSystem() {
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
   const [balanceSheet, setBalanceSheet] = useState<BalanceSheet | null>(null);
-  const [openingCash, setOpeningCash] = useState(50000);
+  const [openingCash, setOpeningCash] = useState(0);
   const [isEditingOpeningCash, setIsEditingOpeningCash] = useState(false);
-  const [tempOpeningCash, setTempOpeningCash] = useState(50000);
+  const [tempOpeningCash, setTempOpeningCash] = useState(0);
   const [rawData, setRawData] = useState<any>(null);
   const [showAddCreditor, setShowAddCreditor] = useState(false);
   const [newCreditor, setNewCreditor] = useState({ name: "", balance: 0 });
@@ -107,8 +107,28 @@ export default function AccountingSystem() {
   });
 
   useEffect(() => {
+    loadOpeningCash();
     fetchAllData();
   }, []);
+
+  const loadOpeningCash = () => {
+    try {
+      const savedValue = localStorage.getItem('opening_cash_balance');
+      if (savedValue) {
+        const savedAmount = Number(savedValue);
+        setOpeningCash(savedAmount);
+        setTempOpeningCash(savedAmount);
+      } else {
+        // Default value if nothing is stored
+        setOpeningCash(50000);
+        setTempOpeningCash(50000);
+      }
+    } catch (error) {
+      console.log('No opening cash balance found, using default');
+      setOpeningCash(50000);
+      setTempOpeningCash(50000);
+    }
+  };
 
   useEffect(() => {
     if (rawData) {
@@ -150,10 +170,9 @@ export default function AccountingSystem() {
       ]);
 
       const salesData = Array.isArray(sales) ? sales : sales?.data || [];
-      // ✅ Replace your expensesData assignment with this:
-const expensesData = Array.isArray(expenses?.expenses)
-  ? expenses.expenses
-  : [];
+      const expensesData = Array.isArray(expenses?.expenses)
+        ? expenses.expenses
+        : [];
 
       const stockData = Array.isArray(stock) ? stock : stock?.data || [];
       const customersData = Array.isArray(customers) ? customers : customers?.data || [];
@@ -545,8 +564,16 @@ const expensesData = Array.isArray(expenses?.expenses)
       alert("Please enter a valid positive number");
       return;
     }
-    setOpeningCash(newAmount);
-    setIsEditingOpeningCash(false);
+    
+    try {
+      localStorage.setItem('opening_cash_balance', String(newAmount));
+      setOpeningCash(newAmount);
+      setIsEditingOpeningCash(false);
+      alert("Opening cash balance saved successfully!");
+    } catch (error) {
+      console.error('Failed to save opening cash balance:', error);
+      alert("Failed to save opening cash balance. Please try again.");
+    }
   };
 
   const generateReceipt = (debtor: Debtor, sale: any) => {
@@ -908,26 +935,26 @@ const expensesData = Array.isArray(expenses?.expenses)
                     </div>
                   </div>
 
-                 <div className="bg-gradient-to-br from-blue-50 to-indigo-50 rounded-xl p-4 sm:p-6 border border-blue-200">
-  <h3 className="text-lg sm:text-xl font-bold text-black mb-4">Balance Sheet Summary</h3>
-  <div className="space-y-3">
-    <div>
-      <p className="text-sm text-black mb-2">Assets</p>
-      <div className="space-y-1 text-xs sm:text-sm text-black">
-        <div className="flex justify-between">
-          <span>Cash</span>
-          <span className="font-semibold break-all">KES {Number(stats.cashBalance || 0).toLocaleString()}</span>
-        </div>
-        <div className="flex justify-between">
-          <span>Inventory</span>
-          <span className="font-semibold break-all">KES {Number(stats.inventoryValue || 0).toLocaleString()}</span>
-        </div>
-        <div className="flex justify-between">
-          <span>Receivables</span>
-          <span className="font-semibold break-all">KES {Number(stats.totalDebtors || 0).toLocaleString()}</span>
-        </div>
-      </div>
-    </div>
+                  <div className="bg-gradient-to-br from-blue-50 to-indigo-50 rounded-xl p-4 sm:p-6 border border-blue-200">
+                    <h3 className="text-lg sm:text-xl font-bold text-black mb-4">Balance Sheet Summary</h3>
+                    <div className="space-y-3">
+                      <div>
+                        <p className="text-sm text-black mb-2">Assets</p>
+                        <div className="space-y-1 text-xs sm:text-sm text-black">
+                          <div className="flex justify-between">
+                            <span>Cash</span>
+                            <span className="font-semibold break-all">KES {Number(stats.cashBalance || 0).toLocaleString()}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span>Inventory</span>
+                            <span className="font-semibold break-all">KES {Number(stats.inventoryValue || 0).toLocaleString()}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span>Receivables</span>
+                            <span className="font-semibold break-all">KES {Number(stats.totalDebtors || 0).toLocaleString()}</span>
+                          </div>
+                        </div>
+                      </div>
                       <div className="h-px bg-gray-300"></div>
                       <div className="flex justify-between items-center">
                         <span className="font-bold text-gray-800 text-sm sm:text-base">Total Assets</span>
@@ -958,12 +985,11 @@ const expensesData = Array.isArray(expenses?.expenses)
             )}
 
             {activeTab === "creditors" && (
-              <CreditorsSection              
-              />
+              <CreditorsSection />
             )}
 
             {activeTab === "debtors" && (
-              <DebtorsSection/>
+              <DebtorsSection />
             )}
 
             {activeTab === "inventory" && (
