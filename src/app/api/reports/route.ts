@@ -6,8 +6,8 @@ export async function GET() {
   try {
     console.log("Starting financial report generation...");
     
-    // Fetch all required data including creditors and restocks
-    const [sales, expenses, stock, customers, creditors, restocks] = await Promise.all([
+    // Fetch all required data including creditors, restocks, and opening balance
+    const [sales, expenses, stock, customers, creditors, restocks, openingBalanceRecord] = await Promise.all([
       prisma.sale.findMany({
         include: {
           customer: true,
@@ -68,6 +68,10 @@ export async function GET() {
         },
         orderBy: { createdAt: "asc" },
       }),
+      // Fetch the most recent opening balance
+      prisma.openingbalance.findFirst({
+        orderBy: { date: "desc" },
+      }),
     ]);
 
     console.log(`Fetched: ${sales.length} sales, ${expenses.length} expenses, ${stock.length} stock items, ${creditors.length} creditors, ${restocks.length} restocks`);
@@ -78,7 +82,13 @@ export async function GET() {
     // ========================================
     // CALCULATIONS
     // ========================================
-    const openingCash = 50000;
+    // Use opening balance from database, or default to 0 if not set
+    const openingCash = openingBalanceRecord ? Number(openingBalanceRecord.amount) : 0;
+    const openingBalanceDate = openingBalanceRecord ? new Date(openingBalanceRecord.date) : new Date(new Date().setMonth(new Date().getMonth() - 6));
+    const openingBalanceDescription = openingBalanceRecord?.description || "Opening Balance - Business Capital";
+    
+    console.log(`Opening Balance: ${openingCash} (Date: ${openingBalanceDate.toLocaleDateString()})`);
+    
     let cashBalance = openingCash;
     const cashTransactions: any[] = [];
     const debtorMap = new Map<number, any>();
@@ -88,8 +98,8 @@ export async function GET() {
 
     // Opening balance
     cashTransactions.push({
-      date: new Date(new Date().setMonth(new Date().getMonth() - 6)),
-      description: "Opening Balance - Business Capital",
+      date: openingBalanceDate,
+      description: openingBalanceDescription,
       category: "Capital",
       accounts: "Cash (+) | Capital (+)",
       amount: openingCash,

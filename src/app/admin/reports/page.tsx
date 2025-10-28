@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 import { TrendingUp, Wallet, CreditCard, Users, Package, DollarSign, Download, BookOpen, Search, X, Edit2, Check } from "lucide-react";
 
 // Import separated components
@@ -91,14 +91,16 @@ export default function AccountingSystem() {
   const [isEditingOpeningCash, setIsEditingOpeningCash] = useState(false);
   const [tempOpeningCash, setTempOpeningCash] = useState(0);
   const [rawData, setRawData] = useState<any>(null);
-  const [showAddCreditor, setShowAddCreditor] = useState(false);
-  const [newCreditor, setNewCreditor] = useState({ name: "", balance: 0 });
+  const [selectedInventoryItem, setSelectedInventoryItem] = useState<InventoryItem | null>(null);
+  const [inventoryHistory, setInventoryHistory] = useState<any[]>([]);
+  const [loadingHistory, setLoadingHistory] = useState(false);
 
   const [stats, setStats] = useState({
     cashBalance: 0,
     totalCreditors: 0,
     totalDebtors: 0,
     inventoryValue: 0,
+    estimatedInventoryValue: 0,
     salesRevenue: 0,
     totalExpenses: 0,
     netIncome: 0,
@@ -111,20 +113,26 @@ export default function AccountingSystem() {
     fetchAllData();
   }, []);
 
-  const loadOpeningCash = () => {
+  const loadOpeningCash = async () => {
     try {
-      const savedValue = localStorage.getItem('opening_cash_balance');
-      if (savedValue) {
-        const savedAmount = Number(savedValue);
-        setOpeningCash(savedAmount);
-        setTempOpeningCash(savedAmount);
+      const res = await fetch("/api/opening-balance");
+      if (!res.ok) {
+        console.error(`Failed to fetch opening balance - Status: ${res.status}`);
+        setOpeningCash(50000);
+        setTempOpeningCash(50000);
+        return;
+      }
+      const data = await res.json();
+      const amount = Number(data?.amount || data?.balance || 0);
+      if (amount > 0) {
+        setOpeningCash(amount);
+        setTempOpeningCash(amount);
       } else {
-        // Default value if nothing is stored
         setOpeningCash(50000);
         setTempOpeningCash(50000);
       }
     } catch (error) {
-      console.log('No opening cash balance found, using default');
+      console.error('Error fetching opening balance:', error);
       setOpeningCash(50000);
       setTempOpeningCash(50000);
     }
@@ -228,6 +236,7 @@ export default function AccountingSystem() {
       affectedAccounts: "Cash (+) | Capital (+)",
     });
 
+    // Process creditors
     creditorsArray.forEach((creditor: any) => {
       const creditorId = String(creditor?.id || creditor?.name || Math.random());
       const totalOwed = Number(creditor?.totalOwed || 0);
@@ -278,48 +287,17 @@ export default function AccountingSystem() {
       }
     });
 
-    console.log("=== COGS DEBUG INFO ===");
-    console.log("Total Sales:", salesArray.length);
-    console.log("Total Stock Items:", stockArray.length);
-    
-    if (salesArray.length > 0) {
-      console.log("Sample Sale:", {
-        id: salesArray[0]?.id,
-        amount: salesArray[0]?.amount,
-        saleitemCount: salesArray[0]?.saleitem?.length
-      });
-      if (salesArray[0]?.saleitem?.[0]) {
-        console.log("Sample Saleitem:", {
-          productId: salesArray[0].saleitem[0]?.productId,
-          quantity: salesArray[0].saleitem[0]?.quantity,
-          price: salesArray[0].saleitem[0]?.price,
-          productName: salesArray[0].saleitem[0]?.product?.name
-        });
-      }
-    }
-    
-    if (stockArray.length > 0) {
-      console.log("Sample Stock:", {
-        id: stockArray[0]?.id,
-        productId: stockArray[0]?.productId,
-        name: stockArray[0]?.name,
-        costPrice: stockArray[0]?.costPrice,
-        quantity: stockArray[0]?.quantity
-      });
-    }
-
+    // Build product cost map for COGS calculation
     const productCostMap = new Map<number, number>();
     stockArray.forEach((stock: any) => {
-      const prodId = Number(stock?.productId || 0);
+      const prodId = Number(stock?.productId || stock?.id || 0);
       const costPrice = Number(stock?.costPrice || 0);
       if (prodId > 0 && costPrice > 0) {
         productCostMap.set(prodId, costPrice);
       }
     });
-    
-    console.log("Product Cost Map size:", productCostMap.size);
-    console.log("Product Cost Map:", Array.from(productCostMap.entries()).slice(0, 5));
 
+    // Process sales
     salesArray.forEach((sale: any) => {
       const saleAmount = Number(sale?.amount || 0);
       totalSalesRevenue += saleAmount;
@@ -338,18 +316,10 @@ export default function AccountingSystem() {
           
           const itemCost = quantity * costPrice;
           saleCOGS += itemCost;
-          
-          if (quantity > 0 && costPrice === 0) {
-            console.warn(`⚠️ No cost price for Product ID ${productId} in Sale #${sale?.id}`);
-          }
         });
       }
       
       totalCostOfGoodsSold += saleCOGS;
-      
-      if (saleCOGS > 0) {
-        console.log(`✅ Sale #${sale?.id}: Revenue=${saleAmount}, COGS=${saleCOGS}, GP=${saleAmount - saleCOGS}`);
-      }
 
       const itemsList = sale?.saleitem?.map((item: any) => 
         `${item?.product?.name || "Product"} (${item?.quantity || 0})`
@@ -436,8 +406,7 @@ export default function AccountingSystem() {
       }
     });
 
-    console.log("=== FINAL COGS: KES", totalCostOfGoodsSold, "===");
-
+    // Process expenses
     expensesArray.forEach((expense: any) => {
       const expAmount = Number(expense?.amount || 0);
       totalExpenses += expAmount;
@@ -456,6 +425,7 @@ export default function AccountingSystem() {
       });
     });
 
+    // Sort and recalculate running balances
     cashTxns.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
 
     let runningBal = 0;
@@ -468,21 +438,33 @@ export default function AccountingSystem() {
       txn.runningBalance = runningBal;
     });
 
-    const invItems: InventoryItem[] = stockArray.map((item: any) => ({
-      id: item?.id || 0,
-      name: item?.name || "Item",
-      quantity: Number(item?.quantity || 0),
-      costPrice: Number(item?.costPrice || 0),
-      sellingPrice: Number(item?.sellingPrice || 0),
-      totalValue: Number(item?.quantity || 0) * Number(item?.costPrice || 0),
-      supplier: item?.supplier || "",
-      dateAdded: item?.createdAt || new Date().toISOString(),
-    }));
+    // Process inventory - CORRECTED CALCULATION
+    const invItems: InventoryItem[] = stockArray.map((item: any) => {
+      const quantity = Number(item?.quantity || 0);
+      const costPrice = Number(item?.costPrice || 0);
+      const sellingPrice = Number(item?.sellingPrice || 0);
+      
+      return {
+        id: item?.id || 0,
+        name: item?.name || "Item",
+        quantity,
+        costPrice,
+        sellingPrice,
+        totalValue: quantity * costPrice, // This is the cost value
+        supplier: item?.supplier || "",
+        dateAdded: item?.createdAt || new Date().toISOString(),
+      };
+    });
 
-    totalInventoryValue = invItems.reduce((sum, item) => sum + (item.totalValue || 0), 0);
-    const totalCreditorBalance = Array.from(creditorMap.values()).reduce((sum, c) => sum + (c.balance || 0), 0);
-    const totalDebtorBalance = Array.from(debtorMap.values()).reduce((sum, d) => sum + (d.balance || 0), 0);
+    // Calculate inventory values correctly
+    totalInventoryValue = invItems.reduce((sum, item) => sum + item.totalValue, 0); // Total cost
+    const estimatedInventoryValue = invItems.reduce((sum, item) => {
+      return sum + (item.quantity * item.sellingPrice); // Total potential revenue at selling price
+    }, 0);
 
+    const totalCreditorBalance = Array.from(creditorMap.values()).reduce((sum, c) => sum + c.balance, 0);
+    const totalDebtorBalance = Array.from(debtorMap.values()).reduce((sum, d) => sum + d.balance, 0);
+    
     const totalAssets = runningBal + totalInventoryValue + totalDebtorBalance;
     const totalLiabilities = totalCreditorBalance;
     const capital = openingCash;
@@ -526,6 +508,7 @@ export default function AccountingSystem() {
       totalCreditors: totalCreditorBalance,
       totalDebtors: totalDebtorBalance,
       inventoryValue: totalInventoryValue,
+      estimatedInventoryValue,
       salesRevenue: totalSalesRevenue,
       totalExpenses,
       netIncome,
@@ -534,31 +517,7 @@ export default function AccountingSystem() {
     });
   };
 
-  const handleAddCreditor = () => {
-    if (!newCreditor.name.trim()) return alert("Enter a creditor name");
-
-    const newEntry: Creditor = {
-      id: Date.now(),
-      name: newCreditor.name,
-      balance: newCreditor.balance,
-      totalOwed: newCreditor.balance,
-      paid: 0,
-      purchases: [],
-      payments: [],
-    };
-
-    setCreditors((prev) => [...prev, newEntry]);
-    setShowAddCreditor(false);
-    setNewCreditor({ name: "", balance: 0 });
-  };
-
-  const handleDeleteCreditor = (id: string | number) => {
-    if (confirm("Are you sure you want to delete this creditor?")) {
-      setCreditors((prev) => prev.filter((c) => c.id !== id));
-    }
-  };
-
-  const handleSaveOpeningCash = () => {
+  const handleSaveOpeningCash = async () => {
     const newAmount = Number(tempOpeningCash);
     if (isNaN(newAmount) || newAmount < 0) {
       alert("Please enter a valid positive number");
@@ -566,7 +525,16 @@ export default function AccountingSystem() {
     }
     
     try {
-      localStorage.setItem('opening_cash_balance', String(newAmount));
+      const res = await fetch("/api/opening-balance", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ amount: newAmount }),
+      });
+      
+      if (!res.ok) {
+        throw new Error(`Failed to save: ${res.status}`);
+      }
+      
       setOpeningCash(newAmount);
       setIsEditingOpeningCash(false);
       alert("Opening cash balance saved successfully!");
@@ -643,9 +611,9 @@ export default function AccountingSystem() {
 
   const downloadInventoryReport = () => {
     const csvContent = [
-      ["Item Name", "Supplier", "Quantity", "Cost Price", "Selling Price", "Total Value", "Markup %", "Date Added"],
+      ["Item Name", "Supplier", "Quantity", "Cost Price", "Selling Price", "Total Cost Value", "Total Selling Value", "Markup %", "Date Added"],
       ...inventory.map(item => {
-        const markup = Number(item.sellingPrice || 0) > 0 
+        const markup = Number(item.sellingPrice || 0) > 0 && Number(item.costPrice || 0) > 0
           ? ((Number(item.sellingPrice || 0) - Number(item.costPrice || 0)) / Number(item.costPrice || 0) * 100).toFixed(1)
           : "0.0";
         return [
@@ -655,6 +623,7 @@ export default function AccountingSystem() {
           Number(item.costPrice || 0).toFixed(2),
           Number(item.sellingPrice || 0).toFixed(2),
           Number(item.totalValue || 0).toFixed(2),
+          (item.quantity * item.sellingPrice).toFixed(2),
           markup,
           new Date(item.dateAdded).toLocaleDateString()
         ];
@@ -666,6 +635,61 @@ export default function AccountingSystem() {
     const a = document.createElement("a");
     a.href = url;
     a.download = `inventory-report-${new Date().toISOString().split('T')[0]}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  const fetchInventoryHistory = async (productId: number) => {
+    setLoadingHistory(true);
+    try {
+      const res = await fetch(`/api/restock?productId=${productId}`);
+      if (!res.ok) {
+        console.error(`Failed to fetch restock history - Status: ${res.status}`);
+        setInventoryHistory([]);
+        return;
+      }
+      const data = await res.json();
+      const historyData = Array.isArray(data) ? data : data?.data || [];
+      setInventoryHistory(historyData);
+    } catch (error) {
+      console.error('Error fetching restock history:', error);
+      setInventoryHistory([]);
+    } finally {
+      setLoadingHistory(false);
+    }
+  };
+
+  const handleViewItemDetails = (item: InventoryItem) => {
+    setSelectedInventoryItem(item);
+    fetchInventoryHistory(item.id);
+  };
+
+  const downloadItemHistory = (item: InventoryItem) => {
+    const csvContent = [
+      ["Item History Report"],
+      [`Item: ${item.name}`],
+      [`Current Quantity: ${item.quantity}`],
+      [`Cost Price: KES ${Number(item.costPrice || 0).toFixed(2)}`],
+      [`Selling Price: KES ${Number(item.sellingPrice || 0).toFixed(2)}`],
+      [""],
+      ["Restock History"],
+      ["Date", "Quantity Added", "Cost Price", "Supplier/Notes", "Added By"],
+      ...inventoryHistory.map(record => [
+        new Date(record?.createdAt || record?.date).toLocaleDateString(),
+        record?.quantity || 0,
+        Number(record?.costPrice || 0).toFixed(2),
+        record?.supplier || record?.notes || "N/A",
+        record?.addedBy || "System"
+      ])
+    ].map(row => Array.isArray(row) ? row.map(cell => `"${cell}"`).join(",") : `"${row}"`).join("\n");
+
+    const blob = new Blob([csvContent], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${item.name.replace(/[^a-z0-9]/gi, '-')}-history-${new Date().toISOString().split('T')[0]}.csv`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -714,23 +738,32 @@ export default function AccountingSystem() {
     URL.revokeObjectURL(url);
   };
 
-  const filteredCashTxns = cashTransactions.filter(txn =>
-    txn.description.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    txn.category.toLowerCase().includes(searchTerm.toLowerCase())
+  // Memoized filtered data for better performance
+  const filteredCashTxns = useMemo(() => 
+    cashTransactions.filter(txn =>
+      txn.description.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      txn.category.toLowerCase().includes(searchTerm.toLowerCase())
+    ), [cashTransactions, searchTerm]
   );
 
-  const filteredCreditors = creditors.filter(c =>
-    c.name.toLowerCase().includes(searchTerm.toLowerCase())
+  const filteredCreditors = useMemo(() =>
+    creditors.filter(c =>
+      c.name.toLowerCase().includes(searchTerm.toLowerCase())
+    ), [creditors, searchTerm]
   );
 
-  const filteredDebtors = debtors.filter(d =>
-    d.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    d.email.toLowerCase().includes(searchTerm.toLowerCase())
+  const filteredDebtors = useMemo(() =>
+    debtors.filter(d =>
+      d.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      d.email.toLowerCase().includes(searchTerm.toLowerCase())
+    ), [debtors, searchTerm]
   );
 
-  const filteredInventory = inventory.filter(i =>
-    i.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    i.supplier?.toLowerCase().includes(searchTerm.toLowerCase())
+  const filteredInventory = useMemo(() =>
+    inventory.filter(i =>
+      i.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      i.supplier?.toLowerCase().includes(searchTerm.toLowerCase())
+    ), [inventory, searchTerm]
   );
 
   if (loading) {
@@ -1001,20 +1034,31 @@ export default function AccountingSystem() {
                     className="bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 px-3 sm:px-4 rounded-lg transition-all flex items-center gap-2 text-sm whitespace-nowrap"
                   >
                     <Download className="w-4 h-4" />
-                    Download CSV
+                    Download Full Inventory
                   </button>
                 </div>
-                <div className="mb-4 bg-blue-50 rounded-lg p-4 border border-blue-200">
-                  <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-3">
+                <div className="mb-4 bg-gradient-to-r from-green-50 to-emerald-50 rounded-lg p-4 border border-green-200">
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                     <div>
-                      <p className="text-xs sm:text-sm text-gray-600">Total Inventory Value</p>
+                      <p className="text-xs sm:text-sm text-gray-600 mb-1">Potential Revenue (at selling price)</p>
+                      <p className="text-xl sm:text-2xl font-bold text-green-600 break-all">
+                        KES {Number(stats.estimatedInventoryValue || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                      </p>
+                      <p className="text-xs text-gray-500 mt-1">If all inventory sold</p>
+                    </div>
+                    <div>
+                      <p className="text-xs sm:text-sm text-gray-600 mb-1">Inventory Cost Value</p>
                       <p className="text-xl sm:text-2xl font-bold text-blue-600 break-all">
                         KES {Number(stats.inventoryValue || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}
                       </p>
+                      <p className="text-xs text-gray-500 mt-1">Total cost invested</p>
                     </div>
                     <div className="text-left sm:text-right">
-                      <p className="text-xs sm:text-sm text-gray-600">Total Items</p>
-                      <p className="text-xl sm:text-2xl font-bold text-gray-900">{inventory.length}</p>
+                      <p className="text-xs sm:text-sm text-gray-600 mb-1">Potential Profit</p>
+                      <p className="text-xl sm:text-2xl font-bold text-purple-600 break-all">
+                        KES {(Number(stats.estimatedInventoryValue || 0) - Number(stats.inventoryValue || 0)).toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                      </p>
+                      <p className="text-xs text-gray-500 mt-1">{inventory.length} items in stock</p>
                     </div>
                   </div>
                 </div>
@@ -1031,11 +1075,12 @@ export default function AccountingSystem() {
                           <th className="text-right p-2 sm:p-3 text-xs sm:text-sm font-semibold text-gray-700 hidden sm:table-cell">Selling Price</th>
                           <th className="text-right p-2 sm:p-3 text-xs sm:text-sm font-semibold text-gray-700">Total Value</th>
                           <th className="text-right p-2 sm:p-3 text-xs sm:text-sm font-semibold text-gray-700 hidden md:table-cell">Markup</th>
+                          <th className="text-center p-2 sm:p-3 text-xs sm:text-sm font-semibold text-gray-700">Actions</th>
                         </tr>
                       </thead>
                       <tbody>
                         {filteredInventory.map((item, idx) => {
-                          const markup = Number(item.sellingPrice || 0) > 0 
+                          const markup = Number(item.sellingPrice || 0) > 0 && Number(item.costPrice || 0) > 0
                             ? ((Number(item.sellingPrice || 0) - Number(item.costPrice || 0)) / Number(item.costPrice || 0) * 100)
                             : 0;
                           
@@ -1071,6 +1116,14 @@ export default function AccountingSystem() {
                                   {markup.toFixed(1)}%
                                 </span>
                               </td>
+                              <td className="p-2 sm:p-3 text-center">
+                                <button
+                                  onClick={() => handleViewItemDetails(item)}
+                                  className="bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-1 px-2 sm:px-3 rounded text-xs transition-all"
+                                >
+                                  View
+                                </button>
+                              </td>
                             </tr>
                           );
                         })}
@@ -1082,6 +1135,115 @@ export default function AccountingSystem() {
                   <div className="text-center py-12 text-gray-500">
                     <Package className="w-12 h-12 sm:w-16 sm:h-16 mx-auto mb-4 text-gray-300" />
                     <p className="text-sm sm:text-base">No inventory items found</p>
+                  </div>
+                )}
+
+                {selectedInventoryItem && (
+                  <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+                    <div className="bg-white rounded-xl shadow-2xl max-w-4xl w-full max-h-[90vh] overflow-y-auto">
+                      <div className="sticky top-0 bg-gradient-to-r from-indigo-600 to-purple-600 text-white p-4 sm:p-6 flex justify-between items-start">
+                        <div>
+                          <h2 className="text-xl sm:text-2xl font-bold mb-2">{selectedInventoryItem.name}</h2>
+                          <p className="text-sm opacity-90">Product ID: {selectedInventoryItem.id}</p>
+                        </div>
+                        <button
+                          onClick={() => {
+                            setSelectedInventoryItem(null);
+                            setInventoryHistory([]);
+                          }}
+                          className="text-white hover:bg-white hover:bg-opacity-20 rounded-lg p-2 transition-all"
+                        >
+                          <X className="w-6 h-6" />
+                        </button>
+                      </div>
+
+                      <div className="p-4 sm:p-6">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+                          <div className="bg-blue-50 rounded-lg p-4 border border-blue-200">
+                            <p className="text-xs text-gray-600 mb-1">Current Quantity</p>
+                            <p className="text-2xl font-bold text-blue-600">{selectedInventoryItem.quantity}</p>
+                          </div>
+                          <div className="bg-green-50 rounded-lg p-4 border border-green-200">
+                            <p className="text-xs text-gray-600 mb-1">Cost Price</p>
+                            <p className="text-xl font-bold text-green-600">
+                              KES {Number(selectedInventoryItem.costPrice || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                            </p>
+                          </div>
+                          <div className="bg-purple-50 rounded-lg p-4 border border-purple-200">
+                            <p className="text-xs text-gray-600 mb-1">Selling Price</p>
+                            <p className="text-xl font-bold text-purple-600">
+                              KES {Number(selectedInventoryItem.sellingPrice || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                            </p>
+                          </div>
+                          <div className="bg-amber-50 rounded-lg p-4 border border-amber-200">
+                            <p className="text-xs text-gray-600 mb-1">Total Cost Value</p>
+                            <p className="text-xl font-bold text-amber-600">
+                              KES {Number(selectedInventoryItem.totalValue || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="mb-4 flex justify-between items-center">
+                          <h3 className="text-lg sm:text-xl font-bold text-gray-800">Restock History</h3>
+                          <button
+                            onClick={() => downloadItemHistory(selectedInventoryItem)}
+                            className="bg-green-600 hover:bg-green-700 text-white font-semibold py-2 px-3 sm:px-4 rounded-lg transition-all flex items-center gap-2 text-sm"
+                          >
+                            <Download className="w-4 h-4" />
+                            Download Report
+                          </button>
+                        </div>
+
+                        {loadingHistory ? (
+                          <div className="text-center py-8">
+                            <div className="animate-spin rounded-full h-8 w-8 border-4 border-indigo-500 border-t-transparent mx-auto mb-2"></div>
+                            <p className="text-sm text-gray-600">Loading history...</p>
+                          </div>
+                        ) : inventoryHistory.length > 0 ? (
+                          <div className="overflow-x-auto">
+                            <table className="min-w-full">
+                              <thead className="bg-gray-50 border-b-2 border-gray-200">
+                                <tr>
+                                  <th className="text-left p-3 text-xs sm:text-sm font-semibold text-gray-700">Date</th>
+                                  <th className="text-right p-3 text-xs sm:text-sm font-semibold text-gray-700">Quantity Added</th>
+                                  <th className="text-right p-3 text-xs sm:text-sm font-semibold text-gray-700">Cost Price</th>
+                                  <th className="text-left p-3 text-xs sm:text-sm font-semibold text-gray-700 hidden sm:table-cell">Supplier/Notes</th>
+                                  <th className="text-left p-3 text-xs sm:text-sm font-semibold text-gray-700 hidden md:table-cell">Added By</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {inventoryHistory.map((record, idx) => (
+                                  <tr key={idx} className={`border-b hover:bg-gray-50 ${idx % 2 === 0 ? 'bg-white' : 'bg-gray-25'}`}>
+                                    <td className="p-3 text-xs sm:text-sm text-gray-900">
+                                      {new Date(record?.createdAt || record?.date).toLocaleString()}
+                                    </td>
+                                    <td className="p-3 text-right">
+                                      <span className="font-semibold text-green-600 text-xs sm:text-sm">
+                                        +{record?.quantity || 0}
+                                      </span>
+                                    </td>
+                                    <td className="p-3 text-right font-semibold text-gray-700 text-xs sm:text-sm">
+                                      KES {Number(record?.costPrice || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                                    </td>
+                                    <td className="p-3 text-xs sm:text-sm text-gray-600 hidden sm:table-cell">
+                                      {record?.supplier || record?.notes || "N/A"}
+                                    </td>
+                                    <td className="p-3 text-xs sm:text-sm text-gray-600 hidden md:table-cell">
+                                      {record?.addedBy || "System"}
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        ) : (
+                          <div className="text-center py-8 text-gray-500">
+                            <Package className="w-12 h-12 mx-auto mb-2 text-gray-300" />
+                            <p className="text-sm">No restock history found for this item</p>
+                          </div>
+                        )}
+                      </div>
+                    </div>
                   </div>
                 )}
               </div>

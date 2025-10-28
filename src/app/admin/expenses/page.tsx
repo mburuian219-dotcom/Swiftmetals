@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useRef } from "react";
 
 interface Expense {
   id: number;
@@ -21,11 +21,11 @@ const ExpensePage = () => {
     date: "",
   });
 
-  // 👇 Loading states
   const [isAdding, setIsAdding] = useState(false);
   const [isDeleting, setIsDeleting] = useState<number | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // ✅ Fetch expenses (works with both {expenses: []} and [])
+  // Fetch expenses
   useEffect(() => {
     fetch("/api/expenses")
       .then((res) => {
@@ -48,7 +48,7 @@ const ExpensePage = () => {
       });
   }, []);
 
-  // ✅ Add new expense with loading state
+  // Add new expense
   const handleAddExpense = async () => {
     if (!newExpense.title || !newExpense.amount) return;
 
@@ -63,7 +63,7 @@ const ExpensePage = () => {
 
       if (res.ok) {
         const data = await res.json();
-        const created = data.expense || data; // support both shapes
+        const created = data.expense || data;
         setExpenses([created, ...expenses]);
         setNewExpense({
           title: "",
@@ -82,7 +82,7 @@ const ExpensePage = () => {
     }
   };
 
-  // ✅ Delete expense with loading state
+  // Delete expense
   const handleDeleteExpense = async (id: number) => {
     setIsDeleting(id);
 
@@ -101,7 +101,115 @@ const ExpensePage = () => {
     }
   };
 
-  // ✅ Safe calculations
+  // Download expenses as CSV
+  const handleDownloadCSV = () => {
+    if (expenses.length === 0) {
+      alert("No expenses to download!");
+      return;
+    }
+
+    // Create CSV content
+    const headers = ["ID", "Title", "Amount", "Category", "Notes", "Date"];
+    const csvRows = [headers.join(",")];
+
+    expenses.forEach((exp) => {
+      const row = [
+        exp.id,
+        `"${(exp.title || "").replace(/"/g, '""')}"`,
+        exp.amount,
+        `"${(exp.category || "").replace(/"/g, '""')}"`,
+        `"${(exp.notes || "").replace(/"/g, '""')}"`,
+        exp.date,
+      ];
+      csvRows.push(row.join(","));
+    });
+
+    const csvContent = csvRows.join("\n");
+
+    // Create download link
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const link = document.createElement("a");
+    const url = URL.createObjectURL(blob);
+    
+    link.setAttribute("href", url);
+    link.setAttribute("download", `expenses_${new Date().toISOString().split('T')[0]}.csv`);
+    link.style.visibility = "hidden";
+    
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  // Upload and parse CSV
+  const handleUploadCSV = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = async (e) => {
+      const text = e.target?.result as string;
+      const lines = text.split("\n");
+      
+      // Skip header row
+      const dataLines = lines.slice(1).filter(line => line.trim());
+      
+      const parsedExpenses: Expense[] = [];
+      
+      for (const line of dataLines) {
+        // Simple CSV parsing (handles quoted fields)
+        const matches = line.match(/(".*?"|[^,]+)(?=\s*,|\s*$)/g);
+        if (!matches || matches.length < 6) continue;
+        
+        const [id, title, amount, category, notes, date] = matches.map(m => 
+          m.replace(/^"|"$/g, '').replace(/""/g, '"').trim()
+        );
+        
+        const expense: Expense = {
+          id: parseInt(id) || Date.now() + Math.random(),
+          title: title || "Untitled",
+          amount: parseFloat(amount) || 0,
+          category: category || "",
+          notes: notes || "",
+          date: date || new Date().toISOString().split('T')[0],
+        };
+        
+        parsedExpenses.push(expense);
+      }
+
+      if (parsedExpenses.length > 0) {
+        // Post each expense to the API
+        for (const expense of parsedExpenses) {
+          try {
+            await fetch("/api/expenses", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                title: expense.title,
+                amount: expense.amount.toString(),
+                category: expense.category,
+                notes: expense.notes,
+                date: expense.date,
+              }),
+            });
+          } catch (err) {
+            console.error("Error uploading expense:", err);
+          }
+        }
+        
+        // Refresh the expenses list
+        window.location.reload();
+      }
+    };
+    
+    reader.readAsText(file);
+    
+    // Reset file input
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
+    }
+  };
+
+  // Calculations
   const total = Array.isArray(expenses)
     ? expenses.reduce((acc, e) => acc + e.amount, 0)
     : 0;
@@ -119,7 +227,32 @@ const ExpensePage = () => {
 
   return (
     <div className="p-8 bg-gray-50 min-h-screen text-black">
-      <h1 className="text-3xl font-bold mb-6 text-black">Expenses</h1>
+      <div className="flex justify-between items-center mb-6">
+        <h1 className="text-3xl font-bold text-black">Expenses</h1>
+        
+        {/* CSV Import/Export buttons */}
+        <div className="flex gap-3">
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".csv"
+            onChange={handleUploadCSV}
+            className="hidden"
+          />
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            className="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 flex items-center gap-2"
+          >
+            <span>📤</span> Import CSV
+          </button>
+          <button
+            onClick={handleDownloadCSV}
+            className="px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 flex items-center gap-2"
+          >
+            <span>📥</span> Export CSV
+          </button>
+        </div>
+      </div>
 
       {/* Overview */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
@@ -177,6 +310,7 @@ const ExpensePage = () => {
               Selling and Distribution Costs
             </option>
             <option value="Admin Costs">Admin Costs</option>
+            <option value="Others">Others</option>
           </select>
           <input
             type="date"
@@ -195,7 +329,7 @@ const ExpensePage = () => {
                 : "bg-emerald-500 hover:shadow-lg"
             }`}
           >
-            {isAdding ? "Adding expense... please wait" : "Add"}
+            {isAdding ? "Adding..." : "Add"}
           </button>
         </div>
       </div>
@@ -236,9 +370,7 @@ const ExpensePage = () => {
                             : "bg-red-500 hover:bg-red-600"
                         }`}
                       >
-                        {isDeleting === exp.id
-                          ? "Deleting expense... please wait"
-                          : "Delete"}
+                        {isDeleting === exp.id ? "Deleting..." : "Delete"}
                       </button>
                     </td>
                   </tr>

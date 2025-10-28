@@ -292,13 +292,13 @@ export default function CashLedger({
       return;
     }
 
-    const headers = ["Date", "Description", "Category", "Type", "Amount", "Running Balance", "Related To", "Accounts Affected"];
+    const headers = ["Date", "Description", "Category", "Debit", "Credit", "Running Balance", "Related To", "Accounts Affected"];
     const rows = transactions.map((txn) => [
       new Date(txn.date).toLocaleDateString(),
       txn.description,
       txn.category,
-      txn.type,
-      txn.amount.toFixed(2),
+      txn.type === "OUTFLOW" ? txn.amount.toFixed(2) : "",
+      txn.type === "INFLOW" ? txn.amount.toFixed(2) : "",
       txn.runningBalance.toFixed(2),
       txn.relatedTo || "",
       txn.affectedAccounts || "",

@@ -174,20 +174,22 @@ export async function DELETE(req: NextRequest) {
       );
     }
 
-    // Check if creditor has any restocks linked
-    const restockCount = await prisma.restock.count({
-      where: { creditorId },
+    // Check if creditor exists
+    const creditor = await prisma.creditor.findUnique({
+      where: { id: creditorId },
     });
 
-    if (restockCount > 0) {
+    if (!creditor) {
       return NextResponse.json(
-        {
-          error:
-            "Cannot delete creditor with linked restock records. Please settle all debts first.",
-        },
-        { status: 400 }
+        { error: "Creditor not found" },
+        { status: 404 }
       );
     }
+
+    // Delete all related restocks first, then delete the creditor
+    await prisma.restock.deleteMany({
+      where: { creditorId },
+    });
 
     await prisma.creditor.delete({
       where: { id: creditorId },

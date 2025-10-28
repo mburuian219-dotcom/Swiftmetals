@@ -55,8 +55,15 @@ export default function DebtorsSection() {
   const fetchDebtors = async () => {
     try {
       setLoading(true);
-      // Fetch all sales
-      const response = await fetch("/api/sales");
+      setError(null);
+      
+      // Fetch all sales with a timeout
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 10000); // 10s timeout
+      
+      const response = await fetch("/api/sales", { signal: controller.signal });
+      clearTimeout(timeoutId);
+      
       if (!response.ok) throw new Error("Failed to fetch sales");
       const sales = await response.json();
 
@@ -115,9 +122,12 @@ export default function DebtorsSection() {
       });
 
       setDebtors(Array.from(debtorMap.values()));
-      setError(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "An error occurred");
+      if (err instanceof Error && err.name === 'AbortError') {
+        setError("Request timed out. Please try again.");
+      } else {
+        setError(err instanceof Error ? err.message : "An error occurred");
+      }
       console.error("Error fetching debtors:", err);
     } finally {
       setLoading(false);
@@ -285,132 +295,172 @@ Safe to Metals`;
             )}
 
             {/* Debtors List */}
-            <div className="space-y-4">
+            <div className="space-y-2">
               {debtors.length === 0 ? (
-                <div className="bg-white rounded-lg p-12 text-center shadow-md">
-                  <Users className="w-16 h-16 mx-auto mb-4 text-gray-300" />
-                  <p className="text-gray-500 text-lg">No debtors yet. Add one to get started.</p>
+                <div className="bg-white rounded-lg p-8 md:p-12 text-center shadow-sm">
+                  <Users className="w-12 h-12 md:w-16 md:h-16 mx-auto mb-3 md:mb-4 text-gray-300" />
+                  <p className="text-gray-500 text-sm md:text-lg">No debtors yet. Add one to get started.</p>
                 </div>
               ) : (
                 debtors.map((debtor) => (
-                  <div key={debtor.id} className="bg-white rounded-lg shadow-md overflow-hidden transition hover:shadow-lg">
-                  <div
+                  <div key={debtor.id} className="bg-white rounded-lg shadow-sm hover:shadow-md overflow-hidden transition-all border border-gray-100">
+                    <div
                       onClick={() => setExpandedId(expandedId === debtor.id ? null : debtor.id)}
-                      className="p-4 md:p-6 cursor-pointer hover:bg-gray-50 transition"
+                      className="p-3 md:p-4 cursor-pointer hover:bg-gray-50 transition"
                     >
-                      <div className="flex flex-col gap-4">
-                        <div className="flex items-start justify-between gap-2">
-                          <div className="flex-1 min-w-0">
-                            <h3 className="text-base md:text-xl font-bold text-gray-900 break-words">{debtor.name}</h3>
-                            <div className="flex flex-col gap-1 mt-2 text-xs md:text-sm text-gray-600">
-                              {debtor.email && <p className="break-all">📧 {debtor.email}</p>}
-                              {debtor.phone && <p>📱 {debtor.phone}</p>}
-                            </div>
-                          </div>
-                          <button className="flex-shrink-0 p-1 text-gray-400">
-                            {expandedId === debtor.id ? (
-                              <ChevronUp className="w-5 h-5 md:w-6 md:h-6 text-gray-600" />
-                            ) : (
-                              <ChevronDown className="w-5 h-5 md:w-6 md:h-6 text-gray-600" />
+                      <div className="flex items-center justify-between gap-3">
+                        {/* Left: Name & Contact */}
+                        <div className="flex-1 min-w-0">
+                          <h3 className="text-sm md:text-base font-bold text-gray-900 truncate">{debtor.name}</h3>
+                          <div className="flex flex-wrap items-center gap-2 mt-1 text-xs text-gray-500">
+                            {debtor.phone && (
+                              <span className="flex items-center gap-1">
+                                <Phone className="w-3 h-3" />
+                                {debtor.phone}
+                              </span>
                             )}
-                          </button>
+                            {debtor.email && (
+                              <span className="flex items-center gap-1 truncate">
+                                <Mail className="w-3 h-3" />
+                                <span className="truncate">{debtor.email}</span>
+                              </span>
+                            )}
+                          </div>
                         </div>
 
-                        <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-3 border-t border-gray-200 pt-3">
-                          <div>
-                            <p className="text-xs text-gray-600 uppercase tracking-wide font-medium">Outstanding Balance</p>
-                            <p className="text-xl md:text-2xl font-bold text-red-600">KES {formatCurrency(debtor.balance)}</p>
+                        {/* Center: Stats Grid */}
+                        <div className="hidden lg:grid grid-cols-3 gap-4 flex-shrink-0">
+                          <div className="text-center">
+                            <p className="text-xs text-gray-500 mb-1">Sales</p>
+                            <p className="text-sm font-bold text-blue-600">KES {formatCurrency(debtor.totalSales)}</p>
                           </div>
+                          <div className="text-center">
+                            <p className="text-xs text-gray-500 mb-1">Paid</p>
+                            <p className="text-sm font-bold text-green-600">KES {formatCurrency(debtor.paid)}</p>
+                          </div>
+                          <div className="text-center">
+                            <p className="text-xs text-gray-500 mb-1">Rate</p>
+                            <p className="text-sm font-bold text-purple-600">
+                              {debtor.totalSales > 0 ? Math.round((debtor.paid / debtor.totalSales) * 100) : 0}%
+                            </p>
+                          </div>
+                        </div>
 
-                          <div className="flex gap-1 md:gap-2">
+                        {/* Right: Balance & Actions */}
+                        <div className="flex items-center gap-2 md:gap-3 flex-shrink-0">
+                          <div className="text-right">
+                            <p className="text-xs text-gray-500 mb-1">Balance</p>
+                            <p className="text-sm md:text-base font-bold text-red-600 whitespace-nowrap">
+                              KES {formatCurrency(debtor.balance)}
+                            </p>
+                          </div>
+                          
+                          <div className="flex items-center gap-1">
                             <button
                               onClick={(e) => {
                                 e.stopPropagation();
                                 openModal(debtor);
                               }}
-                              className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition"
+                              className="p-1.5 text-blue-600 hover:bg-blue-50 rounded transition"
                               title="Edit"
                             >
-                              <Edit2 className="w-4 h-4 md:w-5 md:h-5" />
+                              <Edit2 className="w-4 h-4" />
                             </button>
                             <button
                               onClick={(e) => {
                                 e.stopPropagation();
                                 handleDelete(debtor.id);
                               }}
-                              className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition"
+                              className="p-1.5 text-red-600 hover:bg-red-50 rounded transition"
                               title="Delete"
                             >
-                              <Trash2 className="w-4 h-4 md:w-5 md:h-5" />
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                            <button className="p-1.5 text-gray-500 hover:bg-gray-100 rounded transition">
+                              {expandedId === debtor.id ? (
+                                <ChevronUp className="w-4 h-4" />
+                              ) : (
+                                <ChevronDown className="w-4 h-4" />
+                              )}
                             </button>
                           </div>
                         </div>
                       </div>
-                    </div>
 
-                    {/* Summary Stats */}
-                    <div className="px-4 md:px-6 pb-4 md:pb-6 flex flex-col gap-2 md:gap-4 border-t border-gray-200 pt-4 md:pt-6 md:flex-row">
-                      <div className="flex-1 bg-gradient-to-br from-blue-50 to-blue-100 rounded-lg p-3 md:p-4">
-                        <p className="text-xs md:text-sm text-gray-600 uppercase tracking-wide font-medium mb-1">Total Sales</p>
-                        <p className="text-lg md:text-2xl font-bold text-blue-600 break-all">KES {formatCurrency(debtor.totalSales)}</p>
-                      </div>
-                      <div className="flex-1 bg-gradient-to-br from-green-50 to-green-100 rounded-lg p-3 md:p-4">
-                        <p className="text-xs md:text-sm text-gray-600 uppercase tracking-wide font-medium mb-1">Paid</p>
-                        <p className="text-lg md:text-2xl font-bold text-green-600 break-all">KES {formatCurrency(debtor.paid)}</p>
-                      </div>
-                      <div className="flex-1 bg-gradient-to-br from-purple-50 to-purple-100 rounded-lg p-3 md:p-4">
-                        <p className="text-xs md:text-sm text-gray-600 uppercase tracking-wide font-medium mb-1">Collection %</p>
-                        <p className="text-lg md:text-2xl font-bold text-purple-600">
-                          {debtor.totalSales > 0 ? Math.round((debtor.paid / debtor.totalSales) * 100) : 0}%
-                        </p>
+                      {/* Mobile Stats - Show only on small screens */}
+                      <div className="grid grid-cols-3 gap-2 mt-3 lg:hidden">
+                        <div className="bg-blue-50 rounded p-2">
+                          <p className="text-xs text-gray-600 mb-1">Sales</p>
+                          <p className="text-xs font-bold text-blue-600">KES {formatCurrency(debtor.totalSales)}</p>
+                        </div>
+                        <div className="bg-green-50 rounded p-2">
+                          <p className="text-xs text-gray-600 mb-1">Paid</p>
+                          <p className="text-xs font-bold text-green-600">KES {formatCurrency(debtor.paid)}</p>
+                        </div>
+                        <div className="bg-purple-50 rounded p-2">
+                          <p className="text-xs text-gray-600 mb-1">Rate</p>
+                          <p className="text-xs font-bold text-purple-600">
+                            {debtor.totalSales > 0 ? Math.round((debtor.paid / debtor.totalSales) * 100) : 0}%
+                          </p>
+                        </div>
                       </div>
                     </div>
 
                     {/* Expanded Details */}
                     {expandedId === debtor.id && (
-                      <div className="px-4 md:px-6 pb-4 md:pb-6 space-y-4 md:space-y-6 border-t border-gray-200 pt-4 md:pt-6 bg-gray-50">
+                      <div className="px-3 md:px-4 pb-3 md:pb-4 space-y-3 border-t border-gray-200 bg-gray-50">
                         {/* Sales History */}
                         <div>
-                          <h4 className="text-base md:text-lg font-bold text-gray-900 mb-3 md:mb-4">Sales History</h4>
+                          <h4 className="text-sm font-bold text-gray-900 mb-2 flex items-center gap-2">
+                            <FileText className="w-4 h-4 text-amber-600" />
+                            Sales History
+                          </h4>
                           {debtor.sales.length > 0 ? (
-                            <div className="space-y-2 md:space-y-3">
+                            <div className="space-y-1.5">
                               {debtor.sales.map((sale) => (
-                                <div key={sale.id} className="bg-white rounded-lg p-3 md:p-4 flex flex-col md:flex-row md:items-center md:justify-between gap-2 md:gap-3">
+                                <div key={sale.id} className="bg-white rounded p-2.5 flex items-center justify-between gap-2 hover:bg-gray-50 transition">
                                   <div className="flex-1 min-w-0">
-                                    <p className="font-semibold text-gray-900 text-sm md:text-base">Sale #{sale.id}</p>
-                                    <p className="text-xs md:text-sm text-gray-600 mt-1 break-words">{sale.items}</p>
-                                    <p className="text-xs md:text-sm text-gray-500 mt-1">{formatDate(sale.date)}</p>
+                                    <div className="flex items-center gap-2">
+                                      <p className="font-semibold text-gray-900 text-xs">#{sale.id}</p>
+                                      <span className="text-xs text-gray-400">•</span>
+                                      <p className="text-xs text-gray-500">{formatDate(sale.date)}</p>
+                                    </div>
+                                    <p className="text-xs text-gray-600 mt-0.5 truncate">{sale.items}</p>
                                   </div>
-                                  <div className="flex items-center gap-2 md:gap-3 flex-shrink-0">
-                                    <p className="font-bold text-gray-900 text-sm md:text-base">KES {formatCurrency(sale.amount)}</p>
+                                  <div className="flex items-center gap-2 flex-shrink-0">
+                                    <p className="font-bold text-gray-900 text-xs whitespace-nowrap">KES {formatCurrency(sale.amount)}</p>
                                     <button
                                       onClick={() => handleViewReceipt(debtor, sale)}
-                                      className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition flex-shrink-0"
+                                      className="p-1.5 text-blue-600 hover:bg-blue-50 rounded transition"
                                       title="View Receipt"
                                     >
-                                      <FileText className="w-4 h-4 md:w-5 md:h-5" />
+                                      <FileText className="w-3.5 h-3.5" />
                                     </button>
                                   </div>
                                 </div>
                               ))}
                             </div>
                           ) : (
-                            <p className="text-gray-500 text-xs md:text-sm">No sales recorded</p>
+                            <p className="text-gray-500 text-xs py-2">No sales recorded</p>
                           )}
                         </div>
 
                         {/* Payment History */}
                         {debtor.payments.length > 0 && (
                           <div>
-                            <h4 className="text-base md:text-lg font-bold text-gray-900 mb-3 md:mb-4">Payment History</h4>
-                            <div className="space-y-2 md:space-y-3">
+                            <h4 className="text-sm font-bold text-gray-900 mb-2 flex items-center gap-2">
+                              <Send className="w-4 h-4 text-green-600" />
+                              Payment History
+                            </h4>
+                            <div className="space-y-1.5">
                               {debtor.payments.map((payment, idx) => (
-                                <div key={idx} className="bg-white rounded-lg p-3 md:p-4 flex flex-col md:flex-row md:items-center md:justify-between gap-2 md:gap-3">
-                                  <div>
-                                    <p className="font-semibold text-gray-900 text-sm md:text-base">{payment.method}</p>
-                                    <p className="text-xs md:text-sm text-gray-500">{formatDate(payment.date)}</p>
+                                <div key={idx} className="bg-white rounded p-2.5 flex items-center justify-between gap-2">
+                                  <div className="flex items-center gap-2 flex-1 min-w-0">
+                                    <p className="font-semibold text-gray-900 text-xs">{payment.method}</p>
+                                    <span className="text-xs text-gray-400">•</span>
+                                    <p className="text-xs text-gray-500">{formatDate(payment.date)}</p>
                                   </div>
-                                  <p className="font-bold text-green-600 text-sm md:text-base">KES {formatCurrency(payment.amount)}</p>
+                                  <p className="font-bold text-green-600 text-xs whitespace-nowrap">KES {formatCurrency(payment.amount)}</p>
                                 </div>
                               ))}
                             </div>
@@ -419,20 +469,20 @@ Safe to Metals`;
 
                         {/* Action Buttons */}
                         {debtor.balance > 0 && (
-                          <div className="flex flex-col gap-2 md:gap-3 pt-3 md:pt-4 border-t border-gray-200">
+                          <div className="flex gap-2 pt-2 border-t border-gray-200">
                             <button
                               onClick={() => sendWhatsAppMessage(debtor.phone, generateReminderMessage(debtor))}
-                              className="w-full bg-gradient-to-r from-green-500 to-emerald-500 hover:from-green-600 hover:to-emerald-600 text-white font-semibold py-2 md:py-3 px-3 md:px-4 rounded-lg transition-all flex items-center justify-center gap-2 text-sm md:text-base"
+                              className="flex-1 bg-gradient-to-r from-green-500 to-emerald-500 hover:from-green-600 hover:to-emerald-600 text-white font-medium py-2 px-3 rounded-lg transition-all flex items-center justify-center gap-1.5 text-xs"
                             >
-                              <MessageCircle className="w-4 h-4 md:w-5 md:h-5" />
-                              Send WhatsApp Reminder
+                              <MessageCircle className="w-3.5 h-3.5" />
+                              WhatsApp
                             </button>
                             <button
                               onClick={() => sendSMSMessage(debtor.phone, generateReminderMessage(debtor))}
-                              className="w-full bg-gradient-to-r from-blue-500 to-indigo-500 hover:from-blue-600 hover:to-indigo-600 text-white font-semibold py-2 md:py-3 px-3 md:px-4 rounded-lg transition-all flex items-center justify-center gap-2 text-sm md:text-base"
+                              className="flex-1 bg-gradient-to-r from-blue-500 to-indigo-500 hover:from-blue-600 hover:to-indigo-600 text-white font-medium py-2 px-3 rounded-lg transition-all flex items-center justify-center gap-1.5 text-xs"
                             >
-                              <Mail className="w-4 h-4 md:w-5 md:h-5" />
-                              Send SMS Reminder
+                              <Mail className="w-3.5 h-3.5" />
+                              SMS
                             </button>
                           </div>
                         )}

@@ -84,11 +84,16 @@ const EnhancedSalesPage = () => {
   const [saleItems, setSaleItems] = useState<NewSaleItem[]>([]);
   const [currentItem, setCurrentItem] = useState<NewSaleItem>({
     productId: 0,
-    quantity: 1,
+    quantity: 0,
     price: 0,
     productName: ""
   });
   
+  const [customerSearch, setCustomerSearch] = useState("");
+  const [productSearch, setProductSearch] = useState("");
+  const [showCustomerDropdown, setShowCustomerDropdown] = useState(false);
+  const [showProductDropdown, setShowProductDropdown] = useState(false);
+
   const [payments, setPayments] = useState<NewPayment[]>([]);
   const [currentPayment, setCurrentPayment] = useState<NewPayment>({
     amount: "",
@@ -100,6 +105,7 @@ const EnhancedSalesPage = () => {
   
   const [editingSale, setEditingSale] = useState<Sale | null>(null);
   const [editPayments, setEditPayments] = useState<NewPayment[]>([]);
+  const [deletingPaymentId, setDeletingPaymentId] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
@@ -196,7 +202,6 @@ const EnhancedSalesPage = () => {
           })
         ]);
 
-        // Handle customers with fallback
         let customersData = [];
         if (!customersRes || !customersRes.ok) {
           console.log("⚠️ Trying fallback /api/customer...");
@@ -222,7 +227,6 @@ const EnhancedSalesPage = () => {
           productsRes.json()
         ]);
 
-        // Validate and process data
         const validCustomers = Array.isArray(customersData) 
           ? customersData 
           : (customersData?.customers || customersData?.data || []);
@@ -255,6 +259,21 @@ const EnhancedSalesPage = () => {
 
     fetchData();
   }, [calculateSaleStatus]);
+  // Close dropdowns when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      const target = event.target as HTMLElement;
+      if (!target.closest('.customer-dropdown-container')) {
+        setShowCustomerDropdown(false);
+      }
+      if (!target.closest('.product-dropdown-container')) {
+        setShowProductDropdown(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
 
   const paymentMethods = [
     { value: "CASH", label: "Cash", color: "bg-green-100 text-green-800" },
@@ -266,7 +285,6 @@ const EnhancedSalesPage = () => {
   ];
 
   const handleAddItemToSale = () => {
-    // Clear previous timeout
     if (stockValidationTimeout) clearTimeout(stockValidationTimeout);
     
     if (!currentItem.productId || currentItem.quantity <= 0 || currentItem.price <= 0) {
@@ -280,7 +298,16 @@ const EnhancedSalesPage = () => {
       return;
     }
     
-    const productStock = product.stock || 0;
+    // Handle stock as either a number or an object with quantity property
+    let productStock = 0;
+    if (Array.isArray(product.stock)) {
+      productStock = product.stock.reduce((total: number, s: any) => total + (s.quantity || 0), 0);
+    } else if (typeof product.stock === 'object' && product.stock !== null) {
+      productStock = (product.stock as any).quantity || 0;
+    } else {
+      productStock = Number(product.stock) || 0;
+    }
+    
     const existingItem = saleItems.find(item => item.productId === currentItem.productId);
     const existingQuantity = existingItem ? existingItem.quantity : 0;
     const totalQuantity = existingQuantity + currentItem.quantity;
@@ -290,7 +317,6 @@ const EnhancedSalesPage = () => {
       setStockError(errorMsg);
       setError(errorMsg);
       
-      // Auto-clear error after 5 seconds
       const timeout = setTimeout(() => {
         setStockError(null);
         setError(null);
@@ -316,10 +342,11 @@ const EnhancedSalesPage = () => {
     
     setCurrentItem({
       productId: 0,
-      quantity: 1,
+      quantity: 0,
       price: 0,
       productName: ""
     });
+    setProductSearch("");
     setError(null);
     setStockError(null);
   };
@@ -478,6 +505,8 @@ const EnhancedSalesPage = () => {
       setShowAddSale(false);
       setSaleItems([]);
       setPayments([]);
+      setCustomerSearch("");
+      setProductSearch("");
       setNewSale({
         customerId: "",
         dueDate: new Date().toISOString().split("T")[0],
@@ -594,39 +623,46 @@ const EnhancedSalesPage = () => {
     }
   };
 
-  const handleDeletePayment = async (paymentId: number, saleId: number) => {
-    try {
-      const response = await fetch(`/api/payments/${paymentId}?saleId=${saleId}`, {
-        method: "DELETE",
-      });
+ const handleDeletePayment = async (paymentId: number, saleId: number) => {
+  try {
+    setDeletingPaymentId(paymentId); // ✅ show loader on that button
 
-      if (!response.ok) {
-        const err = await response.json();
-        throw new Error(err.error || "Failed to delete payment");
-      }
+    const response = await fetch(`/api/payment/${paymentId}?saleId=${saleId}`, {
+      method: "DELETE",
+    });
 
-      const updatedSale = await response.json();
-      const processedSale = calculateSaleStatus(updatedSale);
-
-      setSales(sales.map(s => s.id === processedSale.id ? processedSale : s));
-      setEditingSale(processedSale);
-      setEditPayments(
-        processedSale.payments.map((p: Payment) => ({
-          id: p.id,
-          amount: p.amount.toString(),
-          method: p.method,
-          referenceId: p.referenceId || "",
-          checkDepositDate: p.checkDepositDate || ""
-        }))
-      );
-
-      setSuccess("Payment deleted successfully!");
-      setTimeout(() => setSuccess(null), 3000);
-    } catch (error: any) {
-      console.error("Error deleting payment:", error);
-      setError(error.message || "Failed to delete payment");
+    if (!response.ok) {
+      const err = await response.json();
+      throw new Error(err.error || "Failed to delete payment");
     }
-  };
+
+    const updatedSale = await response.json();
+    const processedSale = calculateSaleStatus(updatedSale);
+
+    setSales(sales.map(s => s.id === processedSale.id ? processedSale : s));
+    setEditingSale(processedSale);
+    setEditPayments(
+      processedSale.payments.map((p: Payment) => ({
+        id: p.id,
+        amount: p.amount.toString(),
+        method: p.method,
+        referenceId: p.referenceId || "",
+        checkDepositDate: p.checkDepositDate || ""
+      }))
+    );
+
+    setSuccess("Payment deleted successfully!");
+    setTimeout(() => setSuccess(null), 3000);
+
+  } catch (error: any) {
+    console.error("Error deleting payment:", error);
+    setError(error.message || "Failed to delete payment");
+  } finally {
+    setDeletingPaymentId(null); // ✅ hide loader
+  }
+};
+
+
 
   const handleDeleteSale = async (saleId: number) => {
     if (!confirm("Are you sure you want to delete this sale? This action cannot be undone.")) {
@@ -659,7 +695,7 @@ const EnhancedSalesPage = () => {
     }
   };
 
-const addEditPayment = () => {
+  const addEditPayment = () => {
     const amount = parseFloat(currentPayment.amount);
     if (!amount || amount <= 0) {
       setError("Please enter a valid payment amount");
@@ -671,7 +707,6 @@ const addEditPayment = () => {
       return;
     }
     
-    // Validate required fields for specific payment methods
     if (currentPayment.method === "CHECK" && !currentPayment.checkDepositDate) {
       setError("Please specify check deposit date");
       return;
@@ -692,11 +727,10 @@ const addEditPayment = () => {
       method: "CASH",
       referenceId: "",
       checkDepositDate: "",
-     
+      dueDate: ""
     });
     setError(null);
   };
-    
     
   const clearMessages = () => {
     setError(null);
@@ -728,6 +762,23 @@ const addEditPayment = () => {
         return sales;
     }
   }, [sales, activeTab]);
+
+  const filteredCustomers = useMemo(() => {
+    if (!customerSearch.trim()) return customers;
+    const searchLower = customerSearch.toLowerCase();
+    return customers.filter(c => 
+      c.name.toLowerCase().includes(searchLower) ||
+      (c.phone && c.phone.includes(searchLower))
+    );
+  }, [customers, customerSearch]);
+
+  const filteredProducts = useMemo(() => {
+    if (!productSearch.trim()) return products;
+    const searchLower = productSearch.toLowerCase();
+    return products.filter(p => 
+      p.name.toLowerCase().includes(searchLower)
+    );
+  }, [products, productSearch]);
 
   const sendDeliveryConfirmation = async (saleId: number) => {
     setMessagingLoading(true);
@@ -764,12 +815,60 @@ const addEditPayment = () => {
     <div className="p-4 md:p-8 bg-gray-50 min-h-screen">
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-6">
         <h1 className="text-2xl md:text-3xl font-bold text-black">Sales Management Dashboard</h1>
-        <button
+         <button
+                    onClick={() => {
+                      // Generate CSV data
+                      const csvData = sales.map(sale => ({
+                        'Sale ID': sale.id,
+                        'Date': new Date(sale.date).toLocaleDateString(),
+                        'Customer': sale.customer?.name || '-',
+                        'Customer Phone': sale.customer?.phone || '-',
+                        'Products': sale.saleitems?.map(item => `${item.product.name} (x${item.quantity})`).join('; ') || '-',
+                        'Total Amount': sale.amount.toFixed(2),
+                        'Status': sale.status,
+                        'Amount Paid': (sale.amount - sale.remainingAmount).toFixed(2),
+                        'Remaining Amount': sale.remainingAmount.toFixed(2),
+                        'Due Date': sale.dueDate ? new Date(sale.dueDate).toLocaleDateString() : '-',
+                        'Payment Methods': sale.payments?.map(p => p.method).join('; ') || '-'
+                      }));
+        
+                      // Convert to CSV string
+                      const headers = Object.keys(csvData[0] || {});
+                      const csvContent = [
+                        headers.join(','),
+                        ...csvData.map(row => 
+                          headers.map(header => {
+                            const value = row[header as keyof typeof row];
+                            // Escape commas and quotes
+                            return `"${String(value).replace(/"/g, '""')}"`;
+                          }).join(',')
+                        )
+                      ].join('\n');
+        
+                      // Download CSV
+                      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+                      const link = document.createElement('a');
+                      const url = URL.createObjectURL(blob);
+                      link.setAttribute('href', url);
+                      link.setAttribute('download', `sales_report_${new Date().toISOString().split('T')[0]}.csv`);
+                      link.style.visibility = 'hidden';
+                      document.body.appendChild(link);
+                      link.click();
+                      document.body.removeChild(link);
+                    }}
+                    className="flex-1 md:flex-none bg-green-600 text-white px-6 py-3 rounded-xl hover:bg-green-700 flex items-center justify-center gap-2 shadow-lg transition-all"
+                  >
+                    <Download size={20} />
+                    Export CSV
+                  </button>
+           <button
           onClick={() => {
             setShowAddSale(!showAddSale);
             if (showAddSale) {
               setSaleItems([]);
               setPayments([]);
+              setCustomerSearch("");
+              setProductSearch("");
               setError(null);
               setStockError(null);
             }
@@ -845,24 +944,55 @@ const addEditPayment = () => {
             </div>
 
             <div className="p-4 md:p-6 space-y-6">
-              <div>
-                <label className="block text-sm font-medium text-black mb-2">Customer</label>
-                <select
-                  value={newSale.customerId}
-                  onChange={(e) => setNewSale({...newSale, customerId: e.target.value})}
+              {/* Customer Selection with Search */}
+              <div className="relative customer-dropdown-container">
+                <label className="block text-sm font-medium text-black mb-2">Customer *</label>
+                <input
+                  type="text"
+                  placeholder="Search customer by name or phone..."
+                  value={customerSearch}
+                  onChange={(e) => {
+                    setCustomerSearch(e.target.value);
+                    setShowCustomerDropdown(true);
+                  }}
+                  onFocus={() => setShowCustomerDropdown(true)}
                   className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 text-black"
-                >
-                  <option value="">Select a customer</option>
-                  {customers.map(customer => (
-                    <option key={customer.id} value={customer.id}>
-                      {customer.name} {customer.phone && `(${customer.phone})`}
-                    </option>
-                  ))}
-                </select>
+                />
+                {showCustomerDropdown && filteredCustomers.length > 0 && (
+                  <div className="absolute z-10 w-full mt-1 bg-white border border-gray-300 rounded-lg shadow-lg max-h-60 overflow-y-auto">
+                    {filteredCustomers.map(customer => (
+                      <div
+                        key={customer.id}
+                        onClick={() => {
+                          setNewSale({...newSale, customerId: customer.id.toString()});
+                          setCustomerSearch(customer.name);
+                          setShowCustomerDropdown(false);
+                        }}
+                        className="p-3 hover:bg-blue-50 cursor-pointer border-b last:border-b-0"
+                      >
+                        <div className="font-medium text-black">{customer.name}</div>
+                        {customer.phone && (
+                          <div className="text-sm text-gray-600">{customer.phone}</div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {showCustomerDropdown && customerSearch && filteredCustomers.length === 0 && (
+                  <div className="absolute z-10 w-full mt-1 bg-white border border-gray-300 rounded-lg shadow-lg p-3">
+                    <div className="text-gray-500 text-sm">No customers found</div>
+                  </div>
+                )}
+                {newSale.customerId && (
+                  <div className="mt-2 text-sm text-green-600 flex items-center gap-1">
+                    <CheckCircle size={16} />
+                    Customer selected
+                  </div>
+                )}
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-black mb-2">Date</label>
+                <label className="block text-sm font-medium text-black mb-2">Sale Date</label>
                 <input
                   type="date"
                   value={newSale.dueDate}
@@ -876,34 +1006,70 @@ const addEditPayment = () => {
                 
                 <div className="space-y-3 mb-4 p-4 bg-gray-50 rounded-lg">
                   <div className="grid grid-cols-1 gap-3">
-                    <div>
-                      <label className="block text-sm font-medium text-black mb-1">Product</label>
-                      <select
-                        value={currentItem.productId}
+                    {/* Product Search with Dropdown */}
+                    <div className="relative product-dropdown-container">
+                      <label className="block text-sm font-medium text-black mb-1">Product *</label>
+                      <input
+                        type="text"
+                        placeholder="Search product by name..."
+                        value={productSearch}
                         onChange={(e) => {
-                          const productId = parseInt(e.target.value);
-                          const product = products.find(p => p.id === productId);
-                          setCurrentItem({
-                            ...currentItem,
-                            productId,
-                            price: product?.price || 0,
-                            productName: product?.name || ""
-                          });
+                          setProductSearch(e.target.value);
+                          setShowProductDropdown(true);
                         }}
+                        onFocus={() => setShowProductDropdown(true)}
                         className="w-full p-2 border border-gray-300 rounded text-black"
-                      >
-                        <option value={0}>Select product</option>
-                        {[...products].sort((a, b) => a.name.localeCompare(b.name)).map(product => (
-                          <option key={product.id} value={product.id}>
-                            {product.name} (Ksh {product.price})
-                          </option>
-                        ))}
-                      </select>
+                      />
+                      {showProductDropdown && filteredProducts.length > 0 && (
+                        <div className="absolute z-20 w-full mt-1 bg-white border border-gray-300 rounded-lg shadow-lg max-h-60 overflow-y-auto">
+                          {[...filteredProducts].sort((a, b) => a.name.localeCompare(b.name)).map(product => (
+                            <div
+                              key={product.id}
+                              onClick={() => {
+                                setCurrentItem({
+                                  ...currentItem,
+                                  productId: product.id,
+                                  price: product.price || 0,
+                                  productName: product.name
+                                });
+                                setProductSearch(product.name);
+                                setShowProductDropdown(false);
+                              }}
+                              className="p-3 hover:bg-blue-50 cursor-pointer border-b last:border-b-0"
+                            >
+                              <div className="flex justify-between items-center">
+                                <div>
+  <div className="font-medium text-black">{product.name}</div>
+  <div className="text-sm text-gray-600">
+    Stock:{" "}
+    {Array.isArray(product.stock)
+      ? product.stock.reduce((total, s) => total + (s.quantity || 0), 0)
+      : 0}
+    {" "} | Price: Ksh {product.price?.toLocaleString() || 0}
+  </div>
+</div>
+
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      {showProductDropdown && productSearch && filteredProducts.length === 0 && (
+                        <div className="absolute z-20 w-full mt-1 bg-white border border-gray-300 rounded-lg shadow-lg p-3">
+                          <div className="text-gray-500 text-sm">No products found</div>
+                        </div>
+                      )}
+                      {currentItem.productId > 0 && (
+                        <div className="mt-1 text-sm text-green-600 flex items-center gap-1">
+                          <CheckCircle size={14} />
+                          {currentItem.productName} selected
+                        </div>
+                      )}
                     </div>
                     
                     <div className="grid grid-cols-2 gap-3">
                       <div>
-                        <label className="block text-sm font-medium text-black mb-1">Quantity</label>
+                        <label className="block text-sm font-medium text-black mb-1">Quantity *</label>
                         <input
                           type="number"
                           min="0"
@@ -914,11 +1080,11 @@ const addEditPayment = () => {
                       </div>
                       
                       <div>
-                        <label className="block text-sm font-medium text-black mb-1">Unit Price</label>
+                        <label className="block text-sm font-medium text-black mb-1">Unit Price *</label>
                         <input
                           type="number"
                           min="0"
-                          step="1"
+                          step="0.01"
                           value={currentItem.price}
                           onChange={(e) => setCurrentItem({...currentItem, price: parseFloat(e.target.value) || 0})}
                           className="w-full p-2 border border-gray-300 rounded text-black"
@@ -926,36 +1092,56 @@ const addEditPayment = () => {
                       </div>
                     </div>
                     
-                    <button
-                      type="button"
-                      onClick={handleAddItemToSale}
-                      className="w-full bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600 flex items-center justify-center gap-2"
-                    >
-                      <Plus size={16} />
-                      Add Item
-                    </button>
+                    {currentItem.productId > 0 && (
+                      <div className="bg-blue-50 p-3 rounded-lg text-sm">
+                        <div className="font-medium text-black">
+                          Total: Ksh {(currentItem.quantity * currentItem.price).toFixed(2)}
+                        </div>
+                      </div>
+                    )}
+                    
+                   <button
+  type="button"
+  onClick={() => {
+    console.log("currentItem:", currentItem);
+    handleAddItemToSale();
+  }}
+  disabled={!currentItem.productId || currentItem.quantity <= 0 || currentItem.price <= 0}
+  className="w-full bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+>
+  <Plus size={16} />
+  Add Item to Sale
+</button>
+
                   </div>
                 </div>
 
                 {saleItems.length > 0 && (
                   <div className="space-y-2 mb-4">
+                    <h4 className="font-medium text-black">Items in Sale:</h4>
                     {saleItems.map((item, index) => (
-                      <div key={index} className="flex justify-between items-center bg-white p-3 rounded-lg border">
-                        <div className="flex-1 min-w-0">
+                      <div key={index} className="flex flex-col sm:flex-row justify-between items-start sm:items-center bg-white p-3 rounded-lg border gap-2">
+                        <div className="flex-1 min-w-0 w-full sm:w-auto">
                           <span className="font-medium text-black block truncate">{item.productName}</span>
-                          <span className="text-black text-sm">×{item.quantity} @ Ksh {item.price}</span>
+                          <span className="text-black text-sm">×{item.quantity} @ Ksh {item.price.toFixed(2)}</span>
                         </div>
-                        <div className="flex items-center gap-2 ml-2">
+                        <div className="flex items-center gap-2 w-full sm:w-auto justify-between sm:justify-end">
                           <span className="font-bold text-green-600 whitespace-nowrap">Ksh {(item.quantity * item.price).toFixed(2)}</span>
                           <button
                             onClick={() => setSaleItems(saleItems.filter((_, i) => i !== index))}
-                            className="text-red-500 hover:text-red-700"
+                            className="text-red-500 hover:text-red-700 p-1"
                           >
                             <Trash2 size={16} />
                           </button>
                         </div>
                       </div>
                     ))}
+                    <div className="bg-blue-50 p-3 rounded-lg">
+                      <div className="flex justify-between items-center">
+                        <span className="font-semibold text-black">Total Amount:</span>
+                        <span className="font-bold text-blue-600 text-lg">Ksh {calculateTotalAmount().toFixed(2)}</span>
+                      </div>
+                    </div>
                   </div>
                 )}
               </div>
@@ -1065,9 +1251,9 @@ const addEditPayment = () => {
                     {payments.map((payment, index) => (
                       <div
                         key={index}
-                        className="flex justify-between items-center p-2 bg-white rounded mb-2"
+                        className="flex flex-col sm:flex-row justify-between items-start sm:items-center p-2 bg-white rounded mb-2 gap-2"
                       >
-                        <div>
+                        <div className="flex-1">
                           <span className="text-black font-medium">
                             {payment.method}
                           </span>
@@ -1167,7 +1353,6 @@ const addEditPayment = () => {
           </div>
         </div>
       )}
-
       {editingSale && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50 overflow-y-auto">
           <div className="bg-white rounded-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto my-4">
@@ -1188,19 +1373,19 @@ const addEditPayment = () => {
                 <h3 className="font-semibold mb-3 text-black">Sale Information</h3>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
                   <div>
-                    <span className="text-black">Customer:</span>
+                    <span className="text-gray-600">Customer:</span>
                     <span className="font-medium ml-2 text-black">{editingSale.customer.name}</span>
                   </div>
                   <div>
-                    <span className="text-black">Total Amount:</span>
+                    <span className="text-gray-600">Total Amount:</span>
                     <span className="font-medium ml-2 text-black">Ksh {editingSale.amount.toFixed(2)}</span>
                   </div>
                   <div>
-                    <span className="text-black">Date:</span>
+                    <span className="text-gray-600">Date:</span>
                     <span className="font-medium ml-2 text-black">{new Date(editingSale.date).toLocaleDateString()}</span>
                   </div>
                   <div>
-                    <span className="text-black">Status:</span>
+                    <span className="text-gray-600">Status:</span>
                     <span className={`ml-2 px-2 py-1 rounded text-xs font-bold ${
                       editingSale.status === "PAID" ? "bg-green-100 text-green-800" :
                       editingSale.status === "PARTIAL" ? "bg-orange-100 text-orange-800" :
@@ -1234,12 +1419,12 @@ const addEditPayment = () => {
                 <h3 className="text-lg font-semibold mb-3 text-black">Sale Items</h3>
                 <div className="space-y-2">
                   {editingSale.saleitems?.map((item, index) => (
-                    <div key={index} className="flex justify-between items-center bg-gray-50 p-3 rounded-lg">
-                      <div className="flex-1 min-w-0">
+                    <div key={index} className="flex flex-col sm:flex-row justify-between items-start sm:items-center bg-gray-50 p-3 rounded-lg gap-2">
+                      <div className="flex-1 min-w-0 w-full sm:w-auto">
                         <span className="font-medium text-black block truncate">{item.product.name}</span>
-                        <span className="text-black text-sm">×{item.quantity} @ Ksh {item.price}</span>
+                        <span className="text-gray-600 text-sm">×{item.quantity} @ Ksh {item.price.toFixed(2)}</span>
                       </div>
-                      <span className="font-bold text-green-600 whitespace-nowrap ml-2">Ksh {(item.quantity * item.price).toFixed(2)}</span>
+                      <span className="font-bold text-green-600 whitespace-nowrap">Ksh {(item.quantity * item.price).toFixed(2)}</span>
                     </div>
                   ))}
                 </div>
@@ -1252,7 +1437,7 @@ const addEditPayment = () => {
                   <div className="space-y-2 mb-4">
                     <h4 className="font-medium text-black">Current Payments:</h4>
                     {editPayments.map((payment, index) => (
-                      <div key={index} className="flex justify-between items-center bg-white p-3 rounded-lg border">
+                      <div key={index} className="flex flex-col sm:flex-row justify-between items-start sm:items-center bg-white p-3 rounded-lg border gap-2">
                         <div className="flex items-center gap-2 flex-wrap flex-1">
                           <span className={`px-2 py-1 rounded-full text-xs font-medium ${
                             paymentMethods.find(m => m.value === payment.method)?.color
@@ -1261,16 +1446,22 @@ const addEditPayment = () => {
                           </span>
                           <span className="font-medium text-black">Ksh {parseFloat(payment.amount).toFixed(2)}</span>
                           {payment.referenceId && (
-                            <span className="text-black text-sm">Ref: {payment.referenceId}</span>
+                            <span className="text-gray-600 text-sm">Ref: {payment.referenceId}</span>
                           )}
                         </div>
                         {payment.id !== undefined && (
                           <button
-                            onClick={() => handleDeletePayment(payment.id as number, editingSale.id)}
-                            className="text-red-500 hover:text-red-700 ml-2"
-                          >
-                            <Trash2 size={16} />
-                          </button>
+  onClick={() => handleDeletePayment(payment.id as number, editingSale.id)}
+  disabled={deletingPaymentId === payment.id}
+  className="text-red-500 hover:text-red-700 disabled:opacity-50"
+>
+  {deletingPaymentId === payment.id ? (
+    <span className="animate-spin border-2 border-red-500 border-t-transparent rounded-full w-4 h-4 inline-block"></span>
+  ) : (
+    <Trash2 size={16} />
+  )}
+</button>
+
                         )}
                       </div>
                     ))}
@@ -1279,7 +1470,7 @@ const addEditPayment = () => {
 
                 <div className="space-y-3 mb-4 p-4 bg-gray-50 rounded-lg">
                   <div className="grid grid-cols-1 gap-3">
-                    <div className="grid grid-cols-2 gap-3">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                       <div>
                         <label className="block text-sm font-medium text-black mb-1">Amount</label>
                         <input
@@ -1443,6 +1634,7 @@ const addEditPayment = () => {
 
         {activeTab !== "messaging" && (
           <div className="p-4 md:p-6">
+            {/* Mobile View */}
             <div className="block lg:hidden space-y-4">
               {filteredSales.map((sale) => (
                 <div key={sale.id} className="bg-white border rounded-lg p-4 shadow-sm">
@@ -1579,17 +1771,18 @@ const addEditPayment = () => {
               )}
             </div>
 
+            {/* Desktop View */}
             <div className="hidden lg:block overflow-x-auto">
               <table className="min-w-full border-collapse">
                 <thead>
                   <tr className="bg-slate-100">
-                    <th className="p-3 text-left text-black text-sm">Product(s)</th>
-                    <th className="p-3 text-left text-black text-sm">Customer</th>
-                    <th className="p-3 text-left text-black text-sm">Amount</th>
-                    <th className="p-3 text-left text-black text-sm">Status</th>
-                    <th className="p-3 text-left text-black text-sm">Remaining</th>
-                    <th className="p-3 text-left text-black text-sm">Date</th>
-                    <th className="p-3 text-left text-black text-sm">Actions</th>
+                    <th className="p-3 text-left text-black text-sm font-semibold">Product(s)</th>
+                    <th className="p-3 text-left text-black text-sm font-semibold">Customer</th>
+                    <th className="p-3 text-left text-black text-sm font-semibold">Amount</th>
+                    <th className="p-3 text-left text-black text-sm font-semibold">Status</th>
+                    <th className="p-3 text-left text-black text-sm font-semibold">Remaining</th>
+                    <th className="p-3 text-left text-black text-sm font-semibold">Date</th>
+                    <th className="p-3 text-left text-black text-sm font-semibold">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1601,7 +1794,7 @@ const addEditPayment = () => {
                             ? sale.saleitems.map((item, idx) => (
                                 <div key={idx} className="text-sm">
                                   <span className="font-medium text-black">{item.product.name}</span>
-                                  <span className="text-black"> (×{item.quantity})</span>
+                                  <span className="text-gray-600"> (×{item.quantity})</span>
                                 </div>
                               ))
                             : <span className="text-black">-</span>}
@@ -1642,7 +1835,7 @@ const addEditPayment = () => {
                           <select
                             value={selectedMessageType}
                             onChange={(e) => setSelectedMessageType(e.target.value)}
-                            className="px-2 py-1 text-xs border border-gray-300 rounded text-black mb-2"
+                            className="px-2 py-1 text-xs border border-gray-300 rounded text-black"
                           >
                             {messageTypes.map(type => (
                               <option key={type.value} value={type.value}>
@@ -1672,11 +1865,11 @@ const addEditPayment = () => {
                               }
                             }}
                             disabled={!sale.customer?.phone}
-                            className="px-3 py-1 text-sm bg-blue-500 text-white rounded hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1 mb-2"
+                            className="px-3 py-1 text-sm bg-blue-500 text-white rounded hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
                             title={!sale.customer?.phone ? "Customer phone number required" : "Open WhatsApp or SMS to send manually"}
                           >
                             <MessageSquare size={14} />
-                            Manual Message
+                            Manual
                           </button>
                           
                           <button
@@ -1686,7 +1879,7 @@ const addEditPayment = () => {
                             title={!sale.customer?.phone ? "Customer phone number required" : "Send delivery confirmation SMS"}
                           >
                             <MessageSquare size={14} />
-                            SMS Purchase
+                            SMS
                           </button>
                           
                           <button
