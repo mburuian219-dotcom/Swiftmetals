@@ -1,6 +1,6 @@
 "use client";
 import Link from "next/link";
-import { useEffect, useState, useCallback, useMemo } from "react";
+import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import {
   TrendingUp,
   Receipt,
@@ -15,14 +15,69 @@ import {
   X,
   AlertTriangle,
   Info,
-  CheckCircle
+  CheckCircle,
+  Plus,
+  Zap,
+  Search,
+  Trash2
 } from "lucide-react";
+
+interface Customer {
+  id: number;
+  name: string;
+  phone?: string;
+}
+
+interface Product {
+  id: number;
+  name: string;
+  price?: number;
+  stock?: any;
+}
+
+interface QuickSaleItem {
+  productId: number;
+  productName: string;
+  quantity: number;
+  price: number;
+}
 
 export default function AdminDashboard() {
   const [quickStats, setQuickStats] = useState<any[]>([]);
   const [notifications, setNotifications] = useState<any[]>([]);
   const [showNotifications, setShowNotifications] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
+  
+  // Quick Sale States
+  const [showQuickSale, setShowQuickSale] = useState(false);
+  const [customers, setCustomers] = useState<Customer[]>([]);
+  const [products, setProducts] = useState<Product[]>([]);
+  const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
+  const [customerSearch, setCustomerSearch] = useState("");
+  const [productSearch, setProductSearch] = useState("");
+  const [showCustomerDropdown, setShowCustomerDropdown] = useState(false);
+  const [showProductDropdown, setShowProductDropdown] = useState(false);
+  const [saleItems, setSaleItems] = useState<QuickSaleItem[]>([]);
+  const [currentProduct, setCurrentProduct] = useState<Product | null>(null);
+  const [currentQuantity, setCurrentQuantity] = useState(1);
+  const [currentPrice, setCurrentPrice] = useState("");
+  const [payments, setPayments] = useState<any[]>([]);
+  const [currentPayment, setCurrentPayment] = useState({
+    amount: "",
+    method: "CASH",
+    referenceId: "",
+    checkDepositDate: "",
+    dueDate: ""
+  });
+  const [dueDate, setDueDate] = useState(new Date().toISOString().split('T')[0]);
+  const [creating, setCreating] = useState(false);
+  const [saleError, setSaleError] = useState<string | null>(null);
+  const [saleSuccess, setSaleSuccess] = useState<string | null>(null);
+  const [stockError, setStockError] = useState<string | null>(null);
+
+  // Refs for dropdown management
+  const customerDropdownRef = useRef<HTMLDivElement>(null);
+  const productDropdownRef = useRef<HTMLDivElement>(null);
 
   const adminSections = [
     {
@@ -83,67 +138,84 @@ export default function AdminDashboard() {
     },
   ];
 
+  const paymentMethods = [
+    { value: "CASH", label: "Cash", color: "bg-green-100 text-green-800" },
+    { value: "MPESA", label: "M-Pesa", color: "bg-blue-100 text-blue-800" },
+    { value: "BANK", label: "Bank Transfer", color: "bg-purple-100 text-purple-800" },
+    { value: "CHECK", label: "Check", color: "bg-orange-100 text-orange-800" },
+    { value: "CARD", label: "Card Payment", color: "bg-pink-100 text-pink-800" },
+    { value: "CREDIT", label: "Credit/Pay Later", color: "bg-yellow-100 text-yellow-800" }
+  ];
+
   const fetchDashboardData = useCallback(async () => {
     setIsLoading(true);
     try {
-      // Parallel fetch for better performance
       const [ordersRes, productsRes, salesRes] = await Promise.all([
-        fetch("/api/orders"),
-        fetch("/api/products"),
-        fetch("/api/sales")
+        fetch("/api/orders").catch(() => null),
+        fetch("/api/products").catch(() => null),
+        fetch("/api/sales").catch(() => null)
       ]);
 
-      const [ordersText, productsText, salesText] = await Promise.all([
-        ordersRes.text(),
-        productsRes.text(),
-        salesRes.text()
+      let customersRes = await fetch("/api/customers").catch(() => null);
+      if (!customersRes || !customersRes.ok) {
+        customersRes = await fetch("/api/customer").catch(() => null);
+      }
+
+      const parseJSON = async (response: Response | null) => {
+        if (!response || !response.ok) return [];
+        const text = await response.text();
+        if (!text || text.trim().startsWith('<!DOCTYPE') || text.trim().startsWith('<html')) {
+          return [];
+        }
+        try {
+          return JSON.parse(text);
+        } catch {
+          return [];
+        }
+      };
+
+      const [orders, productsData, sales, customersData] = await Promise.all([
+        parseJSON(ordersRes),
+        parseJSON(productsRes),
+        parseJSON(salesRes),
+        parseJSON(customersRes)
       ]);
 
-      const orders = ordersText ? JSON.parse(ordersText) : [];
-      const products = productsText ? JSON.parse(productsText) : [];
-      const sales = salesText ? JSON.parse(salesText) : [];
+      setProducts(Array.isArray(productsData) ? productsData : []);
+      setCustomers(Array.isArray(customersData) ? customersData : (customersData?.customers || customersData?.data || []));
 
       const today = new Date();
       today.setHours(0, 0, 0, 0);
 
-      // Optimized calculations - check multiple date fields and amount fields
-      console.log("Total sales records:", sales.length);
-      console.log("Sample sale:", sales[0]); // Debug: see the structure
-      
       const todayRevenue = sales
         .filter((s: any) => {
-          // Try multiple possible date fields
           const dateStr = s.createdAt || s.saleDate || s.date || s.created_at;
           if (!dateStr) return false;
-          
           const saleDate = new Date(dateStr);
           saleDate.setHours(0, 0, 0, 0);
           return saleDate.getTime() === today.getTime();
         })
         .reduce((sum: number, s: any) => {
-          // Try multiple possible amount fields
           const amount = s.totalAmount || s.total || s.amount || s.total_amount || 0;
           return sum + amount;
         }, 0);
-      
-      console.log("Today's revenue calculated:", todayRevenue);
 
-      const activeOrders = orders.filter(
-        (o: any) => o.status === "PENDING"
-      ).length;
+      const activeOrders = orders.filter((o: any) => o.status === "PENDING").length;
+      const lowStockItems = productsData.filter((p: any) => {
+        const stock = Array.isArray(p.stock) 
+          ? p.stock.reduce((sum: number, s: any) => sum + (s.quantity || 0), 0)
+          : (p.stock?.quantity || 0);
+        return stock <= 5;
+      });
+      const criticalStockItems = productsData.filter((p: any) => {
+        const stock = Array.isArray(p.stock) 
+          ? p.stock.reduce((sum: number, s: any) => sum + (s.quantity || 0), 0)
+          : (p.stock?.quantity || 0);
+        return stock === 0;
+      });
 
-      const lowStockItems = products.filter(
-        (p: any) => (p.stock?.[0]?.quantity || 0) <= 5
-      );
-
-      const criticalStockItems = products.filter(
-        (p: any) => (p.stock?.[0]?.quantity || 0) === 0
-      );
-
-      // Enhanced notifications with priority levels
       const newNotifications: any[] = [];
 
-      // Critical notifications first
       if (criticalStockItems.length > 0) {
         newNotifications.push({
           id: `critical-stock-${Date.now()}`,
@@ -159,7 +231,6 @@ export default function AdminDashboard() {
         });
       }
 
-      // Warning notifications
       if (lowStockItems.length > 0 && criticalStockItems.length < lowStockItems.length) {
         newNotifications.push({
           id: `low-stock-${Date.now()}`,
@@ -168,17 +239,11 @@ export default function AdminDashboard() {
           icon: AlertTriangle,
           title: "Low Stock Warning",
           message: `${lowStockItems.length - criticalStockItems.length} product${lowStockItems.length - criticalStockItems.length > 1 ? 's are' : ' is'} running low`,
-          details: lowStockItems
-            .filter((i: any) => (i.stock?.[0]?.quantity || 0) > 0)
-            .slice(0, 3)
-            .map((i: any) => `${i.name} (${i.stock?.[0]?.quantity || 0} left)`)
-            .join(", "),
           link: "/admin/products",
           timestamp: new Date().toISOString(),
         });
       }
 
-      // Info notifications
       if (activeOrders > 0) {
         newNotifications.push({
           id: `pending-orders-${Date.now()}`,
@@ -187,35 +252,12 @@ export default function AdminDashboard() {
           icon: ShoppingCart,
           title: "Pending Orders",
           message: `${activeOrders} order${activeOrders > 1 ? 's' : ''} awaiting processing`,
-          details: "Review and process pending orders to maintain customer satisfaction",
           link: "/admin/orders",
           timestamp: new Date().toISOString(),
         });
       }
 
-      const newOrdersToday = orders.filter((o: any) => {
-        const orderDate = new Date(o.createdAt);
-        orderDate.setHours(0, 0, 0, 0);
-        return orderDate.getTime() === today.getTime();
-      });
-
-      if (newOrdersToday.length > 0) {
-        newNotifications.push({
-          id: `new-orders-${Date.now()}`,
-          type: "success",
-          priority: 4,
-          icon: CheckCircle,
-          title: "New Orders Today",
-          message: `${newOrdersToday.length} new order${newOrdersToday.length > 1 ? 's' : ''} received`,
-          details: `Total value: KSh ${newOrdersToday.reduce((sum: number, o: any) => sum + (o.amount || 0), 0).toLocaleString()}`,
-          link: "/admin/orders",
-          timestamp: new Date().toISOString(),
-        });
-      }
-
-      // Sort by priority
       newNotifications.sort((a, b) => a.priority - b.priority);
-
       setNotifications(newNotifications);
 
       setQuickStats([
@@ -250,16 +292,6 @@ export default function AdminDashboard() {
       ]);
     } catch (error) {
       console.error("Failed to fetch dashboard stats:", error);
-      setNotifications([{
-        id: `error-${Date.now()}`,
-        type: "critical",
-        priority: 1,
-        icon: AlertTriangle,
-        title: "System Error",
-        message: "Failed to load dashboard data",
-        details: "Please refresh the page or contact support if the issue persists",
-        timestamp: new Date().toISOString(),
-      }]);
     } finally {
       setIsLoading(false);
     }
@@ -268,6 +300,295 @@ export default function AdminDashboard() {
   useEffect(() => {
     fetchDashboardData();
   }, [fetchDashboardData]);
+
+  // Handle click outside for dropdowns
+  useEffect(() => {
+    if (!showQuickSale) return;
+    
+    const handleClickOutside = (event: MouseEvent) => {
+      const target = event.target as HTMLElement;
+      
+      if (customerDropdownRef.current && !customerDropdownRef.current.contains(target)) {
+        setShowCustomerDropdown(false);
+      }
+      
+      if (productDropdownRef.current && !productDropdownRef.current.contains(target)) {
+        setShowProductDropdown(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [showQuickSale]);
+
+  const filteredCustomers = useMemo(() => {
+    if (!customerSearch.trim()) return customers.slice(0, 10);
+    return customers.filter(c => 
+      c.name.toLowerCase().includes(customerSearch.toLowerCase()) ||
+      (c.phone && c.phone.includes(customerSearch))
+    ).slice(0, 10);
+  }, [customers, customerSearch]);
+
+  const filteredProducts = useMemo(() => {
+    if (!productSearch.trim()) return products.slice(0, 10);
+    return products.filter(p => 
+      p.name.toLowerCase().includes(productSearch.toLowerCase())
+    ).slice(0, 10);
+  }, [products, productSearch]);
+
+  const getProductStock = (product: Product) => {
+    if (Array.isArray(product.stock)) {
+      return product.stock.reduce((sum: number, s: any) => sum + (s.quantity || 0), 0);
+    }
+    return product.stock?.quantity || 0;
+  };
+
+  const addItemToSale = () => {
+    if (!currentProduct || currentQuantity <= 0) {
+      setSaleError("Please select a product and enter quantity");
+      setTimeout(() => setSaleError(null), 3000);
+      return;
+    }
+
+    const price = parseFloat(currentPrice) || currentProduct.price || 0;
+    if (price <= 0) {
+      setSaleError("Please enter a valid price");
+      setTimeout(() => setSaleError(null), 3000);
+      return;
+    }
+
+    const stock = getProductStock(currentProduct);
+    const existingItem = saleItems.find(i => i.productId === currentProduct.id);
+    const totalQuantity = (existingItem?.quantity || 0) + currentQuantity;
+
+    if (totalQuantity > stock) {
+      const errorMsg = `Insufficient stock for ${currentProduct.name}. Available: ${stock}, Requested: ${totalQuantity}`;
+      setStockError(errorMsg);
+      setSaleError(errorMsg);
+      setTimeout(() => {
+        setStockError(null);
+        setSaleError(null);
+      }, 5000);
+      return;
+    }
+    
+    if (existingItem) {
+      setSaleItems(saleItems.map(item => 
+        item.productId === currentProduct.id 
+          ? { ...item, quantity: item.quantity + currentQuantity, price }
+          : item
+      ));
+    } else {
+      setSaleItems([...saleItems, {
+        productId: currentProduct.id,
+        productName: currentProduct.name,
+        quantity: currentQuantity,
+        price
+      }]);
+    }
+
+    // Clear all product-related states
+    setCurrentProduct(null);
+    setCurrentQuantity(1);
+    setCurrentPrice("");
+    setProductSearch("");
+    setShowProductDropdown(false);
+    setSaleError(null);
+    setStockError(null);
+  };
+
+  const removeItem = (productId: number) => {
+    setSaleItems(saleItems.filter(i => i.productId !== productId));
+  };
+
+  const calculateTotalAmount = () => {
+    return saleItems.reduce((sum, item) => sum + (item.quantity * item.price), 0);
+  };
+
+  const calculateTotalPayments = () => {
+    return payments.reduce((total, payment) => total + Number(payment.amount || 0), 0);
+  };
+
+  const getRemainingAmount = () => {
+    return Math.max(0, calculateTotalAmount() - calculateTotalPayments());
+  };
+
+  const handleAddPayment = () => {
+    const amount = parseFloat(currentPayment.amount);
+    const remainingAmount = getRemainingAmount();
+    
+    if (currentPayment.method !== "CREDIT") {
+      if (!amount || amount <= 0) {
+        setSaleError("Please enter a valid payment amount");
+        setTimeout(() => setSaleError(null), 3000);
+        return;
+      }
+
+      if (amount > remainingAmount) {
+        setSaleError(`Payment amount cannot exceed remaining balance of KSh ${remainingAmount.toFixed(2)}`);
+        setTimeout(() => setSaleError(null), 3000);
+        return;
+      }
+    }
+
+    if (currentPayment.method === "CHECK" && !currentPayment.checkDepositDate) {
+      setSaleError("Please specify check deposit date");
+      setTimeout(() => setSaleError(null), 3000);
+      return;
+    }
+
+    if (currentPayment.method === "CREDIT" && !currentPayment.dueDate) {
+      setSaleError("Due date is MANDATORY for credit/pay later payments");
+      setTimeout(() => setSaleError(null), 3000);
+      return;
+    }
+
+    if (["MPESA", "BANK", "CARD"].includes(currentPayment.method) && !currentPayment.referenceId) {
+      setSaleError("Please enter transaction reference");
+      setTimeout(() => setSaleError(null), 3000);
+      return;
+    }
+
+    setPayments([
+      ...payments,
+      {
+        ...currentPayment,
+        amount: currentPayment.method === "CREDIT" ? "0" : currentPayment.amount,
+        referenceId: currentPayment.referenceId || "",
+        checkDepositDate: currentPayment.checkDepositDate || "",
+        dueDate: currentPayment.dueDate || "",
+      },
+    ]);
+
+    setCurrentPayment({
+      amount: "",
+      method: "CASH",
+      referenceId: "",
+      checkDepositDate: "",
+      dueDate: ""
+    });
+    setSaleError(null);
+  };
+
+  const removePayment = (index: number) => {
+    setPayments(payments.filter((_, i) => i !== index));
+  };
+
+  const handleCreateSale = async () => {
+    if (!selectedCustomer) {
+      setSaleError("Please select a customer");
+      setTimeout(() => setSaleError(null), 3000);
+      return;
+    }
+
+    if (saleItems.length === 0) {
+      setSaleError("Please add at least one item to the sale");
+      setTimeout(() => setSaleError(null), 3000);
+      return;
+    }
+
+    const totalAmount = calculateTotalAmount();
+    const totalPayments = calculateTotalPayments();
+    const remainingAmount = totalAmount - totalPayments;
+
+    if (remainingAmount > 0 && !dueDate) {
+      setSaleError("Due date is MANDATORY when there's an outstanding balance");
+      setTimeout(() => setSaleError(null), 3000);
+      return;
+    }
+
+    setCreating(true);
+    setSaleError(null);
+    setSaleSuccess("Creating sale, please wait...");
+
+    try {
+      let status: "PAID" | "PARTIAL" | "UNPAID";
+      if (remainingAmount <= 0.01) {
+        status = "PAID";
+      } else if (totalPayments > 0) {
+        status = "PARTIAL";
+      } else {
+        status = "UNPAID";
+      }
+
+      const paymentsData = payments.length > 0
+        ? payments.map(p => {
+            const isCheck = p.method?.toUpperCase() === "CHECK";
+            return {
+              amount: Number(p.amount),
+              method: p.method || "CASH",
+              referenceId: p.referenceId?.trim() || null,
+              checkDepositDate: p.checkDepositDate || null,
+              date: new Date().toISOString(),
+              status: isCheck ? "PENDING" : "COMPLETED",
+            };
+          })
+        : [];
+
+      const saleData = {
+        customerId: selectedCustomer.id,
+        amount: totalAmount,
+        status,
+        dueDate: dueDate || null,
+        saleItems: saleItems.map(item => ({
+          productId: item.productId,
+          quantity: item.quantity,
+          price: item.price,
+        })),
+        payments: paymentsData,
+      };
+
+      console.log("Creating sale with data:", saleData);
+
+      const response = await fetch("/api/sales", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(saleData)
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || "Failed to create sale");
+      }
+
+      const result = await response.json();
+      console.log("Sale created successfully:", result);
+
+      setSaleSuccess("Sale created successfully! 🎉");
+      
+      // Reset form
+      setSelectedCustomer(null);
+      setCustomerSearch("");
+      setSaleItems([]);
+      setPayments([]);
+      setCurrentProduct(null);
+      setProductSearch("");
+      setCurrentQuantity(1);
+      setCurrentPrice("");
+      setCurrentPayment({
+        amount: "",
+        method: "CASH",
+        referenceId: "",
+        checkDepositDate: "",
+        dueDate: ""
+      });
+      setDueDate(new Date().toISOString().split('T')[0]);
+      
+      // Refresh dashboard data
+      fetchDashboardData();
+      
+      setTimeout(() => {
+        setSaleSuccess(null);
+        setShowQuickSale(false);
+      }, 2000);
+
+    } catch (error: any) {
+      console.error("Error creating sale:", error);
+      setSaleError(error.message || "Failed to create sale");
+    } finally {
+      setCreating(false);
+    }
+  };
 
   const getNotificationStyles = (type: string) => {
     switch (type) {
@@ -321,15 +642,26 @@ export default function AdminDashboard() {
               <p className="text-sm sm:text-base text-slate-600 mt-1">Your business at a glance</p>
             </div>
 
-            {/* Notification Button */}
-            <div className="flex items-center gap-3 sm:gap-6">
+            <div className="flex items-center gap-3">
+              {/* Quick Sale Button */}
+              <button
+                onClick={() => setShowQuickSale(true)}
+                type="button"
+                className="flex items-center gap-2 bg-gradient-to-r from-blue-600 to-blue-700 text-white px-4 py-2.5 rounded-lg hover:from-blue-700 hover:to-blue-800 transition-all shadow-lg hover:shadow-xl font-medium"
+              >
+                <Zap className="w-5 h-5" />
+                <span className="hidden sm:inline">Quick Sale</span>
+                <span className="sm:hidden">Sale</span>
+              </button>
+
+              {/* Notification Button */}
               <div className="relative">
                 <button
                   onClick={() => setShowNotifications(!showNotifications)}
-                  className="relative p-2 sm:p-2.5 rounded-full bg-blue-100 hover:bg-blue-200 transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
-                  aria-label="Notifications"
+                  type="button"
+                  className="relative p-2.5 rounded-full bg-blue-100 hover:bg-blue-200 transition-colors"
                 >
-                  <Bell className="w-5 h-5 sm:w-6 sm:h-6 text-blue-700" />
+                  <Bell className="w-5 h-5 text-blue-700" />
                   {notificationCount > 0 && (
                     <span className="absolute -top-1 -right-1 flex items-center justify-center min-w-[20px] h-5 px-1 text-xs font-bold text-white bg-red-500 rounded-full">
                       {notificationCount > 9 ? "9+" : notificationCount}
@@ -337,21 +669,17 @@ export default function AdminDashboard() {
                   )}
                 </button>
 
-                {/* Notification Panel - Mobile Optimized */}
                 {showNotifications && (
                   <>
-                    {/* Backdrop for mobile */}
                     <div 
-                      className="fixed inset-0 bg-black/20 z-40 md:hidden"
+                      className="fixed inset-0 z-40 md:hidden"
                       onClick={() => setShowNotifications(false)}
                     />
                     
                     <div className="fixed inset-x-4 top-20 md:absolute md:inset-x-auto md:right-0 md:top-auto md:mt-3 w-auto md:w-96 bg-white shadow-2xl rounded-xl border border-slate-200 z-50 max-h-[calc(100vh-6rem)] md:max-h-[600px] flex flex-col">
                       <div className="flex items-center justify-between px-4 py-3 border-b bg-slate-50 rounded-t-xl">
                         <div className="flex items-center gap-2">
-                          <h3 className="text-base sm:text-lg font-semibold text-slate-800">
-                            Notifications
-                          </h3>
+                          <h3 className="text-base font-semibold text-slate-800">Notifications</h3>
                           {notificationCount > 0 && (
                             <span className="px-2 py-0.5 text-xs font-medium bg-blue-100 text-blue-700 rounded-full">
                               {notificationCount}
@@ -360,26 +688,17 @@ export default function AdminDashboard() {
                         </div>
                         <button
                           onClick={() => setShowNotifications(false)}
-                          className="text-slate-500 hover:text-slate-700 p-1 rounded-lg hover:bg-slate-200 transition-colors"
-                          aria-label="Close notifications"
+                          type="button"
+                          className="text-slate-500 hover:text-slate-700"
                         >
                           <X className="w-4 h-4" />
                         </button>
                       </div>
 
-                      {isLoading ? (
-                        <div className="flex items-center justify-center py-12">
-                          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
-                        </div>
-                      ) : notifications.length === 0 ? (
-                        <div className="flex flex-col items-center justify-center py-12 px-4">
-                          <div className="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center mb-3">
-                            <Bell className="w-8 h-8 text-slate-400" />
-                          </div>
-                          <p className="text-slate-600 font-medium">All caught up!</p>
-                          <p className="text-slate-500 text-sm text-center mt-1">
-                            No new notifications at the moment
-                          </p>
+                      {notifications.length === 0 ? (
+                        <div className="flex flex-col items-center justify-center py-12">
+                          <Bell className="w-12 h-12 text-slate-400 mb-2" />
+                          <p className="text-slate-600">All caught up!</p>
                         </div>
                       ) : (
                         <ul className="overflow-y-auto flex-1">
@@ -388,34 +707,21 @@ export default function AdminDashboard() {
                             const Icon = note.icon || Info;
                             
                             return (
-                              <li
-                                key={note.id}
-                                className={`px-4 py-4 border-b last:border-none hover:bg-slate-50 transition-colors ${styles.bg}`}
-                              >
+                              <li key={note.id} className={`px-4 py-4 border-b ${styles.bg}`}>
                                 <div className="flex gap-3">
                                   <div className={`${styles.iconBg} p-2 rounded-lg h-fit`}>
                                     <Icon className={`w-5 h-5 ${styles.iconColor}`} />
                                   </div>
-                                  <div className="flex-1 min-w-0">
-                                    <p className={`font-semibold text-sm mb-1 ${styles.text}`}>
-                                      {note.title}
-                                    </p>
-                                    <p className="text-slate-700 text-sm mb-1">
-                                      {note.message}
-                                    </p>
-                                    {note.details && (
-                                      <p className="text-xs text-slate-500 mb-2 line-clamp-2">
-                                        {note.details}
-                                      </p>
-                                    )}
+                                  <div className="flex-1">
+                                    <p className={`font-semibold text-sm ${styles.text}`}>{note.title}</p>
+                                    <p className="text-sm text-slate-700">{note.message}</p>
                                     {note.link && (
                                       <Link
                                         href={note.link}
                                         onClick={() => setShowNotifications(false)}
-                                        className="inline-flex items-center text-sm font-medium text-blue-600 hover:text-blue-700 hover:underline"
+                                        className="text-sm text-blue-600 hover:underline mt-1 inline-block"
                                       >
-                                        View details
-                                        <ChevronRight className="w-4 h-4 ml-1" />
+                                        View details →
                                       </Link>
                                     )}
                                   </div>
@@ -429,20 +735,485 @@ export default function AdminDashboard() {
                   </>
                 )}
               </div>
-
-              <div className="hidden sm:flex items-center gap-3">
-                <div className="hidden md:block text-right text-sm">
-                  <div className="text-slate-500">Last Login</div>
-                  <div className="font-medium text-slate-800">Today</div>
-                </div>
-                <div className="w-10 h-10 sm:w-12 sm:h-12 bg-gradient-to-r from-blue-500 to-blue-600 rounded-full flex items-center justify-center text-white font-semibold text-sm">
-                  ADM
-                </div>
-              </div>
             </div>
           </div>
         </div>
       </div>
+
+      {/* Enhanced Quick Sale Modal */}
+      {showQuickSale && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50 overflow-y-auto">
+          <div className="bg-white rounded-2xl max-w-3xl w-full max-h-[90vh] overflow-y-auto shadow-2xl">
+            <div className="sticky top-0 bg-gradient-to-r from-blue-600 to-blue-700 text-white p-6 rounded-t-2xl z-10">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <Zap className="w-8 h-8" />
+                  <div>
+                    <h2 className="text-2xl font-bold">Quick Sale</h2>
+                    <p className="text-blue-100 text-sm">Create sale in seconds</p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => {
+                    setShowQuickSale(false);
+                    setSaleError(null);
+                    setSaleSuccess(null);
+                    setStockError(null);
+                  }}
+                  type="button"
+                  className="text-white hover:bg-white/20 p-2 rounded-lg transition-colors"
+                >
+                  <X className="w-6 h-6" />
+                </button>
+              </div>
+            </div>
+
+            <div className="p-6 space-y-6">
+              {saleError && (
+                <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg flex items-start gap-2">
+                  <AlertTriangle className="w-5 h-5 flex-shrink-0 mt-0.5" />
+                  <div className="flex-1">
+                    <span>{saleError}</span>
+                  </div>
+                  <button onClick={() => setSaleError(null)} type="button" className="text-red-700 hover:text-red-900">
+                    <X size={16} />
+                  </button>
+                </div>
+              )}
+
+              {saleSuccess && (
+                <div className="bg-emerald-50 border border-emerald-200 text-emerald-700 px-4 py-3 rounded-lg flex items-start gap-2">
+                  <CheckCircle className="w-5 h-5 flex-shrink-0 mt-0.5" />
+                  <span>{saleSuccess}</span>
+                </div>
+              )}
+
+              {/* Customer Selection */}
+              <div className="relative" ref={customerDropdownRef}>
+                <label className="block text-sm font-semibold text-slate-700 mb-2">Customer *</label>
+                <div className="relative">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
+                  <input
+                    type="text"
+                    placeholder="Search customer by name or phone..."
+                    value={selectedCustomer ? selectedCustomer.name : customerSearch}
+                    onChange={(e) => {
+                      setCustomerSearch(e.target.value);
+                      setSelectedCustomer(null);
+                      setShowCustomerDropdown(true);
+                    }}
+                    onFocus={() => setShowCustomerDropdown(true)}
+                    className="w-full pl-10 pr-4 py-3 border-2 border-slate-200 rounded-lg focus:border-blue-500 focus:ring-2 focus:ring-blue-200 transition-all"
+                  />
+                </div>
+                {showCustomerDropdown && !selectedCustomer && filteredCustomers.length > 0 && (
+                  <div className="absolute z-20 w-full mt-2 bg-white border-2 border-slate-200 rounded-lg shadow-xl max-h-60 overflow-y-auto">
+                    {filteredCustomers.map(customer => (
+                      <button
+                        key={customer.id}
+                        type="button"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          setSelectedCustomer(customer);
+                          setCustomerSearch("");
+                          setShowCustomerDropdown(false);
+                        }}
+                        className="w-full text-left px-4 py-3 hover:bg-blue-50 border-b last:border-b-0 transition-colors"
+                      >
+                        <div className="font-medium text-slate-900">{customer.name}</div>
+                        {customer.phone && <div className="text-sm text-slate-600">{customer.phone}</div>}
+                      </button>
+                    ))}
+                  </div>
+                )}
+                {selectedCustomer && (
+                  <div className="mt-2 bg-blue-50 border border-blue-200 rounded-lg px-4 py-3 flex items-center justify-between">
+                    <div>
+                      <div className="font-medium text-blue-900">{selectedCustomer.name}</div>
+                      {selectedCustomer.phone && <div className="text-sm text-blue-700">{selectedCustomer.phone}</div>}
+                    </div>
+                    <CheckCircle className="w-5 h-5 text-blue-600" />
+                  </div>
+                )}
+              </div>
+
+              {/* Product Selection */}
+              <div>
+                <label className="block text-sm font-semibold text-slate-700 mb-2">Add Products</label>
+                <div className="space-y-3">
+                  <div className="relative" ref={productDropdownRef}>
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400 pointer-events-none z-10" />
+                    <input
+                      type="text"
+                      placeholder="Search product..."
+                      value={currentProduct ? "" : productSearch}
+                      onChange={(e) => {
+                        setProductSearch(e.target.value);
+                        setShowProductDropdown(true);
+                      }}
+                      onFocus={() => {
+                        if (!currentProduct) {
+                          setShowProductDropdown(true);
+                        }
+                      }}
+                      disabled={!!currentProduct}
+                      className="w-full pl-10 pr-4 py-3 border-2 border-slate-200 rounded-lg focus:border-blue-500 focus:ring-2 focus:ring-blue-200 transition-all disabled:bg-slate-100 disabled:cursor-not-allowed"
+                    />
+
+                    {showProductDropdown && !currentProduct && filteredProducts.length > 0 && (
+                      <div className="absolute z-20 w-full mt-2 bg-white border-2 border-slate-200 rounded-lg shadow-xl max-h-60 overflow-y-auto">
+                        {filteredProducts.map(product => {
+                          const stock = getProductStock(product);
+                          return (
+                            <button
+                              key={product.id}
+                              type="button"
+                              onClick={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                setCurrentProduct(product);
+                                setCurrentPrice(product.price?.toString() || "");
+                                setProductSearch("");
+                                setShowProductDropdown(false);
+                              }}
+                              className="w-full text-left px-4 py-3 hover:bg-blue-50 border-b last:border-b-0 transition-colors"
+                            >
+                              <div className="flex justify-between items-center">
+                                <div>
+                                  <div className="font-medium text-slate-900">{product.name}</div>
+                                  <div className="text-sm text-slate-600">
+                                    Stock: {stock} | KSh {product.price?.toLocaleString() || 0}
+                                  </div>
+                                </div>
+                              </div>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+
+                  {currentProduct && (
+                    <div className="bg-blue-50 border-2 border-blue-200 rounded-lg p-4">
+                      <div className="flex items-center justify-between mb-3">
+                        <div className="flex-1">
+                          <div className="font-semibold text-blue-900">{currentProduct.name}</div>
+                          <div className="text-sm text-blue-700">
+                            Available: {getProductStock(currentProduct)} | Price: KSh {currentProduct.price?.toLocaleString() || 0}
+                          </div>
+                        </div>
+                        <button 
+                          onClick={() => {
+                            setCurrentProduct(null);
+                            setCurrentPrice("");
+                            setCurrentQuantity(1);
+                            setProductSearch("");
+                          }}
+                          type="button"
+                          className="text-blue-600 hover:text-blue-800 p-1"
+                        >
+                          <X className="w-5 h-5" />
+                        </button>
+                      </div>
+                      <div className="grid grid-cols-2 gap-3 mb-3">
+                        <div>
+                          <label className="block text-xs font-semibold text-slate-700 mb-1">Quantity *</label>
+                          <input
+                            type="number"
+                            min="1"
+                            value={currentQuantity}
+                            onChange={(e) => {
+                              const val = parseInt(e.target.value);
+                              setCurrentQuantity(isNaN(val) || val < 1 ? 1 : val);
+                            }}
+                            className="w-full px-3 py-2 border-2 border-slate-200 rounded-lg focus:border-blue-500"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-semibold text-slate-700 mb-1">Unit Price (KSh) *</label>
+                          <input
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            value={currentPrice}
+                            onChange={(e) => setCurrentPrice(e.target.value)}
+                            placeholder={currentProduct.price?.toString() || "0.00"}
+                            className="w-full px-3 py-2 border-2 border-slate-200 rounded-lg focus:border-blue-500"
+                          />
+                        </div>
+                      </div>
+                      {currentQuantity > 0 && (parseFloat(currentPrice) || currentProduct.price || 0) > 0 && (
+                        <div className="bg-blue-100 text-blue-900 px-3 py-2 rounded-lg text-sm font-bold mb-3">
+                          Subtotal: KSh {(currentQuantity * (parseFloat(currentPrice) || currentProduct.price || 0)).toLocaleString()}
+                        </div>
+                      )}
+                      <button
+                        onClick={addItemToSale}
+                        type="button"
+                        disabled={!currentProduct || currentQuantity <= 0 || (parseFloat(currentPrice) || 0) <= 0}
+                        className="w-full bg-blue-600 text-white px-4 py-3 rounded-lg hover:bg-blue-700 font-medium flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+                      >
+                        <Plus className="w-5 h-5" />
+                        Add to Sale
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Sale Items */}
+              {saleItems.length > 0 && (
+                <div className="border-2 border-slate-200 rounded-lg p-4 bg-slate-50">
+                  <h3 className="font-semibold text-slate-900 mb-3 flex items-center gap-2">
+                    <Package className="w-5 h-5 text-blue-600" />
+                    Sale Items ({saleItems.length})
+                  </h3>
+                  <div className="space-y-2 mb-4">
+                    {saleItems.map(item => (
+                      <div key={item.productId} className="flex items-center justify-between bg-white p-3 rounded-lg border border-slate-200">
+                        <div className="flex-1">
+                          <div className="font-medium text-slate-900">{item.productName}</div>
+                          <div className="text-sm text-slate-600">
+                            {item.quantity} × KSh {item.price.toLocaleString()} = KSh {(item.quantity * item.price).toLocaleString()}
+                          </div>
+                        </div>
+                        <button
+                          onClick={() => removeItem(item.productId)}
+                          type="button"
+                          className="text-red-600 hover:text-red-800 p-2 hover:bg-red-50 rounded transition-colors"
+                        >
+                          <Trash2 className="w-5 h-5" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="pt-3 border-t-2 border-slate-300">
+                    <div className="flex justify-between items-center">
+                      <span className="text-lg font-bold text-slate-900">Total Amount</span>
+                      <span className="text-2xl font-bold text-blue-600">KSh {calculateTotalAmount().toLocaleString()}</span>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Payment Details */}
+              {saleItems.length > 0 && (
+                <div className="space-y-4">
+                  <h3 className="font-semibold text-slate-900 flex items-center gap-2">
+                    <DollarSign className="w-5 h-5 text-blue-600" />
+                    Payment Details
+                  </h3>
+                  
+                  <div className="bg-gray-50 p-4 rounded-lg space-y-3">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-sm font-medium text-slate-700 mb-1">Payment Method *</label>
+                        <select
+                          value={currentPayment.method}
+                          onChange={(e) => setCurrentPayment({
+                            ...currentPayment,
+                            method: e.target.value as any,
+                            amount: e.target.value === "CREDIT" ? "0" : currentPayment.amount,
+                          })}
+                          className="w-full px-3 py-2 border-2 border-slate-200 rounded-lg focus:border-blue-500"
+                        >
+                          {paymentMethods.map(method => (
+                            <option key={method.value} value={method.value}>{method.label}</option>
+                          ))}
+                        </select>
+                      </div>
+
+                      {currentPayment.method !== "CREDIT" && (
+                        <div>
+                          <label className="block text-sm font-medium text-slate-700 mb-1">Amount (KSh) *</label>
+                          <input
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            max={getRemainingAmount()}
+                            value={currentPayment.amount}
+                            onChange={(e) => setCurrentPayment({...currentPayment, amount: e.target.value})}
+                            placeholder={getRemainingAmount().toFixed(2)}
+                            className="w-full px-3 py-2 border-2 border-slate-200 rounded-lg focus:border-blue-500"
+                          />
+                          <div className="text-xs text-slate-600 mt-1">
+                            Max: KSh {getRemainingAmount().toLocaleString()}
+                          </div>
+                        </div>
+                      )}
+
+                      {["MPESA", "BANK", "CARD"].includes(currentPayment.method) && (
+                        <div>
+                          <label className="block text-sm font-medium text-slate-700 mb-1">
+                            Transaction Reference * <span className="text-red-600">(Required)</span>
+                          </label>
+                          <input
+                            type="text"
+                            value={currentPayment.referenceId}
+                            onChange={(e) => setCurrentPayment({...currentPayment, referenceId: e.target.value})}
+                            placeholder={
+                              currentPayment.method === "MPESA" ? "e.g., QC12ABC345" :
+                              currentPayment.method === "BANK" ? "e.g., TXN123456789" :
+                              "e.g., AUTH987654"
+                            }
+                            className="w-full px-3 py-2 border-2 border-slate-200 rounded-lg focus:border-blue-500"
+                          />
+                        </div>
+                      )}
+
+                      {currentPayment.method === "CHECK" && (
+                        <div>
+                          <label className="block text-sm font-medium text-slate-700 mb-1">
+                            Check Deposit Date * <span className="text-red-600">(Required)</span>
+                          </label>
+                          <input
+                            type="date"
+                            value={currentPayment.checkDepositDate}
+                            onChange={(e) => setCurrentPayment({...currentPayment, checkDepositDate: e.target.value})}
+                            min={new Date().toISOString().split('T')[0]}
+                            className="w-full px-3 py-2 border-2 border-slate-200 rounded-lg focus:border-blue-500"
+                          />
+                        </div>
+                      )}
+
+                      {(currentPayment.method === "CREDIT" || 
+                        (currentPayment.amount && parseFloat(currentPayment.amount) < getRemainingAmount())) && (
+                        <div>
+                          <label className="block text-sm font-medium text-slate-700 mb-1">
+                            Due Date * <span className="text-red-600">(Required)</span>
+                          </label>
+                          <input
+                            type="date"
+                            value={currentPayment.dueDate}
+                            onChange={(e) => setCurrentPayment({...currentPayment, dueDate: e.target.value})}
+                            min={new Date().toISOString().split('T')[0]}
+                            className="w-full px-3 py-2 border-2 border-slate-200 rounded-lg focus:border-blue-500"
+                          />
+                        </div>
+                      )}
+                    </div>
+
+                    <button
+                      onClick={handleAddPayment}
+                      type="button"
+                      className="w-full bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 font-medium flex items-center justify-center gap-2 transition-all"
+                    >
+                      <Plus className="w-5 h-5" />
+                      Add Payment
+                    </button>
+                  </div>
+
+                  {/* Payment List */}
+                  {payments.length > 0 && (
+                    <div className="border-2 border-slate-200 rounded-lg p-4 bg-white">
+                      <h4 className="font-semibold text-slate-900 mb-3">Payments Added:</h4>
+                      <div className="space-y-2 mb-3">
+                        {payments.map((payment, index) => (
+                          <div key={index} className="flex items-center justify-between bg-slate-50 p-3 rounded-lg border border-slate-200">
+                            <div className="flex-1">
+                              <div className="flex items-center gap-2 mb-1">
+                                <span className={`px-2 py-1 rounded-full text-xs font-medium ${
+                                  paymentMethods.find(m => m.value === payment.method)?.color
+                                }`}>
+                                  {payment.method}
+                                </span>
+                                {payment.referenceId && (
+                                  <span className="text-xs text-slate-600">Ref: {payment.referenceId}</span>
+                                )}
+                              </div>
+                              <div className="text-sm font-semibold text-slate-900">
+                                KSh {Number(payment.amount || 0).toLocaleString()}
+                              </div>
+                              {payment.dueDate && (
+                                <div className="text-xs text-orange-600">Due: {payment.dueDate}</div>
+                              )}
+                            </div>
+                            <button
+                              onClick={() => removePayment(index)}
+                              type="button"
+                              className="text-red-600 hover:text-red-800 p-2 hover:bg-red-50 rounded transition-colors"
+                            >
+                              <Trash2 className="w-5 h-5" />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                      <div className="pt-3 border-t-2 border-slate-200 space-y-2">
+                        <div className="flex justify-between text-sm">
+                          <span className="text-slate-600">Total Amount:</span>
+                          <span className="font-semibold text-slate-900">KSh {calculateTotalAmount().toLocaleString()}</span>
+                        </div>
+                        <div className="flex justify-between text-sm">
+                          <span className="text-slate-600">Total Payments:</span>
+                          <span className="font-semibold text-green-600">KSh {calculateTotalPayments().toLocaleString()}</span>
+                        </div>
+                        <div className="flex justify-between pt-2 border-t">
+                          <span className="font-bold text-slate-900">Remaining Balance:</span>
+                          <span className={`font-bold text-lg ${getRemainingAmount() > 0 ? 'text-red-600' : 'text-green-600'}`}>
+                            KSh {getRemainingAmount().toLocaleString()}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Due Date for Outstanding Balance */}
+                  {getRemainingAmount() > 0 && (
+                    <div className="bg-yellow-50 border-2 border-yellow-200 rounded-lg p-4">
+                      <label className="block text-sm font-semibold text-slate-700 mb-2">
+                        Payment Due Date * <span className="text-red-600">(MANDATORY for outstanding balance)</span>
+                      </label>
+                      <input
+                        type="date"
+                        value={dueDate}
+                        onChange={(e) => setDueDate(e.target.value)}
+                        min={new Date().toISOString().split('T')[0]}
+                        className="w-full px-4 py-3 border-2 border-yellow-300 rounded-lg focus:border-yellow-500 focus:ring-2 focus:ring-yellow-200"
+                      />
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Action Buttons */}
+              <div className="flex gap-3 pt-4 border-t-2 border-slate-200">
+                <button
+                  onClick={() => {
+                    setShowQuickSale(false);
+                    setSaleError(null);
+                    setSaleSuccess(null);
+                    setStockError(null);
+                  }}
+                  type="button"
+                  disabled={creating}
+                  className="flex-1 px-6 py-3 border-2 border-slate-300 text-slate-700 rounded-lg hover:bg-slate-50 font-medium transition-colors disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleCreateSale}
+                  type="button"
+                  disabled={creating || !selectedCustomer || saleItems.length === 0}
+                  className="flex-1 px-6 py-3 bg-gradient-to-r from-blue-600 to-blue-700 text-white rounded-lg hover:from-blue-700 hover:to-blue-800 font-medium transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 shadow-lg"
+                >
+                  {creating ? (
+                    <>
+                      <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
+                      Creating Sale...
+                    </>
+                  ) : (
+                    <>
+                      <CheckCircle className="w-5 h-5" />
+                      Create Sale
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Quick Stats */}
       <div className="max-w-7xl mx-auto px-4 sm:px-6 py-6 sm:py-10">
