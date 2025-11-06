@@ -787,56 +787,59 @@ export default function AdminDashboard() {
                   <span>{saleSuccess}</span>
                 </div>
               )}
+{/* ✅ Customer Selection */}
+<div className="relative" ref={customerDropdownRef}>
+<label className="block text-sm font-semibold text-black mb-2">Customer *</label>
+<div className="relative">
+<Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-black" />
+<input
+type="text"
+placeholder="Search customer by name or phone..."
+value={selectedCustomer ? selectedCustomer.name : customerSearch}
+onChange={(e) => {
+setCustomerSearch(e.target.value);
+setSelectedCustomer(null);
+setShowCustomerDropdown(true);
+}}
+onFocus={() => setShowCustomerDropdown(true)}
+className="w-full pl-10 pr-4 py-3 border-2 border-black rounded-lg focus:border-blue-500 focus:ring-2 focus:ring-blue-200 transition-all"
+/>
+</div>
 
-              {/* Customer Selection */}
-              <div className="relative" ref={customerDropdownRef}>
-                <label className="block text-sm font-semibold text-slate-700 mb-2">Customer *</label>
-                <div className="relative">
-                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text bg-black" />
-                  <input
-                    type="text"
-                    placeholder="Search customer by name or phone..."
-                    value={selectedCustomer ? selectedCustomer.name : customerSearch}
-                    onChange={(e) => {
-                      setCustomerSearch(e.target.value);
-                      setSelectedCustomer(null);
-                      setShowCustomerDropdown(true);
-                    }}
-                    onFocus={() => setShowCustomerDropdown(true)}
-                    className="w-full pl-10 pr-4 py-3 border-2 border-slate-200 rounded-lg focus:border-blue-500 focus:ring-2 focus:ring-blue-200 transition-all"
-                  />
-                </div>
-                {showCustomerDropdown && !selectedCustomer && filteredCustomers.length > 0 && (
-                  <div className="absolute z-20 w-full mt-2 bg-white border-2 border-slate-200 rounded-lg shadow-xl max-h-60 overflow-y-auto">
-                    {filteredCustomers.map(customer => (
-                      <button
-                        key={customer.id}
-                        type="button"
-                        onClick={(e) => {
-                          e.preventDefault();
-                          e.stopPropagation();
-                          setSelectedCustomer(customer);
-                          setCustomerSearch("");
-                          setShowCustomerDropdown(false);
-                        }}
-                        className="w-full text-left px-4 py-3 hover:bg-blue-50 border-b last:border-b-0 transition-colors"
-                      >
-                        <div className="font-medium text-slate-900">{customer.name}</div>
-                        {customer.phone && <div className="text-sm text-slate-600">{customer.phone}</div>}
-                      </button>
-                    ))}
-                  </div>
-                )}
-                {selectedCustomer && (
-                  <div className="mt-2 bg-blue-50 border border-blue-200 rounded-lg px-4 py-3 flex items-center justify-between">
-                    <div>
-                      <div className="font-medium text-blue-900">{selectedCustomer.name}</div>
-                      {selectedCustomer.phone && <div className="text-sm text-blue-700">{selectedCustomer.phone}</div>}
-                    </div>
-                    <CheckCircle className="w-5 h-5 text-blue-600" />
-                  </div>
-                )}
-              </div>
+
+{showCustomerDropdown && !selectedCustomer && filteredCustomers.length > 0 && (
+<div className="absolute z-20 w-full mt-2 bg-white border-2 border-black rounded-lg shadow-xl max-h-60 overflow-y-auto">
+{filteredCustomers.map(customer => (
+<button
+key={customer.id}
+type="button"
+onClick={(e) => {
+e.preventDefault();
+e.stopPropagation();
+setSelectedCustomer(customer);
+setCustomerSearch("");
+setShowCustomerDropdown(false);
+}}
+className="w-full text-left px-4 py-3 hover:bg-blue-50 border-b last:border-b-0 transition-colors"
+>
+<div className="font-medium text-black">{customer.name}</div>
+{customer.phone && <div className="text-sm text-black">{customer.phone}</div>}
+</button>
+))}
+</div>
+)}
+
+
+{selectedCustomer && (
+<div className="mt-2 bg-blue-50 border border-blue-200 rounded-lg px-4 py-3 flex items-center justify-between">
+<div>
+<div className="font-medium text-black">{selectedCustomer.name}</div>
+{selectedCustomer.phone && <div className="text-sm text-black">{selectedCustomer.phone}</div>}
+</div>
+<CheckCircle className="w-5 h-5 text-blue-600" />
+</div>
+)}
+</div>
 
               {/* Product Selection */}
               <div>
