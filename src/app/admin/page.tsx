@@ -792,7 +792,7 @@ export default function AdminDashboard() {
               <div className="relative" ref={customerDropdownRef}>
                 <label className="block text-sm font-semibold text-slate-700 mb-2">Customer *</label>
                 <div className="relative">
-                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text bg-black" />
                   <input
                     type="text"
                     placeholder="Search customer by name or phone..."
@@ -843,7 +843,7 @@ export default function AdminDashboard() {
                 <label className="block text-sm font-semibold text-slate-700 mb-2">Add Products</label>
                 <div className="space-y-3">
                   <div className="relative" ref={productDropdownRef}>
-                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400 pointer-events-none z-10" />
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-black pointer-events-none z-10" />
                     <input
                       type="text"
                       placeholder="Search product..."
@@ -918,7 +918,7 @@ export default function AdminDashboard() {
                       </div>
                       <div className="grid grid-cols-2 gap-3 mb-3">
                         <div>
-                          <label className="block text-xs font-semibold text-slate-700 mb-1">Quantity *</label>
+                          <label className="block text-xs font-semibold text-black mb-1">Quantity *</label>
                           <input
                             type="number"
                             min="1"
@@ -931,7 +931,7 @@ export default function AdminDashboard() {
                           />
                         </div>
                         <div>
-                          <label className="block text-xs font-semibold text-slate-700 mb-1">Unit Price (KSh) *</label>
+                          <label className="block text-xs font-semibold text-black mb-1">Unit Price (KSh) *</label>
                           <input
                             type="number"
                             min="0"
@@ -1008,7 +1008,7 @@ export default function AdminDashboard() {
                   <div className="bg-gray-50 p-4 rounded-lg space-y-3">
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                       <div>
-                        <label className="block text-sm font-medium text-slate-700 mb-1">Payment Method *</label>
+                        <label className="block text-sm font-medium text-black mb-1">Payment Method *</label>
                         <select
                           value={currentPayment.method}
                           onChange={(e) => setCurrentPayment({
@@ -1026,7 +1026,7 @@ export default function AdminDashboard() {
 
                       {currentPayment.method !== "CREDIT" && (
                         <div>
-                          <label className="block text-sm font-medium text-slate-700 mb-1">Amount (KSh) *</label>
+                          <label className="block text-sm font-medium text-black mb-1">Amount (KSh) *</label>
                           <input
                             type="number"
                             min="0"
