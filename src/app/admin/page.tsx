@@ -639,7 +639,7 @@ export default function AdminDashboard() {
               <h1 className="text-xl sm:text-2xl md:text-3xl font-bold text-slate-900 truncate">
                 SWIFT METALS <span className="text-blue-600">Admin</span>
               </h1>
-              <p className="text-sm sm:text-base text-slate-600 mt-1">Your business at a glance</p>
+              <p className="text-sm sm:text-base text-black mt-1">Your business at a glance</p>
             </div>
 
             <div className="flex items-center gap-3">
@@ -679,7 +679,7 @@ export default function AdminDashboard() {
                     <div className="fixed inset-x-4 top-20 md:absolute md:inset-x-auto md:right-0 md:top-auto md:mt-3 w-auto md:w-96 bg-white shadow-2xl rounded-xl border border-slate-200 z-50 max-h-[calc(100vh-6rem)] md:max-h-[600px] flex flex-col">
                       <div className="flex items-center justify-between px-4 py-3 border-b bg-slate-50 rounded-t-xl">
                         <div className="flex items-center gap-2">
-                          <h3 className="text-base font-semibold text-slate-800">Notifications</h3>
+                          <h3 className="text-base font-semibold text-black">Notifications</h3>
                           {notificationCount > 0 && (
                             <span className="px-2 py-0.5 text-xs font-medium bg-blue-100 text-blue-700 rounded-full">
                               {notificationCount}
@@ -698,7 +698,7 @@ export default function AdminDashboard() {
                       {notifications.length === 0 ? (
                         <div className="flex flex-col items-center justify-center py-12">
                           <Bell className="w-12 h-12 text-slate-400 mb-2" />
-                          <p className="text-slate-600">All caught up!</p>
+                          <p className="text-black">All caught up!</p>
                         </div>
                       ) : (
                         <ul className="overflow-y-auto flex-1">
@@ -714,7 +714,7 @@ export default function AdminDashboard() {
                                   </div>
                                   <div className="flex-1">
                                     <p className={`font-semibold text-sm ${styles.text}`}>{note.title}</p>
-                                    <p className="text-sm text-slate-700">{note.message}</p>
+                                    <p className="text-sm text-black">{note.message}</p>
                                     {note.link && (
                                       <Link
                                         href={note.link}
@@ -787,63 +787,62 @@ export default function AdminDashboard() {
                   <span>{saleSuccess}</span>
                 </div>
               )}
-{/* ✅ Customer Selection */}
-<div className="relative" ref={customerDropdownRef}>
-<label className="block text-sm font-semibold text-black mb-2">Customer *</label>
-<div className="relative">
-<Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-black" />
-<input
-type="text"
-placeholder="Search customer by name or phone..."
-value={selectedCustomer ? selectedCustomer.name : customerSearch}
-onChange={(e) => {
-setCustomerSearch(e.target.value);
-setSelectedCustomer(null);
-setShowCustomerDropdown(true);
-}}
-onFocus={() => setShowCustomerDropdown(true)}
-className="w-full pl-10 pr-4 py-3 border-2 border-black rounded-lg focus:border-blue-500 focus:ring-2 focus:ring-blue-200 transition-all"
-/>
-</div>
 
+              {/* Customer Selection */}
+              <div className="relative" ref={customerDropdownRef}>
+                <label className="block text-sm font-semibold text-black mb-2">Customer *</label>
+                <div className="relative">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-black" />
+                  <input
+                    type="text"
+                    placeholder="Search customer by name or phone..."
+                    value={selectedCustomer ? selectedCustomer.name : customerSearch}
+                    onChange={(e) => {
+                      setCustomerSearch(e.target.value);
+                      setSelectedCustomer(null);
+                      setShowCustomerDropdown(true);
+                    }}
+                    onFocus={() => setShowCustomerDropdown(true)}
+                    className="w-full pl-10 pr-4 py-3 border-2 border-black rounded-lg focus:border-blue-500 focus:ring-2 focus:ring-blue-200 transition-all"
+                  />
+                </div>
 
-{showCustomerDropdown && !selectedCustomer && filteredCustomers.length > 0 && (
-<div className="absolute z-20 w-full mt-2 bg-white border-2 border-black rounded-lg shadow-xl max-h-60 overflow-y-auto">
-{filteredCustomers.map(customer => (
-<button
-key={customer.id}
-type="button"
-onClick={(e) => {
-e.preventDefault();
-e.stopPropagation();
-setSelectedCustomer(customer);
-setCustomerSearch("");
-setShowCustomerDropdown(false);
-}}
-className="w-full text-left px-4 py-3 hover:bg-blue-50 border-b last:border-b-0 transition-colors"
->
-<div className="font-medium text-black">{customer.name}</div>
-{customer.phone && <div className="text-sm text-black">{customer.phone}</div>}
-</button>
-))}
-</div>
-)}
+                {showCustomerDropdown && !selectedCustomer && filteredCustomers.length > 0 && (
+                  <div className="absolute z-20 w-full mt-2 bg-white border-2 border-black rounded-lg shadow-xl max-h-60 overflow-y-auto">
+                    {filteredCustomers.map(customer => (
+                      <button
+                        key={customer.id}
+                        type="button"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          setSelectedCustomer(customer);
+                          setCustomerSearch("");
+                          setShowCustomerDropdown(false);
+                        }}
+                        className="w-full text-left px-4 py-3 hover:bg-blue-50 border-b last:border-b-0 transition-colors"
+                      >
+                        <div className="font-medium text-black">{customer.name}</div>
+                        {customer.phone && <div className="text-sm text-black">{customer.phone}</div>}
+                      </button>
+                    ))}
+                  </div>
+                )}
 
-
-{selectedCustomer && (
-<div className="mt-2 bg-blue-50 border border-blue-200 rounded-lg px-4 py-3 flex items-center justify-between">
-<div>
-<div className="font-medium text-black">{selectedCustomer.name}</div>
-{selectedCustomer.phone && <div className="text-sm text-black">{selectedCustomer.phone}</div>}
-</div>
-<CheckCircle className="w-5 h-5 text-blue-600" />
-</div>
-)}
-</div>
+                {selectedCustomer && (
+                  <div className="mt-2 bg-blue-50 border border-blue-200 rounded-lg px-4 py-3 flex items-center justify-between">
+                    <div>
+                      <div className="font-medium text-black">{selectedCustomer.name}</div>
+                      {selectedCustomer.phone && <div className="text-sm text-black">{selectedCustomer.phone}</div>}
+                    </div>
+                    <CheckCircle className="w-5 h-5 text-blue-600" />
+                  </div>
+                )}
+              </div>
 
               {/* Product Selection */}
               <div>
-                <label className="block text-sm font-semibold text-slate-700 mb-2">Add Products</label>
+                <label className="block text-sm font-semibold text-black mb-2">Add Products</label>
                 <div className="space-y-3">
                   <div className="relative" ref={productDropdownRef}>
                     <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-black pointer-events-none z-10" />
@@ -884,8 +883,8 @@ className="w-full text-left px-4 py-3 hover:bg-blue-50 border-b last:border-b-0 
                             >
                               <div className="flex justify-between items-center">
                                 <div>
-                                  <div className="font-medium text-slate-900">{product.name}</div>
-                                  <div className="text-sm text-slate-600">
+                                  <div className="font-medium text-black">{product.name}</div>
+                                  <div className="text-sm text-black">
                                     Stock: {stock} | KSh {product.price?.toLocaleString() || 0}
                                   </div>
                                 </div>
@@ -968,7 +967,7 @@ className="w-full text-left px-4 py-3 hover:bg-blue-50 border-b last:border-b-0 
               {/* Sale Items */}
               {saleItems.length > 0 && (
                 <div className="border-2 border-slate-200 rounded-lg p-4 bg-slate-50">
-                  <h3 className="font-semibold text-slate-900 mb-3 flex items-center gap-2">
+                  <h3 className="font-semibold text-black mb-3 flex items-center gap-2">
                     <Package className="w-5 h-5 text-blue-600" />
                     Sale Items ({saleItems.length})
                   </h3>
@@ -976,8 +975,8 @@ className="w-full text-left px-4 py-3 hover:bg-blue-50 border-b last:border-b-0 
                     {saleItems.map(item => (
                       <div key={item.productId} className="flex items-center justify-between bg-white p-3 rounded-lg border border-slate-200">
                         <div className="flex-1">
-                          <div className="font-medium text-slate-900">{item.productName}</div>
-                          <div className="text-sm text-slate-600">
+                          <div className="font-medium text-black">{item.productName}</div>
+                          <div className="text-sm text-black">
                             {item.quantity} × KSh {item.price.toLocaleString()} = KSh {(item.quantity * item.price).toLocaleString()}
                           </div>
                         </div>
@@ -993,7 +992,7 @@ className="w-full text-left px-4 py-3 hover:bg-blue-50 border-b last:border-b-0 
                   </div>
                   <div className="pt-3 border-t-2 border-slate-300">
                     <div className="flex justify-between items-center">
-                      <span className="text-lg font-bold text-slate-900">Total Amount</span>
+                      <span className="text-lg font-bold text-black">Total Amount</span>
                       <span className="text-2xl font-bold text-blue-600">KSh {calculateTotalAmount().toLocaleString()}</span>
                     </div>
                   </div>
@@ -1003,7 +1002,7 @@ className="w-full text-left px-4 py-3 hover:bg-blue-50 border-b last:border-b-0 
               {/* Payment Details */}
               {saleItems.length > 0 && (
                 <div className="space-y-4">
-                  <h3 className="font-semibold text-slate-900 flex items-center gap-2">
+                  <h3 className="font-semibold text-black flex items-center gap-2">
                     <DollarSign className="w-5 h-5 text-blue-600" />
                     Payment Details
                   </h3>
@@ -1040,7 +1039,7 @@ className="w-full text-left px-4 py-3 hover:bg-blue-50 border-b last:border-b-0 
                             placeholder={getRemainingAmount().toFixed(2)}
                             className="w-full px-3 py-2 border-2 border-slate-200 rounded-lg focus:border-blue-500"
                           />
-                          <div className="text-xs text-slate-600 mt-1">
+                          <div className="text-xs text-black mt-1">
                             Max: KSh {getRemainingAmount().toLocaleString()}
                           </div>
                         </div>
@@ -1048,7 +1047,7 @@ className="w-full text-left px-4 py-3 hover:bg-blue-50 border-b last:border-b-0 
 
                       {["MPESA", "BANK", "CARD"].includes(currentPayment.method) && (
                         <div>
-                          <label className="block text-sm font-medium text-slate-700 mb-1">
+                          <label className="block text-sm font-medium text-black mb-1">
                             Transaction Reference * <span className="text-red-600">(Required)</span>
                           </label>
                           <input
@@ -1067,7 +1066,7 @@ className="w-full text-left px-4 py-3 hover:bg-blue-50 border-b last:border-b-0 
 
                       {currentPayment.method === "CHECK" && (
                         <div>
-                          <label className="block text-sm font-medium text-slate-700 mb-1">
+                          <label className="block text-sm font-medium text-black mb-1">
                             Check Deposit Date * <span className="text-red-600">(Required)</span>
                           </label>
                           <input
@@ -1083,7 +1082,7 @@ className="w-full text-left px-4 py-3 hover:bg-blue-50 border-b last:border-b-0 
                       {(currentPayment.method === "CREDIT" || 
                         (currentPayment.amount && parseFloat(currentPayment.amount) < getRemainingAmount())) && (
                         <div>
-                          <label className="block text-sm font-medium text-slate-700 mb-1">
+                          <label className="block text-sm font-medium text-black mb-1">
                             Due Date * <span className="text-red-600">(Required)</span>
                           </label>
                           <input
@@ -1110,7 +1109,7 @@ className="w-full text-left px-4 py-3 hover:bg-blue-50 border-b last:border-b-0 
                   {/* Payment List */}
                   {payments.length > 0 && (
                     <div className="border-2 border-slate-200 rounded-lg p-4 bg-white">
-                      <h4 className="font-semibold text-slate-900 mb-3">Payments Added:</h4>
+                      <h4 className="font-semibold text-black mb-3">Payments Added:</h4>
                       <div className="space-y-2 mb-3">
                         {payments.map((payment, index) => (
                           <div key={index} className="flex items-center justify-between bg-slate-50 p-3 rounded-lg border border-slate-200">
@@ -1122,10 +1121,10 @@ className="w-full text-left px-4 py-3 hover:bg-blue-50 border-b last:border-b-0 
                                   {payment.method}
                                 </span>
                                 {payment.referenceId && (
-                                  <span className="text-xs text-slate-600">Ref: {payment.referenceId}</span>
+                                  <span className="text-xs text-black">Ref: {payment.referenceId}</span>
                                 )}
                               </div>
-                              <div className="text-sm font-semibold text-slate-900">
+                              <div className="text-sm font-semibold text-black">
                                 KSh {Number(payment.amount || 0).toLocaleString()}
                               </div>
                               {payment.dueDate && (
@@ -1144,15 +1143,15 @@ className="w-full text-left px-4 py-3 hover:bg-blue-50 border-b last:border-b-0 
                       </div>
                       <div className="pt-3 border-t-2 border-slate-200 space-y-2">
                         <div className="flex justify-between text-sm">
-                          <span className="text-slate-600">Total Amount:</span>
-                          <span className="font-semibold text-slate-900">KSh {calculateTotalAmount().toLocaleString()}</span>
+                          <span className="text-black">Total Amount:</span>
+                          <span className="font-semibold text-black">KSh {calculateTotalAmount().toLocaleString()}</span>
                         </div>
                         <div className="flex justify-between text-sm">
-                          <span className="text-slate-600">Total Payments:</span>
+                          <span className="text-black">Total Payments:</span>
                           <span className="font-semibold text-green-600">KSh {calculateTotalPayments().toLocaleString()}</span>
                         </div>
                         <div className="flex justify-between pt-2 border-t">
-                          <span className="font-bold text-slate-900">Remaining Balance:</span>
+                          <span className="font-bold text-black">Remaining Balance:</span>
                           <span className={`font-bold text-lg ${getRemainingAmount() > 0 ? 'text-red-600' : 'text-green-600'}`}>
                             KSh {getRemainingAmount().toLocaleString()}
                           </span>
@@ -1164,7 +1163,7 @@ className="w-full text-left px-4 py-3 hover:bg-blue-50 border-b last:border-b-0 
                   {/* Due Date for Outstanding Balance */}
                   {getRemainingAmount() > 0 && (
                     <div className="bg-yellow-50 border-2 border-yellow-200 rounded-lg p-4">
-                      <label className="block text-sm font-semibold text-slate-700 mb-2">
+                      <label className="block text-sm font-semibold text-black mb-2">
                         Payment Due Date * <span className="text-red-600">(MANDATORY for outstanding balance)</span>
                       </label>
                       <input
@@ -1190,7 +1189,7 @@ className="w-full text-left px-4 py-3 hover:bg-blue-50 border-b last:border-b-0 
                   }}
                   type="button"
                   disabled={creating}
-                  className="flex-1 px-6 py-3 border-2 border-slate-300 text-slate-700 rounded-lg hover:bg-slate-50 font-medium transition-colors disabled:opacity-50"
+                  className="flex-1 px-6 py-3 border-2 border-slate-300 text-black rounded-lg hover:bg-slate-50 font-medium transition-colors disabled:opacity-50"
                 >
                   Cancel
                 </button>
@@ -1266,7 +1265,7 @@ className="w-full text-left px-4 py-3 hover:bg-blue-50 border-b last:border-b-0 
                 <div className="text-lg sm:text-2xl font-bold text-slate-900 mb-1 truncate">
                   {stat.value}
                 </div>
-                <div className="text-slate-600 text-xs sm:text-sm">{stat.title}</div>
+                <div className="text-black text-xs sm:text-sm">{stat.title}</div>
               </div>
             ))}
           </div>
@@ -1293,10 +1292,10 @@ className="w-full text-left px-4 py-3 hover:bg-blue-50 border-b last:border-b-0 
                 <h3 className="text-base sm:text-lg font-semibold text-slate-900 mb-2 group-hover:text-blue-600 truncate">
                   {section.title}
                 </h3>
-                <p className="text-xs sm:text-sm text-slate-600 mb-3 sm:mb-4 line-clamp-2">
+                <p className="text-xs sm:text-sm text-black mb-3 sm:mb-4 line-clamp-2">
                   {section.description}
                 </p>
-                <div className="text-xs font-medium text-slate-500 bg-slate-50 rounded-full px-2 sm:px-3 py-1 inline-block truncate max-w-full">
+                <div className="text-xs font-medium text-black bg-slate-50 rounded-full px-2 sm:px-3 py-1 inline-block truncate max-w-full">
                   {section.stats}
                 </div>
               </Link>
