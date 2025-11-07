@@ -803,7 +803,7 @@ export default function AdminDashboard() {
                       setShowCustomerDropdown(true);
                     }}
                     onFocus={() => setShowCustomerDropdown(true)}
-                    className="w-full pl-10 pr-4 py-3 border-2 border-black rounded-lg focus:border-blue-500 focus:ring-2 focus:ring-blue-200 transition-all"
+                    className="w-full pl-10 pr-4 py-3 border-2 border-black rounded-lg focus:border-blue-500 focus:ring-2 focus:ring-blue-200 transition-all text-black placeholder-black"
                   />
                 </div>
 
@@ -860,7 +860,7 @@ export default function AdminDashboard() {
                         }
                       }}
                       disabled={!!currentProduct}
-                      className="w-full pl-10 pr-4 py-3 border-2 border-slate-200 rounded-lg focus:border-blue-500 focus:ring-2 focus:ring-blue-200 transition-all disabled:bg-slate-100 disabled:cursor-not-allowed"
+                      className="w-full pl-10 pr-4 py-3 border-2 border-slate-200 rounded-lg focus:border-blue-500 focus:ring-2 focus:ring-blue-200 transition-all disabled:bg-slate-100 disabled:cursor-not-allowed text-black placeholder-black"
                     />
 
                     {showProductDropdown && !currentProduct && filteredProducts.length > 0 && (
@@ -929,7 +929,7 @@ export default function AdminDashboard() {
                               const val = parseInt(e.target.value);
                               setCurrentQuantity(isNaN(val) || val < 1 ? 1 : val);
                             }}
-                            className="w-full px-3 py-2 border-2 border-slate-200 rounded-lg focus:border-blue-500"
+                            className="w-full px-3 py-2 border-2 border-slate-200 rounded-lg focus:border-blue-500 text-black placeholder-black"
                           />
                         </div>
                         <div>
@@ -941,7 +941,7 @@ export default function AdminDashboard() {
                             value={currentPrice}
                             onChange={(e) => setCurrentPrice(e.target.value)}
                             placeholder={currentProduct.price?.toString() || "0.00"}
-                            className="w-full px-3 py-2 border-2 border-slate-200 rounded-lg focus:border-blue-500"
+                            className="w-full px-3 py-2 border-2 border-slate-200 rounded-lg focus:border-blue-500 text-black placeholder-black"
                           />
                         </div>
                       </div>
@@ -1018,7 +1018,7 @@ export default function AdminDashboard() {
                             method: e.target.value as any,
                             amount: e.target.value === "CREDIT" ? "0" : currentPayment.amount,
                           })}
-                          className="w-full px-3 py-2 border-2 border-slate-200 rounded-lg focus:border-blue-500"
+                          className="w-full px-3 py-2 border-2 border-slate-200 rounded-lg focus:border-blue-500 text-black"
                         >
                           {paymentMethods.map(method => (
                             <option key={method.value} value={method.value}>{method.label}</option>
@@ -1037,7 +1037,7 @@ export default function AdminDashboard() {
                             value={currentPayment.amount}
                             onChange={(e) => setCurrentPayment({...currentPayment, amount: e.target.value})}
                             placeholder={getRemainingAmount().toFixed(2)}
-                            className="w-full px-3 py-2 border-2 border-slate-200 rounded-lg focus:border-blue-500"
+                            className="w-full px-3 py-2 border-2 border-slate-200 rounded-lg focus:border-blue-500 text-black placeholder-black"
                           />
                           <div className="text-xs text-black mt-1">
                             Max: KSh {getRemainingAmount().toLocaleString()}
@@ -1059,7 +1059,7 @@ export default function AdminDashboard() {
                               currentPayment.method === "BANK" ? "e.g., TXN123456789" :
                               "e.g., AUTH987654"
                             }
-                            className="w-full px-3 py-2 border-2 border-slate-200 rounded-lg focus:border-blue-500"
+                            className="w-full px-3 py-2 border-2 border-slate-200 rounded-lg focus:border-blue-500 text-black placeholder-black"
                           />
                         </div>
                       )}
@@ -1074,7 +1074,7 @@ export default function AdminDashboard() {
                             value={currentPayment.checkDepositDate}
                             onChange={(e) => setCurrentPayment({...currentPayment, checkDepositDate: e.target.value})}
                             min={new Date().toISOString().split('T')[0]}
-                            className="w-full px-3 py-2 border-2 border-slate-200 rounded-lg focus:border-blue-500"
+                            className="w-full px-3 py-2 border-2 border-slate-200 rounded-lg focus:border-blue-500 text-black"
                           />
                         </div>
                       )}
@@ -1090,7 +1090,7 @@ export default function AdminDashboard() {
                             value={currentPayment.dueDate}
                             onChange={(e) => setCurrentPayment({...currentPayment, dueDate: e.target.value})}
                             min={new Date().toISOString().split('T')[0]}
-                            className="w-full px-3 py-2 border-2 border-slate-200 rounded-lg focus:border-blue-500"
+                            className="w-full px-3 py-2 border-2 border-slate-200 rounded-lg focus:border-blue-500 text-black"
                           />
                         </div>
                       )}
