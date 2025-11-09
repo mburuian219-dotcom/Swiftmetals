@@ -59,7 +59,7 @@ export default function AdminDashboard() {
   const [showProductDropdown, setShowProductDropdown] = useState(false);
   const [saleItems, setSaleItems] = useState<QuickSaleItem[]>([]);
   const [currentProduct, setCurrentProduct] = useState<Product | null>(null);
-  const [currentQuantity, setCurrentQuantity] = useState(1);
+  const [currentQuantity, setCurrentQuantity] = useState(0);
   const [currentPrice, setCurrentPrice] = useState("");
   const [payments, setPayments] = useState<any[]>([]);
   const [currentPayment, setCurrentPayment] = useState({
@@ -396,7 +396,7 @@ export default function AdminDashboard() {
 
     // Clear all product-related states
     setCurrentProduct(null);
-    setCurrentQuantity(1);
+    setCurrentQuantity(0);
     setCurrentPrice("");
     setProductSearch("");
     setShowProductDropdown(false);
@@ -954,21 +954,37 @@ export default function AdminDashboard() {
                           />
                         </div>
                         <div>
-                          <label className="block text-xs font-semibold text-black mb-1">Unit Price (KSh) *</label>
-                          <input
-                            type="number"
-                            min="0"
-                            step="0.01"
-                            value={currentPrice}
-                            onChange={(e) => setCurrentPrice(e.target.value)}
-                            placeholder={currentProduct.price?.toString() || "0.00"}
-                            className="w-full px-3 py-2 border-2 border-slate-200 rounded-lg focus:border-blue-500 text-black placeholder-gray-400"
-                          />
-                          {!currentPrice && currentProduct.price && (
-                            <div className="text-xs text-green-600 mt-1">
-                              Using default: KSh {currentProduct.price.toLocaleString()}
+                          <label className="block text-xs font-semibold text-black mb-1">Unit Price (KSh)</label>
+                          <div className="relative">
+                            <input
+                              type="number"
+                              min="0"
+                              step="0.01"
+                              value={currentPrice}
+                              onChange={(e) => setCurrentPrice(e.target.value)}
+                              placeholder={currentProduct.price?.toString() || "0.00"}
+                              className={`w-full px-3 py-2 border-2 rounded-lg focus:border-blue-500 focus:ring-2 focus:ring-blue-200 transition-all ${
+                                currentPrice === currentProduct.price?.toString() 
+                                  ? 'text-gray-400 italic border-gray-300 bg-gray-50' 
+                                  : 'text-black border-slate-200 bg-white'
+                              }`}
+                            />
+                            {currentPrice === currentProduct.price?.toString() && (
+                              <div className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-orange-500 font-medium bg-orange-50 px-2 py-1 rounded">
+                                Default
+                              </div>
+                            )}
+                          </div>
+                          <div className="flex items-center justify-between mt-1">
+                            <div className="text-xs text-blue-600">
+                              Default: KSh {currentProduct.price?.toLocaleString() || 0}
                             </div>
-                          )}
+                            {currentPrice !== currentProduct.price?.toString() && currentPrice && (
+                              <div className="text-xs text-green-600 font-medium">
+                                ✓ Custom price
+                              </div>
+                            )}
+                          </div>
                         </div>
                       </div>
                       {currentQuantity > 0 && currentProduct && (
