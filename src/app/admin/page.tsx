@@ -350,9 +350,16 @@ export default function AdminDashboard() {
       return;
     }
 
-    const price = parseFloat(currentPrice) || currentProduct.price || 0;
-    if (price <= 0) {
-      setSaleError("Please enter a valid price");
+    // Get the price - use entered price or fall back to product default
+    let price = 0;
+    if (currentPrice && currentPrice.trim() !== "") {
+      price = parseFloat(currentPrice);
+    } else if (currentProduct.price) {
+      price = currentProduct.price;
+    }
+    
+    if (isNaN(price) || price <= 0) {
+      setSaleError("Please enter a valid price or ensure product has a default price");
       setTimeout(() => setSaleError(null), 3000);
       return;
     }
@@ -417,49 +424,59 @@ export default function AdminDashboard() {
     const amount = parseFloat(currentPayment.amount);
     const remainingAmount = getRemainingAmount();
     
+    // Validation for non-CREDIT payments
     if (currentPayment.method !== "CREDIT") {
-      if (!amount || amount <= 0) {
+      if (!currentPayment.amount || isNaN(amount) || amount <= 0) {
         setSaleError("Please enter a valid payment amount");
         setTimeout(() => setSaleError(null), 3000);
         return;
       }
 
-      if (amount > remainingAmount) {
-        setSaleError(`Payment amount cannot exceed remaining balance of KSh ${remainingAmount.toFixed(2)}`);
+      if (amount > remainingAmount + 0.01) { // Small buffer for floating point
+        setSaleError(`Payment amount (KSh ${amount.toFixed(2)}) cannot exceed remaining balance of KSh ${remainingAmount.toFixed(2)}`);
         setTimeout(() => setSaleError(null), 3000);
         return;
       }
     }
 
+    // Validation for CHECK payment
     if (currentPayment.method === "CHECK" && !currentPayment.checkDepositDate) {
-      setSaleError("Please specify check deposit date");
+      setSaleError("Please specify check deposit date for CHECK payments");
       setTimeout(() => setSaleError(null), 3000);
       return;
     }
 
+    // Validation for CREDIT payment
     if (currentPayment.method === "CREDIT" && !currentPayment.dueDate) {
       setSaleError("Due date is MANDATORY for credit/pay later payments");
       setTimeout(() => setSaleError(null), 3000);
       return;
     }
 
-    if (["MPESA", "BANK", "CARD"].includes(currentPayment.method) && !currentPayment.referenceId) {
-      setSaleError("Please enter transaction reference");
-      setTimeout(() => setSaleError(null), 3000);
-      return;
+    // Validation for electronic payments - only check if something was entered
+    if (["MPESA", "BANK", "CARD"].includes(currentPayment.method)) {
+      // Only require reference if method is electronic, but allow empty for now
+      // You can uncomment the lines below to enforce reference ID
+      // if (!currentPayment.referenceId?.trim()) {
+      //   setSaleError("Please enter transaction reference for electronic payments");
+      //   setTimeout(() => setSaleError(null), 3000);
+      //   return;
+      // }
     }
 
+    // Add the payment
     setPayments([
       ...payments,
       {
-        ...currentPayment,
         amount: currentPayment.method === "CREDIT" ? "0" : currentPayment.amount,
-        referenceId: currentPayment.referenceId || "",
+        method: currentPayment.method,
+        referenceId: currentPayment.referenceId?.trim() || "",
         checkDepositDate: currentPayment.checkDepositDate || "",
         dueDate: currentPayment.dueDate || "",
       },
     ]);
 
+    // Reset the form
     setCurrentPayment({
       amount: "",
       method: "CASH",
@@ -468,6 +485,10 @@ export default function AdminDashboard() {
       dueDate: ""
     });
     setSaleError(null);
+    
+    // Show success message
+    setSaleSuccess("Payment added successfully!");
+    setTimeout(() => setSaleSuccess(null), 2000);
   };
 
   const removePayment = (index: number) => {
@@ -941,19 +962,24 @@ export default function AdminDashboard() {
                             value={currentPrice}
                             onChange={(e) => setCurrentPrice(e.target.value)}
                             placeholder={currentProduct.price?.toString() || "0.00"}
-                            className="w-full px-3 py-2 border-2 border-slate-200 rounded-lg focus:border-blue-500 text-black placeholder-black"
+                            className="w-full px-3 py-2 border-2 border-slate-200 rounded-lg focus:border-blue-500 text-black placeholder-gray-400"
                           />
+                          {!currentPrice && currentProduct.price && (
+                            <div className="text-xs text-green-600 mt-1">
+                              Using default: KSh {currentProduct.price.toLocaleString()}
+                            </div>
+                          )}
                         </div>
                       </div>
-                      {currentQuantity > 0 && (parseFloat(currentPrice) || currentProduct.price || 0) > 0 && (
+                      {currentQuantity > 0 && currentProduct && (
                         <div className="bg-blue-100 text-blue-900 px-3 py-2 rounded-lg text-sm font-bold mb-3">
-                          Subtotal: KSh {(currentQuantity * (parseFloat(currentPrice) || currentProduct.price || 0)).toLocaleString()}
+                          Subtotal: KSh {(currentQuantity * (currentPrice && currentPrice.trim() !== "" ? parseFloat(currentPrice) : (currentProduct.price || 0))).toLocaleString()}
                         </div>
                       )}
                       <button
                         onClick={addItemToSale}
                         type="button"
-                        disabled={!currentProduct || currentQuantity <= 0 || (parseFloat(currentPrice) || 0) <= 0}
+                        disabled={!currentProduct || currentQuantity <= 0}
                         className="w-full bg-blue-600 text-white px-4 py-3 rounded-lg hover:bg-blue-700 font-medium flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
                       >
                         <Plus className="w-5 h-5" />
@@ -1048,7 +1074,7 @@ export default function AdminDashboard() {
                       {["MPESA", "BANK", "CARD"].includes(currentPayment.method) && (
                         <div>
                           <label className="block text-sm font-medium text-black mb-1">
-                            Transaction Reference * <span className="text-red-600">(Required)</span>
+                            Transaction Reference <span className="text-gray-500">(Optional)</span>
                           </label>
                           <input
                             type="text"
