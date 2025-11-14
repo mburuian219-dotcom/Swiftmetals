@@ -16,11 +16,13 @@ function processSale(sale: any) {
 
   return {
     ...sale,
-    saleitems: sale.saleitem, // ✅ frontend expects saleitems
-    payments: sale.payment,   // ✅ frontend expects payments
+    saleitems: sale.saleitem, // frontend expects saleitems
+    payments: sale.payment,   // frontend expects payments
     totalPaid,
     remainingAmount,
     status,
+    createdBy: sale.createdBy,
+    updatedBy: sale.updatedBy,
   };
 }
 
@@ -52,17 +54,11 @@ export async function POST(req: Request) {
     const amount = Number(data.amount);
 
     if (!customerId || !amount) {
-      return NextResponse.json(
-        { error: "Missing required fields" },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
     }
 
     if (!Array.isArray(data.saleItems) || data.saleItems.length === 0) {
-      return NextResponse.json(
-        { error: "At least one sale item is required" },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: "At least one sale item is required" }, { status: 400 });
     }
 
     // Validate stock
@@ -73,10 +69,7 @@ export async function POST(req: Request) {
       });
 
       if (!stockItem || stockItem.quantity < item.quantity) {
-        return NextResponse.json(
-          { error: `Not enough stock for product ID ${item.productId}` },
-          { status: 400 }
-        );
+        return NextResponse.json({ error: `Not enough stock for product ID ${item.productId}` }, { status: 400 });
       }
     }
 
@@ -98,6 +91,7 @@ export async function POST(req: Request) {
         date: data.date ? new Date(data.date) : new Date(),
         paymentMethod: data.paymentMethod || "CASH",
         status: "UNPAID",
+        createdBy: data.user || "SYSTEM", // ✅ store createdBy
         payment: { create: payments },
         saleitem: {
           create: data.saleItems.map((item: any) => ({
@@ -155,14 +149,10 @@ export async function PUT(req: Request) {
       return NextResponse.json({ error: "Sale not found" }, { status: 404 });
     }
 
-    // 🟢 Recalculate amount if items changed
     const newItems = data.saleItems || existingSale.saleitem;
-    const recalculatedAmount = newItems.reduce(
-      (sum: number, item: any) => sum + item.price * item.quantity,
-      0
-    );
+    const recalculatedAmount = newItems.reduce((sum: number, item: any) => sum + item.price * item.quantity, 0);
 
-    // 🟢 Update main sale fields
+    // Update main sale fields
     await prisma.sale.update({
       where: { id },
       data: {
@@ -170,10 +160,11 @@ export async function PUT(req: Request) {
         amount: recalculatedAmount,
         date: data.date ? new Date(data.date) : existingSale.date,
         paymentMethod: data.paymentMethod ?? existingSale.paymentMethod,
+        updatedBy: data.user || "SYSTEM", // ✅ store updatedBy
       },
     });
 
-    // 🟢 Replace saleitems if provided
+    // Replace saleitems if provided
     if (data.saleItems) {
       await prisma.saleitem.deleteMany({ where: { saleId: id } });
       await prisma.saleitem.createMany({
@@ -187,7 +178,7 @@ export async function PUT(req: Request) {
       });
     }
 
-    // 🟢 Append new payments
+    // Append new payments
     if (Array.isArray(data.payments) && data.payments.length > 0) {
       await prisma.payment.createMany({
         data: data.payments.map((p: any) => ({
@@ -202,7 +193,6 @@ export async function PUT(req: Request) {
       });
     }
 
-    // 🟢 Fetch updated sale
     const updated = await prisma.sale.findUnique({
       where: { id },
       include: {
@@ -233,6 +223,7 @@ export async function DELETE(req: Request) {
       where: { id },
       include: { saleitem: true },
     });
+
     if (!sale) {
       return NextResponse.json({ error: "Sale not found" }, { status: 404 });
     }

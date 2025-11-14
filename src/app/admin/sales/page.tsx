@@ -1,6 +1,8 @@
 "use client";
 import React, { useEffect, useState, useCallback, useMemo } from "react";
 import { Download, MessageSquare, Send, Clock, CreditCard, AlertTriangle, CheckCircle, Plus, X, Edit, Trash2, Calculator, Save, Menu, ChevronDown, ChevronUp } from "lucide-react";
+import { auth } from "@/lib/firebase";
+import { onAuthStateChanged } from "firebase/auth";
 
 interface Customer {
   id: number;
@@ -59,6 +61,10 @@ interface Sale {
   remainingAmount: number;
   paymentMethod?: "CASH" | "MPESA" | "BANK" | "CHECK" | "CARD" | "CREDIT" | "MULTIPLE";
   checkDepositDate?: string | null;
+  createdBy?: string;
+  updatedBy?: string;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 interface NewSaleItem {
@@ -105,7 +111,9 @@ const EnhancedSalesPage = () => {
   
   const [editingSale, setEditingSale] = useState<Sale | null>(null);
   const [editPayments, setEditPayments] = useState<NewPayment[]>([]);
+  const [editSaleItems, setEditSaleItems] = useState<NewSaleItem[]>([]);
   const [deletingPaymentId, setDeletingPaymentId] = useState<number | null>(null);
+  const [currentUser, setCurrentUser] = useState<string>("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
@@ -181,6 +189,26 @@ const EnhancedSalesPage = () => {
       setError(null);
       
       try {
+        // Get Firebase ID token
+        const user = auth.currentUser;
+        let idToken = "";
+        
+        if (user) {
+          idToken = await user.getIdToken();
+          
+          // Fetch user session with Firebase token
+          const sessionRes = await fetch("/api/auth/session", {
+            headers: {
+              "Authorization": `Bearer ${idToken}`
+            }
+          });
+
+          if (sessionRes.ok) {
+            const sessionData = await sessionRes.json();
+            setCurrentUser(sessionData?.user?.email || sessionData?.email || "");
+          }
+        }
+
         const endpoints = [
           { url: "/api/sales", name: "Sales" },
           { url: "/api/customers", name: "Customers", fallback: "/api/customer" },
@@ -257,8 +285,20 @@ const EnhancedSalesPage = () => {
       }
     };
 
-    fetchData();
+    // Listen for auth state changes
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      if (user) {
+        fetchData();
+      } else {
+        setCurrentUser("");
+        setError("Please log in to access sales data");
+        setLoading(false);
+      }
+    });
+
+    return () => unsubscribe();
   }, [calculateSaleStatus]);
+
   // Close dropdowns when clicking outside
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -430,6 +470,11 @@ const EnhancedSalesPage = () => {
       return;
     }
 
+    if (!currentUser) {
+      setError("Please log in to create a sale");
+      return;
+    }
+
     setLoading(true);
     setError(null);
     setSuccess("Creating sale, please wait...");
@@ -483,6 +528,7 @@ const EnhancedSalesPage = () => {
           price: item.price,
         })),
         payments: paymentsData,
+        createdBy: currentUser,
       };
 
       const response = await fetch("/api/sales", {
@@ -514,6 +560,7 @@ const EnhancedSalesPage = () => {
       setSuccess("Sale created successfully!");
       setTimeout(() => setSuccess(null), 3000);
 
+      // Refresh sales list
       const salesRes = await fetch("/api/sales");
       if (salesRes.ok) {
         const updatedSales = await salesRes.json();
@@ -537,42 +584,57 @@ const EnhancedSalesPage = () => {
       referenceId: p.referenceId || "",
       checkDepositDate: p.checkDepositDate || ""
     })));
+    setEditSaleItems(sale.saleitems.map(item => ({
+      productId: item.product.id,
+      quantity: item.quantity,
+      price: item.price,
+      productName: item.product.name,
+      originalPrice: item.product.price
+    })));
   };
 
   const handleUpdateSale = async () => {
     if (!editingSale) return;
+
+    if (!currentUser) {
+      setError("Please log in to update a sale");
+      return;
+    }
 
     setLoading(true);
     setError(null);
     setSuccess("Updating sale, please wait...");
     
     try {
-      const newPayment = editPayments[editPayments.length - 1];
-
-      if (!newPayment || !newPayment.amount) {
-        setError("Please enter a valid payment before updating.");
-        setLoading(false);
-        setSuccess(null);
-        return;
-      }
-
-      const paymentAmount = Number(newPayment.amount);
-      if (paymentAmount > editingSale.remainingAmount) {
-        setError(`Payment amount cannot exceed remaining balance of Ksh ${editingSale.remainingAmount.toFixed(2)}`);
-        setLoading(false);
-        setSuccess(null);
-        return;
-      }
+      // Calculate new total from edited items
+      const newTotalAmount = editSaleItems.reduce((total, item) => 
+        total + (item.quantity * item.price), 0);
 
       const updateData = {
-        payment: {
-          amount: paymentAmount,
-          method: newPayment.method,
-          referenceId: newPayment.referenceId?.trim() || null,
-          checkDepositDate: newPayment.checkDepositDate || null,
+        saleItems: editSaleItems.map(item => ({
+          productId: item.productId,
+          quantity: item.quantity,
+          price: item.price,
+        })),
+        payments: editPayments.filter(p => p.id).map(p => ({
+          id: p.id,
+          amount: Number(p.amount),
+          method: p.method,
+          referenceId: p.referenceId?.trim() || null,
+          checkDepositDate: p.checkDepositDate || null,
+        })),
+        newPayments: editPayments.filter(p => !p.id).map(p => ({
+          amount: Number(p.amount),
+          method: p.method,
+          referenceId: p.referenceId?.trim() || null,
+          checkDepositDate: p.checkDepositDate || null,
+          dueDate: p.dueDate || null,
           date: new Date().toISOString(),
-        },
+          status: p.method === "CHECK" ? "PENDING" : "COMPLETED",
+        })),
+        amount: newTotalAmount,
         dueDate: editingSale.dueDate || null,
+        updatedBy: currentUser,
       };
 
       const response = await fetch(`/api/sales/${editingSale.id}`, {
@@ -589,12 +651,59 @@ const EnhancedSalesPage = () => {
       const updatedSale = await response.json();
       const processedSale = calculateSaleStatus(updatedSale);
 
+      // Update the sales list with the processed sale
       setSales(prevSales => 
         prevSales.map(s => s.id === processedSale.id ? processedSale : s)
       );
 
-      setEditingSale(processedSale);
+      // Close the edit modal
+      setEditingSale(null);
+      setEditSaleItems([]);
+      setEditPayments([]);
+      setCurrentPayment({
+        amount: "",
+        method: "CASH",
+        referenceId: "",
+        checkDepositDate: "",
+        dueDate: ""
+      });
       
+      setSuccess("Sale updated successfully!");
+      setTimeout(() => setSuccess(null), 3000);
+
+      // Refresh sales list to ensure sync
+      const salesRes = await fetch("/api/sales");
+      if (salesRes.ok) {
+        const refreshedSales = await salesRes.json();
+        const processedSales = refreshedSales.map(calculateSaleStatus);
+        setSales(processedSales);
+      }
+    } catch (err: any) {
+      setError(err.message || "Failed to update sale");
+      console.error("Error updating sale:", err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleDeletePayment = async (paymentId: number, saleId: number) => {
+    try {
+      setDeletingPaymentId(paymentId);
+
+      const response = await fetch(`/api/payment/${paymentId}?saleId=${saleId}`, {
+        method: "DELETE",
+      });
+
+      if (!response.ok) {
+        const err = await response.json();
+        throw new Error(err.error || "Failed to delete payment");
+      }
+
+      const updatedSale = await response.json();
+      const processedSale = calculateSaleStatus(updatedSale);
+
+      setSales(sales.map(s => s.id === processedSale.id ? processedSale : s));
+      setEditingSale(processedSale);
       setEditPayments(
         processedSale.payments.map((p: Payment) => ({
           id: p.id,
@@ -605,64 +714,16 @@ const EnhancedSalesPage = () => {
         }))
       );
 
-      setCurrentPayment({
-        amount: "",
-        method: "CASH",
-        referenceId: "",
-        checkDepositDate: "",
-        dueDate: ""
-      });
-
-      setSuccess("Sale updated successfully!");
+      setSuccess("Payment deleted successfully!");
       setTimeout(() => setSuccess(null), 3000);
-    } catch (err: any) {
-      setError(err.message || "Failed to update sale");
-      console.error("Error updating sale:", err);
+
+    } catch (error: any) {
+      console.error("Error deleting payment:", error);
+      setError(error.message || "Failed to delete payment");
     } finally {
-      setLoading(false);
+      setDeletingPaymentId(null);
     }
   };
-
- const handleDeletePayment = async (paymentId: number, saleId: number) => {
-  try {
-    setDeletingPaymentId(paymentId); // ✅ show loader on that button
-
-    const response = await fetch(`/api/payment/${paymentId}?saleId=${saleId}`, {
-      method: "DELETE",
-    });
-
-    if (!response.ok) {
-      const err = await response.json();
-      throw new Error(err.error || "Failed to delete payment");
-    }
-
-    const updatedSale = await response.json();
-    const processedSale = calculateSaleStatus(updatedSale);
-
-    setSales(sales.map(s => s.id === processedSale.id ? processedSale : s));
-    setEditingSale(processedSale);
-    setEditPayments(
-      processedSale.payments.map((p: Payment) => ({
-        id: p.id,
-        amount: p.amount.toString(),
-        method: p.method,
-        referenceId: p.referenceId || "",
-        checkDepositDate: p.checkDepositDate || ""
-      }))
-    );
-
-    setSuccess("Payment deleted successfully!");
-    setTimeout(() => setSuccess(null), 3000);
-
-  } catch (error: any) {
-    console.error("Error deleting payment:", error);
-    setError(error.message || "Failed to delete payment");
-  } finally {
-    setDeletingPaymentId(null); // ✅ hide loader
-  }
-};
-
-
 
   const handleDeleteSale = async (saleId: number) => {
     if (!confirm("Are you sure you want to delete this sale? This action cannot be undone.")) {
@@ -696,31 +757,53 @@ const EnhancedSalesPage = () => {
   };
 
   const addEditPayment = () => {
-    const amount = parseFloat(currentPayment.amount);
-    if (!amount || amount <= 0) {
-      setError("Please enter a valid payment amount");
-      return;
-    }
+    if (currentPayment.method === "CREDIT") {
+      if (!currentPayment.dueDate) {
+        setError("Due date is required for credit/pay later");
+        return;
+      }
+      
+      setEditPayments([...editPayments, {
+        amount: "0",
+        method: currentPayment.method,
+        referenceId: "",
+        checkDepositDate: "",
+        dueDate: currentPayment.dueDate
+      }]);
+    } else {
+      const amount = parseFloat(currentPayment.amount);
+      if (!amount || amount <= 0) {
+        setError("Please enter a valid payment amount");
+        return;
+      }
 
-    if (editingSale && amount > editingSale.remainingAmount) {
-      setError(`Payment amount cannot exceed remaining balance of Ksh ${editingSale.remainingAmount.toFixed(2)}`);
-      return;
-    }
-    
-    if (currentPayment.method === "CHECK" && !currentPayment.checkDepositDate) {
-      setError("Please specify check deposit date");
-      return;
-    }
+      const currentTotal = editSaleItems.reduce((sum, item) => sum + (item.quantity * item.price), 0);
+      const currentPayments = editPayments.reduce((sum, p) => sum + Number(p.amount), 0);
+      const remainingAmount = currentTotal - currentPayments;
 
-    if (["MPESA", "BANK", "CARD"].includes(currentPayment.method) && !currentPayment.referenceId?.trim()) {
-      setError("Please enter transaction reference");
-      return;
+      if (amount > remainingAmount) {
+        setError(`Payment amount cannot exceed remaining balance of Ksh ${remainingAmount.toFixed(2)}`);
+        return;
+      }
+      
+      if (currentPayment.method === "CHECK" && !currentPayment.checkDepositDate) {
+        setError("Please specify check deposit date");
+        return;
+      }
+
+      if (["MPESA", "BANK", "CARD"].includes(currentPayment.method) && !currentPayment.referenceId?.trim()) {
+        setError("Please enter transaction reference");
+        return;
+      }
+      
+      setEditPayments([...editPayments, {
+        amount: currentPayment.amount,
+        method: currentPayment.method,
+        referenceId: currentPayment.referenceId || "",
+        checkDepositDate: currentPayment.checkDepositDate || "",
+        dueDate: ""
+      }]);
     }
-    
-    setEditPayments([...editPayments, {
-      ...currentPayment,
-      amount: currentPayment.amount
-    }]);
 
     setCurrentPayment({
       amount: "",
@@ -815,69 +898,69 @@ const EnhancedSalesPage = () => {
     <div className="p-4 md:p-8 bg-gray-50 min-h-screen">
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-6">
         <h1 className="text-2xl md:text-3xl font-bold text-black">Sales Management Dashboard</h1>
-         <button
-                    onClick={() => {
-                      // Generate CSV data
-                      const csvData = sales.map(sale => ({
-                        'Sale ID': sale.id,
-                        'Date': new Date(sale.date).toLocaleDateString(),
-                        'Customer': sale.customer?.name || '-',
-                        'Customer Phone': sale.customer?.phone || '-',
-                        'Products': sale.saleitems?.map(item => `${item.product.name} (x${item.quantity})`).join('; ') || '-',
-                        'Total Amount': sale.amount.toFixed(2),
-                        'Status': sale.status,
-                        'Amount Paid': (sale.amount - sale.remainingAmount).toFixed(2),
-                        'Remaining Amount': sale.remainingAmount.toFixed(2),
-                        'Due Date': sale.dueDate ? new Date(sale.dueDate).toLocaleDateString() : '-',
-                        'Payment Methods': sale.payments?.map(p => p.method).join('; ') || '-'
-                      }));
-        
-                      // Convert to CSV string
-                      const headers = Object.keys(csvData[0] || {});
-                      const csvContent = [
-                        headers.join(','),
-                        ...csvData.map(row => 
-                          headers.map(header => {
-                            const value = row[header as keyof typeof row];
-                            // Escape commas and quotes
-                            return `"${String(value).replace(/"/g, '""')}"`;
-                          }).join(',')
-                        )
-                      ].join('\n');
-        
-                      // Download CSV
-                      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-                      const link = document.createElement('a');
-                      const url = URL.createObjectURL(blob);
-                      link.setAttribute('href', url);
-                      link.setAttribute('download', `sales_report_${new Date().toISOString().split('T')[0]}.csv`);
-                      link.style.visibility = 'hidden';
-                      document.body.appendChild(link);
-                      link.click();
-                      document.body.removeChild(link);
-                    }}
-                    className="flex-1 md:flex-none bg-green-600 text-white px-6 py-3 rounded-xl hover:bg-green-700 flex items-center justify-center gap-2 shadow-lg transition-all"
-                  >
-                    <Download size={20} />
-                    Export CSV
-                  </button>
-           <button
-          onClick={() => {
-            setShowAddSale(!showAddSale);
-            if (showAddSale) {
-              setSaleItems([]);
-              setPayments([]);
-              setCustomerSearch("");
-              setProductSearch("");
-              setError(null);
-              setStockError(null);
-            }
-          }}
-          className="w-full md:w-auto bg-blue-600 text-white px-6 py-3 rounded-xl hover:bg-blue-700 flex items-center justify-center gap-2 shadow-lg transition-all"
-        >
-          {showAddSale ? <ChevronUp size={20} /> : <Plus size={20} />}
-          {showAddSale ? "Close" : "New Sale"}
-        </button>
+        <div className="flex gap-2 w-full md:w-auto">
+          <button
+            onClick={() => {
+              const csvData = sales.map(sale => ({
+                'Sale ID': sale.id,
+                'Date': new Date(sale.date).toLocaleDateString(),
+                'Customer': sale.customer?.name || '-',
+                'Customer Phone': sale.customer?.phone || '-',
+                'Products': sale.saleitems?.map(item => `${item.product.name} (x${item.quantity})`).join('; ') || '-',
+                'Total Amount': sale.amount.toFixed(2),
+                'Status': sale.status,
+                'Amount Paid': (sale.amount - sale.remainingAmount).toFixed(2),
+                'Remaining Amount': sale.remainingAmount.toFixed(2),
+                'Due Date': sale.dueDate ? new Date(sale.dueDate).toLocaleDateString() : '-',
+                'Payment Methods': sale.payments?.map(p => p.method).join('; ') || '-',
+                'Created By': sale.createdBy || '-',
+                'Updated By': sale.updatedBy || '-'
+              }));
+
+              const headers = Object.keys(csvData[0] || {});
+              const csvContent = [
+                headers.join(','),
+                ...csvData.map(row => 
+                  headers.map(header => {
+                    const value = row[header as keyof typeof row];
+                    return `"${String(value).replace(/"/g, '""')}"`;
+                  }).join(',')
+                )
+              ].join('\n');
+
+              const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+              const link = document.createElement('a');
+              const url = URL.createObjectURL(blob);
+              link.setAttribute('href', url);
+              link.setAttribute('download', `sales_report_${new Date().toISOString().split('T')[0]}.csv`);
+              link.style.visibility = 'hidden';
+              document.body.appendChild(link);
+              link.click();
+              document.body.removeChild(link);
+            }}
+            className="flex-1 md:flex-none bg-green-600 text-white px-6 py-3 rounded-xl hover:bg-green-700 flex items-center justify-center gap-2 shadow-lg transition-all"
+          >
+            <Download size={20} />
+            Export CSV
+          </button>
+          <button
+            onClick={() => {
+              setShowAddSale(!showAddSale);
+              if (showAddSale) {
+                setSaleItems([]);
+                setPayments([]);
+                setCustomerSearch("");
+                setProductSearch("");
+                setError(null);
+                setStockError(null);
+              }
+            }}
+            className="flex-1 md:flex-none bg-blue-600 text-white px-6 py-3 rounded-xl hover:bg-blue-700 flex items-center justify-center gap-2 shadow-lg transition-all"
+          >
+            {showAddSale ? <ChevronUp size={20} /> : <Plus size={20} />}
+            {showAddSale ? "Close" : "New Sale"}
+          </button>
+        </div>
       </div>
 
       {error && (
@@ -944,7 +1027,6 @@ const EnhancedSalesPage = () => {
             </div>
 
             <div className="p-4 md:p-6 space-y-6">
-              {/* Customer Selection with Search */}
               <div className="relative customer-dropdown-container">
                 <label className="block text-sm font-medium text-black mb-2">Customer *</label>
                 <input
@@ -1006,7 +1088,6 @@ const EnhancedSalesPage = () => {
                 
                 <div className="space-y-3 mb-4 p-4 bg-gray-50 rounded-lg">
                   <div className="grid grid-cols-1 gap-3">
-                    {/* Product Search with Dropdown */}
                     <div className="relative product-dropdown-container">
                       <label className="block text-sm font-medium text-black mb-1">Product *</label>
                       <input
@@ -1039,16 +1120,15 @@ const EnhancedSalesPage = () => {
                             >
                               <div className="flex justify-between items-center">
                                 <div>
-  <div className="font-medium text-black">{product.name}</div>
-  <div className="text-sm text-gray-600">
-    Stock:{" "}
-    {Array.isArray(product.stock)
-      ? product.stock.reduce((total, s) => total + (s.quantity || 0), 0)
-      : 0}
-    {" "} | Price: Ksh {product.price?.toLocaleString() || 0}
-  </div>
-</div>
-
+                                  <div className="font-medium text-black">{product.name}</div>
+                                  <div className="text-sm text-gray-600">
+                                    Stock:{" "}
+                                    {Array.isArray(product.stock)
+                                      ? product.stock.reduce((total, s) => total + (s.quantity || 0), 0)
+                                      : 0}
+                                    {" "} | Price: Ksh {product.price?.toLocaleString() || 0}
+                                  </div>
+                                </div>
                               </div>
                             </div>
                           ))}
@@ -1100,19 +1180,15 @@ const EnhancedSalesPage = () => {
                       </div>
                     )}
                     
-                   <button
-  type="button"
-  onClick={() => {
-    console.log("currentItem:", currentItem);
-    handleAddItemToSale();
-  }}
-  disabled={!currentItem.productId || currentItem.quantity <= 0 || currentItem.price <= 0}
-  className="w-full bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
->
-  <Plus size={16} />
-  Add Item to Sale
-</button>
-
+                    <button
+                      type="button"
+                      onClick={handleAddItemToSale}
+                      disabled={!currentItem.productId || currentItem.quantity <= 0 || currentItem.price <= 0}
+                      className="w-full bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                    >
+                      <Plus size={16} />
+                      Add Item to Sale
+                    </button>
                   </div>
                 </div>
 
@@ -1353,6 +1429,7 @@ const EnhancedSalesPage = () => {
           </div>
         </div>
       )}
+
       {editingSale && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50 overflow-y-auto">
           <div className="bg-white rounded-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto my-4">
@@ -1378,7 +1455,7 @@ const EnhancedSalesPage = () => {
                   </div>
                   <div>
                     <span className="text-gray-600">Total Amount:</span>
-                    <span className="font-medium ml-2 text-black">Ksh {editingSale.amount.toFixed(2)}</span>
+                    <span className="font-medium ml-2 text-black">Ksh {editSaleItems.reduce((sum, item) => sum + (item.quantity * item.price), 0).toFixed(2)}</span>
                   </div>
                   <div>
                     <span className="text-gray-600">Date:</span>
@@ -1395,6 +1472,28 @@ const EnhancedSalesPage = () => {
                     </span>
                   </div>
                 </div>
+                
+                {(editingSale.createdBy || editingSale.updatedBy) && (
+                  <div className="mt-4 pt-4 border-t border-gray-200">
+                    <h4 className="text-xs font-semibold text-gray-700 mb-2">Accountability</h4>
+                    {editingSale.createdBy && (
+                      <div className="text-xs text-gray-600 mb-1">
+                        <span className="font-medium">Created by:</span> {editingSale.createdBy}
+                        {editingSale.createdAt && (
+                          <span className="ml-2">on {new Date(editingSale.createdAt).toLocaleString()}</span>
+                        )}
+                      </div>
+                    )}
+                    {editingSale.updatedBy && (
+                      <div className="text-xs text-gray-600">
+                        <span className="font-medium">Last updated by:</span> {editingSale.updatedBy}
+                        {editingSale.updatedAt && (
+                          <span className="ml-2">on {new Date(editingSale.updatedAt).toLocaleString()}</span>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
                 
                 {editingSale.remainingAmount > 0 && (
                   <div className="mt-4 p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
@@ -1416,17 +1515,82 @@ const EnhancedSalesPage = () => {
               </div>
 
               <div>
-                <h3 className="text-lg font-semibold mb-3 text-black">Sale Items</h3>
-                <div className="space-y-2">
-                  {editingSale.saleitems?.map((item, index) => (
-                    <div key={index} className="flex flex-col sm:flex-row justify-between items-start sm:items-center bg-gray-50 p-3 rounded-lg gap-2">
-                      <div className="flex-1 min-w-0 w-full sm:w-auto">
-                        <span className="font-medium text-black block truncate">{item.product.name}</span>
-                        <span className="text-gray-600 text-sm">×{item.quantity} @ Ksh {item.price.toFixed(2)}</span>
+                <h3 className="text-lg font-semibold mb-3 text-black flex items-center gap-2">
+                  <Calculator size={20} />
+                  Edit Sale Items
+                </h3>
+                <div className="space-y-3">
+                  {editSaleItems.map((item, index) => (
+                    <div key={index} className="bg-gray-50 p-4 rounded-lg border">
+                      <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+                        <div className="col-span-2">
+                          <label className="block text-xs font-medium text-gray-700 mb-1">Product</label>
+                          <input
+                            type="text"
+                            value={item.productName}
+                            disabled
+                            className="w-full p-2 border rounded bg-gray-100 text-black text-sm"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-medium text-gray-700 mb-1">Quantity</label>
+                          <input
+                            type="number"
+                            min="1"
+                            value={item.quantity}
+                            onChange={(e) => {
+                              const newItems = [...editSaleItems];
+                              newItems[index].quantity = parseInt(e.target.value) || 1;
+                              setEditSaleItems(newItems);
+                            }}
+                            className="w-full p-2 border rounded text-black text-sm"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-medium text-gray-700 mb-1">Price</label>
+                          <input
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            value={item.price}
+                            onChange={(e) => {
+                              const newItems = [...editSaleItems];
+                              newItems[index].price = parseFloat(e.target.value) || 0;
+                              setEditSaleItems(newItems);
+                            }}
+                            className="w-full p-2 border rounded text-black text-sm"
+                          />
+                        </div>
                       </div>
-                      <span className="font-bold text-green-600 whitespace-nowrap">Ksh {(item.quantity * item.price).toFixed(2)}</span>
+                      <div className="mt-2 flex justify-between items-center">
+                        <span className="text-sm font-semibold text-green-600">
+                          Subtotal: Ksh {(item.quantity * item.price).toFixed(2)}
+                        </span>
+                        <button
+                          onClick={() => {
+                            if (editSaleItems.length === 1) {
+                              setError("Cannot delete the only item. Delete the entire sale instead.");
+                              return;
+                            }
+                            setEditSaleItems(editSaleItems.filter((_, i) => i !== index));
+                          }}
+                          className="text-red-500 hover:text-red-700 p-1"
+                          title="Remove item"
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      </div>
                     </div>
                   ))}
+                  
+                  <div className="bg-blue-50 p-3 rounded-lg border border-blue-200">
+                    <div className="flex justify-between items-center">
+                      <span className="font-semibold text-black">New Total:</span>
+                      <span className="text-xl font-bold text-blue-600">
+                        Ksh {editSaleItems.reduce((sum, item) => sum + (item.quantity * item.price), 0).toFixed(2)}
+                      </span>
+                    </div>
+                  </div>
                 </div>
               </div>
 
@@ -1451,17 +1615,16 @@ const EnhancedSalesPage = () => {
                         </div>
                         {payment.id !== undefined && (
                           <button
-  onClick={() => handleDeletePayment(payment.id as number, editingSale.id)}
-  disabled={deletingPaymentId === payment.id}
-  className="text-red-500 hover:text-red-700 disabled:opacity-50"
->
-  {deletingPaymentId === payment.id ? (
-    <span className="animate-spin border-2 border-red-500 border-t-transparent rounded-full w-4 h-4 inline-block"></span>
-  ) : (
-    <Trash2 size={16} />
-  )}
-</button>
-
+                            onClick={() => handleDeletePayment(payment.id as number, editingSale.id)}
+                            disabled={deletingPaymentId === payment.id}
+                            className="text-red-500 hover:text-red-700 disabled:opacity-50"
+                          >
+                            {deletingPaymentId === payment.id ? (
+                              <span className="animate-spin border-2 border-red-500 border-t-transparent rounded-full w-4 h-4 inline-block"></span>
+                            ) : (
+                              <Trash2 size={16} />
+                            )}
+                          </button>
                         )}
                       </div>
                     ))}
@@ -1469,27 +1632,11 @@ const EnhancedSalesPage = () => {
                 )}
 
                 <div className="space-y-3 mb-4 p-4 bg-gray-50 rounded-lg">
+                  <h4 className="font-medium text-black">Add New Payment</h4>
                   <div className="grid grid-cols-1 gap-3">
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                       <div>
-                        <label className="block text-sm font-medium text-black mb-1">Amount</label>
-                        <input
-                          type="number"
-                          min="0"
-                          step="0.01"
-                          max={editingSale.remainingAmount}
-                          value={currentPayment.amount}
-                          onChange={(e) => setCurrentPayment({...currentPayment, amount: e.target.value})}
-                          className="w-full p-2 border border-gray-300 rounded text-black"
-                          placeholder="0.00"
-                        />
-                        <div className="text-xs text-gray-600 mt-1">
-                          Max: Ksh {editingSale.remainingAmount.toFixed(2)}
-                        </div>
-                      </div>
-                      
-                      <div>
-                        <label className="block text-sm font-medium text-black mb-1">Method</label>
+                        <label className="block text-sm font-medium text-black mb-1">Payment Method</label>
                         <select
                           value={currentPayment.method}
                           onChange={(e) => setCurrentPayment({...currentPayment, method: e.target.value as any})}
@@ -1500,27 +1647,84 @@ const EnhancedSalesPage = () => {
                           ))}
                         </select>
                       </div>
+                      
+                      <div>
+                        <label className="block text-sm font-medium text-black mb-1">
+                          Amount {currentPayment.method !== "CREDIT" && "*"}
+                        </label>
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          max={Math.max(0, editSaleItems.reduce((sum, item) => sum + (item.quantity * item.price), 0) - editPayments.reduce((sum, p) => sum + Number(p.amount), 0))}
+                          value={currentPayment.amount}
+                          onChange={(e) => setCurrentPayment({...currentPayment, amount: e.target.value})}
+                          className="w-full p-2 border border-gray-300 rounded text-black"
+                          placeholder={currentPayment.method === "CREDIT" ? "0.00 (optional)" : "0.00"}
+                          disabled={currentPayment.method === "CREDIT"}
+                        />
+                        <div className="text-xs text-gray-600 mt-1">
+                          {currentPayment.method === "CREDIT" 
+                            ? "No payment required for credit" 
+                            : `Max: Ksh ${Math.max(0, editSaleItems.reduce((sum, item) => sum + (item.quantity * item.price), 0) - editPayments.reduce((sum, p) => sum + Number(p.amount), 0)).toFixed(2)}`}
+                        </div>
+                      </div>
                     </div>
                     
-                    <div>
-                      <label className="block text-sm font-medium text-black mb-1">Reference</label>
-                      <input
-                        type="text"
-                        value={currentPayment.referenceId}
-                        onChange={(e) => setCurrentPayment({...currentPayment, referenceId: e.target.value})}
-                        className="w-full p-2 border border-gray-300 rounded text-black"
-                        placeholder="Transaction ID"
-                      />
-                    </div>
+                    {["MPESA", "BANK", "CARD"].includes(currentPayment.method) && (
+                      <div>
+                        <label className="block text-sm font-medium text-black mb-1">
+                          Reference ID <span className="text-red-600">*</span>
+                        </label>
+                        <input
+                          type="text"
+                          value={currentPayment.referenceId}
+                          onChange={(e) => setCurrentPayment({...currentPayment, referenceId: e.target.value})}
+                          className="w-full p-2 border border-gray-300 rounded text-black"
+                          placeholder="Transaction ID / Reference Number"
+                        />
+                      </div>
+                    )}
                     
                     {currentPayment.method === "CHECK" && (
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div>
+                          <label className="block text-sm font-medium text-black mb-1">
+                            Check Number
+                          </label>
+                          <input
+                            type="text"
+                            value={currentPayment.referenceId}
+                            onChange={(e) => setCurrentPayment({...currentPayment, referenceId: e.target.value})}
+                            className="w-full p-2 border border-gray-300 rounded text-black"
+                            placeholder="Check Number"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium text-black mb-1">
+                            Deposit Date <span className="text-red-600">*</span>
+                          </label>
+                          <input
+                            type="date"
+                            value={currentPayment.checkDepositDate}
+                            onChange={(e) => setCurrentPayment({...currentPayment, checkDepositDate: e.target.value})}
+                            className="w-full p-2 border border-gray-300 rounded text-black"
+                          />
+                        </div>
+                      </div>
+                    )}
+                    
+                    {currentPayment.method === "CREDIT" && (
                       <div>
-                        <label className="block text-sm font-medium text-black mb-1">Deposit Date</label>
+                        <label className="block text-sm font-medium text-black mb-1">
+                          Due Date <span className="text-red-600">*</span>
+                        </label>
                         <input
                           type="date"
-                          value={currentPayment.checkDepositDate}
-                          onChange={(e) => setCurrentPayment({...currentPayment, checkDepositDate: e.target.value})}
+                          value={currentPayment.dueDate}
+                          onChange={(e) => setCurrentPayment({...currentPayment, dueDate: e.target.value})}
                           className="w-full p-2 border border-gray-300 rounded text-black"
+                          min={new Date().toISOString().split("T")[0]}
                         />
                       </div>
                     )}
@@ -1528,7 +1732,13 @@ const EnhancedSalesPage = () => {
                     <button
                       type="button"
                       onClick={addEditPayment}
-                      className="w-full bg-green-500 text-white px-4 py-2 rounded hover:bg-green-600 flex items-center justify-center gap-2"
+                      disabled={
+                        (currentPayment.method !== "CREDIT" && (!currentPayment.amount || parseFloat(currentPayment.amount) <= 0)) ||
+                        (["MPESA", "BANK", "CARD"].includes(currentPayment.method) && !currentPayment.referenceId?.trim()) ||
+                        (currentPayment.method === "CHECK" && !currentPayment.checkDepositDate) ||
+                        (currentPayment.method === "CREDIT" && !currentPayment.dueDate)
+                      }
+                      className="w-full bg-green-500 text-white px-4 py-2 rounded hover:bg-green-600 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
                     >
                       <Plus size={16} />
                       Add Payment
@@ -1539,7 +1749,7 @@ const EnhancedSalesPage = () => {
                 <div className="bg-blue-50 p-4 rounded-lg">
                   <div className="flex justify-between items-center mb-2">
                     <span className="font-medium text-black">Total Sale Amount:</span>
-                    <span className="font-bold text-blue-600">Ksh {editingSale.amount.toFixed(2)}</span>
+                    <span className="font-bold text-blue-600">Ksh {editSaleItems.reduce((sum, item) => sum + (item.quantity * item.price), 0).toFixed(2)}</span>
                   </div>
                   <div className="flex justify-between items-center mb-2">
                     <span className="font-medium text-black">Total Payments:</span>
@@ -1550,16 +1760,16 @@ const EnhancedSalesPage = () => {
                   <div className="flex justify-between items-center pt-2 border-t">
                     <span className="font-medium text-black">Remaining Amount:</span>
                     <span className={`font-bold ${
-                      (editingSale.amount - editPayments.reduce((sum, p) => sum + Number(p.amount), 0)) > 0 
+                      Math.max(0, editSaleItems.reduce((sum, item) => sum + (item.quantity * item.price), 0) - editPayments.reduce((sum, p) => sum + Number(p.amount), 0)) > 0 
                         ? 'text-red-600' : 'text-green-600'
                     }`}>
-                      Ksh {Math.max(0, editingSale.amount - editPayments.reduce((sum, p) => sum + Number(p.amount), 0)).toFixed(2)}
+                      Ksh {Math.max(0, editSaleItems.reduce((sum, item) => sum + (item.quantity * item.price), 0) - editPayments.reduce((sum, p) => sum + Number(p.amount), 0)).toFixed(2)}
                     </span>
                   </div>
                   
-                  {currentPayment.amount && Number(currentPayment.amount) > Math.max(0, editingSale.amount - editPayments.reduce((sum, p) => sum + Number(p.amount), 0)) && (
+                  {currentPayment.amount && Number(currentPayment.amount) > Math.max(0, editSaleItems.reduce((sum, item) => sum + (item.quantity * item.price), 0) - editPayments.reduce((sum, p) => sum + Number(p.amount), 0)) && (
                     <div className="mt-3 bg-red-100 border border-red-400 text-red-700 px-3 py-2 rounded text-sm">
-                      Warning: Payment amount exceeds remaining balance. Maximum allowed: Ksh {Math.max(0, editingSale.amount - editPayments.reduce((sum, p) => sum + Number(p.amount), 0)).toFixed(2)}
+                      Warning: Payment amount exceeds remaining balance. Maximum allowed: Ksh {Math.max(0, editSaleItems.reduce((sum, item) => sum + (item.quantity * item.price), 0) - editPayments.reduce((sum, p) => sum + Number(p.amount), 0)).toFixed(2)}
                     </div>
                   )}
                 </div>
@@ -1634,7 +1844,6 @@ const EnhancedSalesPage = () => {
 
         {activeTab !== "messaging" && (
           <div className="p-4 md:p-6">
-            {/* Mobile View */}
             <div className="block lg:hidden space-y-4">
               {filteredSales.map((sale) => (
                 <div key={sale.id} className="bg-white border rounded-lg p-4 shadow-sm">
@@ -1687,6 +1896,13 @@ const EnhancedSalesPage = () => {
                       </div>
                     )}
                   </div>
+
+                  {(sale.createdBy || sale.updatedBy) && (
+                    <div className="text-xs text-gray-500 mb-3 p-2 bg-gray-50 rounded">
+                      {sale.createdBy && <div>Created: {sale.createdBy}</div>}
+                      {sale.updatedBy && <div>Updated: {sale.updatedBy}</div>}
+                    </div>
+                  )}
 
                   <div className="flex flex-wrap gap-2">
                     <select
@@ -1771,7 +1987,6 @@ const EnhancedSalesPage = () => {
               )}
             </div>
 
-            {/* Desktop View */}
             <div className="hidden lg:block overflow-x-auto">
               <table className="min-w-full border-collapse">
                 <thead>
@@ -1805,6 +2020,11 @@ const EnhancedSalesPage = () => {
                           <div className="font-medium text-black">{sale.customer?.name || "-"}</div>
                           {sale.customer?.phone && (
                             <div className="text-xs text-gray-500">{sale.customer.phone}</div>
+                          )}
+                          {(sale.createdBy || sale.updatedBy) && (
+                            <div className="text-xs text-gray-400 mt-1">
+                              {sale.updatedBy ? `Updated: ${sale.updatedBy.split('@')[0]}` : sale.createdBy ? `Created: ${sale.createdBy.split('@')[0]}` : ''}
+                            </div>
                           )}
                         </div>
                       </td>

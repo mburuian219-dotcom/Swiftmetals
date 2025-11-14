@@ -1,10 +1,11 @@
 "use client";
 
 import { useEffect, useState, useMemo } from "react";
-import { Search, Package, Edit2, Trash2, Plus, X, DollarSign } from "lucide-react";
+import { Search, Package, Edit2, Trash2, Plus, X, DollarSign, TrendingUp } from "lucide-react";
 
 interface Stock {
   quantity: number;
+  costPrice: number;
 }
 
 interface Product {
@@ -16,6 +17,16 @@ interface Product {
   category?: string;
   stock: Stock[];
   stockQuantity?: number;
+}
+
+interface StockSummary {
+  previousQuantity: number;
+  restockedQuantity: number;
+  newTotalQuantity: number;
+  previousValue: number;
+  restockValue: number;
+  newTotalValue: number;
+  newWeightedCostPrice: number;
 }
 
 export default function ProductsPage() {
@@ -50,6 +61,7 @@ export default function ProductsPage() {
   const [deleting, setDeleting] = useState<number | null>(null);
   const [creditors, setCreditors] = useState<any[]>([]);
   const [loadingCreditors, setLoadingCreditors] = useState(false);
+  const [restockSuccess, setRestockSuccess] = useState<StockSummary | null>(null);
 
   // Fetch products and creditors on mount
   useEffect(() => {
@@ -63,7 +75,6 @@ export default function ProductsPage() {
       const res = await fetch("/api/creditors");
       if (res.ok) {
         const data = await res.json();
-        // Ensure data is an array
         setCreditors(Array.isArray(data) ? data : []);
       } else {
         setCreditors([]);
@@ -82,7 +93,7 @@ export default function ProductsPage() {
       const data: Product[] = await res.json();
       const normalized = data.map((p) => ({
         ...p,
-        stockQuantity: p.stock?.[0]?.quantity || 0,
+        stockQuantity: p.stock?.reduce((sum, s) => sum + s.quantity, 0) || 0,
       }));
       setProducts(normalized);
     } catch (err) {
@@ -99,10 +110,8 @@ export default function ProductsPage() {
   }, [products]);
 
   // Filter products based on search and category
-  // Filter products based on search and category
   const filteredProducts = useMemo(() => {
     return products.filter((p) => {
-      // Safety check for undefined name
       if (!p.name) return false;
       
       const matchesSearch =
@@ -136,14 +145,15 @@ export default function ProductsPage() {
       category: form.category.trim() || undefined,
     };
 
-    // Only include stock when creating or if explicitly changed during edit
     if (!editingId) {
       payload.stockQuantity = form.stock ? parseInt(form.stock) : 0;
     } else {
       payload.id = editingId;
-      // Only include stockQuantity if user wants to change it
-      if (form.stock) {
-        payload.stockQuantity = parseInt(form.stock);
+      // When editing, if stock is provided, add it to existing stock
+      if (form.stock && parseInt(form.stock) > 0) {
+        const currentProduct = products.find(p => p.id === editingId);
+        const currentStock = currentProduct?.stockQuantity || 0;
+        payload.stockQuantity = currentStock + parseInt(form.stock);
       }
     }
 
@@ -162,7 +172,7 @@ export default function ProductsPage() {
       }
 
       const savedProduct: Product = await res.json();
-      savedProduct.stockQuantity = savedProduct.stock?.[0]?.quantity || 0;
+      savedProduct.stockQuantity = savedProduct.stock?.reduce((sum, s) => sum + s.quantity, 0) || 0;
 
       if (editingId) {
         setProducts((prev) =>
@@ -197,7 +207,7 @@ export default function ProductsPage() {
       description: product.description || "",
       productionCost: product.productionCost ? String(product.productionCost) : "",
       price: String(product.price),
-      stock: "", // Leave empty - user can optionally update it
+      stock: "",
       category: product.category || "",
     });
     setEditingId(product.id);
@@ -231,7 +241,7 @@ export default function ProductsPage() {
     }
   };
 
-  // Handle restock - Updated to use /api/restock directly
+  // Handle restock - Updated to use new API response
   const handleRestock = async () => {
     if (!restockModal.product) return;
 
@@ -242,8 +252,8 @@ export default function ProductsPage() {
       return alert("Please enter a valid quantity");
     }
 
-    if (isNaN(totalCost) || totalCost < 0) {
-      return alert("Please enter a valid total cost");
+    if (isNaN(totalCost) || totalCost <= 0) {
+      return alert("Please enter a valid total cost (must be greater than 0)");
     }
 
     if (!restockForm.paymentSource) {
@@ -262,7 +272,6 @@ export default function ProductsPage() {
     setRestocking(true);
 
     try {
-      // Call the dedicated /api/restock endpoint
       const res = await fetch("/api/restock", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -274,37 +283,65 @@ export default function ProductsPage() {
           creditorName:
             restockForm.paymentSource === "credit"
               ? restockForm.creditorName
-              : null,
+              : undefined,
           creditorPhone:
             restockForm.paymentSource === "credit"
               ? restockForm.creditorPhone
-              : null,
+              : undefined,
           creditorEmail:
             restockForm.paymentSource === "credit" && restockForm.creditorEmail
               ? restockForm.creditorEmail
-              : null,
+              : undefined,
         }),
       });
 
+      const responseData = await res.json();
+
       if (!res.ok) {
-        const data = await res.json();
-        return alert(data.error || "Failed to restock");
+        return alert(responseData.error || "Failed to restock");
       }
 
-      const updatedProduct = await res.json();
-      updatedProduct.stockQuantity = updatedProduct.stock?.[0]?.quantity || 0;
+      // Extract updated product and stock summary from response
+      const { product: updatedProduct, stockSummary } = responseData;
+      
+      // Normalize the product data
+      const normalizedProduct = {
+        ...updatedProduct,
+        stockQuantity: updatedProduct.stock?.reduce((sum: number, s: Stock) => sum + s.quantity, 0) || 0,
+      };
 
-      // Update UI
+      // Update UI with new product data
       setProducts((prev) =>
         prev.map((p) =>
-          p.id === restockModal.product!.id ? updatedProduct : p
+          p.id === restockModal.product!.id ? normalizedProduct : p
         )
       );
+
+      // Store stock summary for success message
+      setRestockSuccess(stockSummary);
 
       // Refresh creditors list if credit was used
       if (restockForm.paymentSource === "credit") {
         await fetchCreditors();
       }
+
+      // Show success message with details
+      const successMessage = 
+        restockForm.paymentSource === "cash"
+          ? `✅ Restock Successful!\n\n` +
+            `Previous Stock: ${stockSummary.previousQuantity} units\n` +
+            `Added: ${stockSummary.restockedQuantity} units\n` +
+            `New Total: ${stockSummary.newTotalQuantity} units\n\n` +
+            `Cash deducted: KSh ${totalCost.toFixed(2)}\n` +
+            `New Weighted Cost Price: KSh ${stockSummary.newWeightedCostPrice.toFixed(2)}/unit`
+          : `✅ Restock Successful!\n\n` +
+            `Previous Stock: ${stockSummary.previousQuantity} units\n` +
+            `Added: ${stockSummary.restockedQuantity} units\n` +
+            `New Total: ${stockSummary.newTotalQuantity} units\n\n` +
+            `Added to ${restockForm.creditorName}'s balance: KSh ${totalCost.toFixed(2)}\n` +
+            `New Weighted Cost Price: KSh ${stockSummary.newWeightedCostPrice.toFixed(2)}/unit`;
+
+      alert(successMessage);
 
       // Reset form & modal
       setRestockForm({
@@ -316,15 +353,9 @@ export default function ProductsPage() {
         creditorEmail: "",
       });
       setRestockModal({ show: false, product: null });
-      
-      alert(
-        restockForm.paymentSource === "cash"
-          ? "✅ Stock updated successfully and cash deducted!"
-          : "✅ Stock updated successfully and added to creditor balance!"
-      );
     } catch (error) {
       console.error("Error restocking:", error);
-      alert("❌ Failed to restock product");
+      alert("❌ Failed to restock product. Please try again.");
     } finally {
       setRestocking(false);
     }
@@ -341,12 +372,12 @@ export default function ProductsPage() {
       creditorPhone: "",
       creditorEmail: "",
     });
+    setRestockSuccess(null);
   };
 
   // Import contact from phone
   const importContact = async () => {
     try {
-      // Check if Contact Picker API is supported
       if (!("contacts" in navigator && "ContactsManager" in window)) {
         alert(
           "Contact picker is not supported on this device/browser. Please enter the details manually."
@@ -492,13 +523,51 @@ export default function ProductsPage() {
                 value={form.price}
                 onChange={(e) => setForm({ ...form, price: e.target.value })}
               />
-              <input
-                placeholder={editingId ? "Stock (leave empty to keep current)" : "Initial Stock"}
-                type="number"
-                className="border border-gray-300 p-3 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-black"
-                value={form.stock}
-                onChange={(e) => setForm({ ...form, stock: e.target.value })}
-              />
+              <div className="md:col-span-2">
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  {editingId ? "Add Stock (Restock)" : "Initial Stock"}
+                </label>
+                <input
+                  placeholder={editingId ? "Enter quantity to add" : "Initial Stock"}
+                  type="number"
+                  min="0"
+                  className="w-full border border-gray-300 p-3 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-black"
+                  value={form.stock}
+                  onChange={(e) => setForm({ ...form, stock: e.target.value })}
+                />
+                {editingId && form.stock && (
+                  <div className="mt-3 p-4 bg-gradient-to-r from-green-50 to-blue-50 rounded-lg border border-green-200">
+                    <div className="grid grid-cols-3 gap-4 text-sm">
+                      <div>
+                        <p className="text-gray-600 font-medium">Previous Stock</p>
+                        <p className="text-2xl font-bold text-gray-800">
+                          {products.find(p => p.id === editingId)?.stockQuantity || 0}
+                        </p>
+                        <p className="text-xs text-gray-500">units</p>
+                      </div>
+                      <div className="flex items-center justify-center">
+                        <div className="text-green-600">
+                          <Plus className="w-6 h-6" />
+                        </div>
+                        <div className="ml-2">
+                          <p className="text-gray-600 font-medium">Adding</p>
+                          <p className="text-2xl font-bold text-green-600">
+                            {form.stock}
+                          </p>
+                          <p className="text-xs text-gray-500">units</p>
+                        </div>
+                      </div>
+                      <div className="bg-white rounded-lg p-2 border-2 border-green-500">
+                        <p className="text-gray-600 font-medium">New Total</p>
+                        <p className="text-2xl font-bold text-green-600">
+                          {(products.find(p => p.id === editingId)?.stockQuantity || 0) + parseInt(form.stock || '0')}
+                        </p>
+                        <p className="text-xs text-gray-500">units</p>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
               <button
                 onClick={handleSubmit}
                 disabled={submitting}
@@ -532,6 +601,7 @@ export default function ProductsPage() {
               const profit = p.productionCost ? p.price - p.productionCost : null;
               const profitMargin = profit && p.price ? ((profit / p.price) * 100).toFixed(1) : null;
               const isLowStock = (p.stockQuantity || 0) < 10;
+              const avgCostPrice = p.stock?.[0]?.costPrice;
 
               return (
                 <div
@@ -555,13 +625,21 @@ export default function ProductsPage() {
                       {p.description && (
                         <p className="text-gray-600 mb-3">{p.description}</p>
                       )}
-                      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+                      <div className="grid grid-cols-2 md:grid-cols-5 gap-3 text-sm">
                         <div>
                           <span className="text-gray-500">Production Cost:</span>
                           <p className="font-semibold text-black">
                             KSh {p.productionCost?.toFixed(2) || "N/A"}
                           </p>
                         </div>
+                        {avgCostPrice && (
+                          <div>
+                            <span className="text-gray-500">Avg. Cost Price:</span>
+                            <p className="font-semibold text-purple-600">
+                              KSh {avgCostPrice.toFixed(2)}
+                            </p>
+                          </div>
+                        )}
                         <div>
                           <span className="text-gray-500">Selling Price:</span>
                           <p className="font-semibold text-black">
@@ -595,7 +673,7 @@ export default function ProductsPage() {
                         className="bg-green-500 hover:bg-green-600 text-white p-2 rounded-lg transition"
                         title="Restock"
                       >
-                        <DollarSign className="w-5 h-5" />
+                        <TrendingUp className="w-5 h-5" />
                       </button>
                       <button
                         onClick={() => handleEdit(p)}
@@ -632,6 +710,11 @@ export default function ProductsPage() {
                 <p className="text-xl font-semibold text-black">
                   {restockModal.product.stockQuantity} units
                 </p>
+                {restockModal.product.stock?.[0]?.costPrice && (
+                  <p className="text-sm text-gray-600 mt-1">
+                    Current Avg. Cost: KSh {restockModal.product.stock[0].costPrice.toFixed(2)}/unit
+                  </p>
+                )}
               </div>
               <div className="space-y-4">
                 <div>
@@ -656,7 +739,7 @@ export default function ProductsPage() {
                   <input
                     type="number"
                     step="0.01"
-                    min="0"
+                    min="0.01"
                     placeholder="Total cost for this restock"
                     value={restockForm.totalCost}
                     onChange={(e) =>
@@ -664,6 +747,11 @@ export default function ProductsPage() {
                     }
                     className="w-full border border-gray-300 p-3 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-black"
                   />
+                  {restockForm.quantity && restockForm.totalCost && (
+                    <p className="text-xs text-gray-600 mt-1">
+                      Unit cost: KSh {(parseFloat(restockForm.totalCost) / parseInt(restockForm.quantity)).toFixed(2)}
+                    </p>
+                  )}
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -683,13 +771,11 @@ export default function ProductsPage() {
                     }
                     className="w-full border border-gray-300 p-3 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-black"
                   >
-                    <option value="">Select payment source</option>
                     <option value="cash">Cash (Deduct from balance)</option>
                     <option value="credit">Credit / Account</option>
                     <option value="other">Other</option>
                   </select>
 
-                  {/* Cash warning */}
                   {restockForm.paymentSource === "cash" && (
                     <p className="text-xs text-orange-600 mt-2 flex items-center gap-1">
                       <span>⚠️</span>
@@ -697,7 +783,6 @@ export default function ProductsPage() {
                     </p>
                   )}
 
-                  {/* Creditor details if "credit" selected */}
                   {restockForm.paymentSource === "credit" && (
                     <div className="mt-4 space-y-4 p-4 bg-blue-50 rounded-lg">
                       <div className="flex items-center justify-between mb-2">
@@ -711,7 +796,6 @@ export default function ProductsPage() {
                         </button>
                       </div>
 
-                      {/* Select existing creditor */}
                       {Array.isArray(creditors) && creditors.length > 0 && (
                         <div>
                           <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -748,7 +832,6 @@ export default function ProductsPage() {
                         </div>
                       )}
 
-                      {/* Manual creditor entry */}
                       <div>
                         <label className="block text-sm font-medium text-gray-700 mb-1">
                           Creditor Name *

@@ -1,6 +1,22 @@
 import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 
+// Helper function to normalize product data
+function normalizeProduct(product: any) {
+  const stockQuantity = product.stock?.reduce((sum: number, s: any) => sum + s.quantity, 0) || 0;
+  const totalValue = product.stock?.reduce(
+    (sum: number, s: any) => sum + s.quantity * s.costPrice,
+    0
+  ) || 0;
+  const avgCostPrice = stockQuantity > 0 ? totalValue / stockQuantity : 0;
+
+  return {
+    ...product,
+    stockQuantity,
+    avgCostPrice,
+  };
+}
+
 // ---------------- GET all products ----------------
 export async function GET() {
   try {
@@ -9,10 +25,7 @@ export async function GET() {
       orderBy: { createdAt: "desc" },
     });
 
-    const normalized = products.map((p) => ({
-      ...p,
-      stockQuantity: p.stock.reduce((sum, s) => sum + s.quantity, 0),
-    }));
+    const normalized = products.map((p) => normalizeProduct(p));
 
     return NextResponse.json(normalized);
   } catch (error) {
@@ -28,37 +41,8 @@ export async function GET() {
 export async function POST(req: Request) {
   try {
     const body = await req.json();
-
-    // Check if this is a restock request - delegate to /api/restock
-    if (body.action === "restock") {
-      try {
-        const restockResponse = await fetch(
-          new URL("/api/restock", req.url).toString(),
-          {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify(body),
-          }
-        );
-
-        const restockData = await restockResponse.json();
-
-        return NextResponse.json(restockData, {
-          status: restockResponse.status,
-        });
-      } catch (error) {
-        console.error("Failed to call /api/restock:", error);
-        return NextResponse.json(
-          { error: "Failed to process restock" },
-          { status: 500 }
-        );
-      }
-    }
-
-    // Regular product creation
     const {
+      id,
       name,
       description,
       price,
@@ -74,6 +58,55 @@ export async function POST(req: Request) {
       );
     }
 
+    // 🟡 Check if product exists (for restock or update)
+    const existingProduct = await prisma.product.findFirst({
+      where: { id: Number(id) || undefined, name },
+      include: { stock: true },
+    });
+
+    if (existingProduct) {
+      // 🔁 RESTOCK existing product
+      const oldStock = existingProduct.stock.reduce(
+        (sum, s) => sum + s.quantity,
+        0
+      );
+      const newTotalStock = oldStock + (Number(stockQuantity) || 0);
+
+      const updatedProduct = await prisma.product.update({
+        where: { id: existingProduct.id },
+        data: {
+          name,
+          description,
+          price: Number(price),
+          productionCost: productionCost ? Number(productionCost) : null,
+          category,
+          stock: {
+            upsert: {
+              where: { id: existingProduct.stock[0]?.id || 0 },
+              update: {
+                quantity: newTotalStock,
+                costPrice: productionCost ? Number(productionCost) : 0,
+                sellingPrice: Number(price),
+              },
+              create: {
+                name: `${name} restock`,
+                quantity: newTotalStock,
+                costPrice: productionCost ? Number(productionCost) : 0,
+                sellingPrice: Number(price),
+              },
+            },
+          },
+        },
+        include: { stock: true },
+      });
+
+      return NextResponse.json({
+        message: "Product restocked successfully",
+        ...normalizeProduct(updatedProduct),
+      });
+    }
+
+    // 🆕 CREATE new product if not exists
     const newProduct = await prisma.product.create({
       data: {
         name,
@@ -95,24 +128,21 @@ export async function POST(req: Request) {
 
     return NextResponse.json(
       {
-        ...newProduct,
-        stockQuantity: newProduct.stock.reduce(
-          (sum, s) => sum + s.quantity,
-          0
-        ),
+        message: "Product created successfully",
+        ...normalizeProduct(newProduct),
       },
       { status: 201 }
     );
   } catch (error) {
     console.error("POST /api/products error:", error);
     return NextResponse.json(
-      { error: "Failed to create product" },
+      { error: "Failed to create or restock product" },
       { status: 500 }
     );
   }
 }
 
-// ---------------- UPDATE a product (for editing) ----------------
+// ---------------- UPDATE a product (edit info only) ----------------
 export async function PUT(req: NextRequest) {
   try {
     const {
@@ -149,7 +179,6 @@ export async function PUT(req: NextRequest) {
       return NextResponse.json({ error: "Product not found" }, { status: 404 });
     }
 
-    // Build the update data object
     const updateData: any = {
       name,
       description,
@@ -158,7 +187,6 @@ export async function PUT(req: NextRequest) {
       category,
     };
 
-    // Only update stock if stockQuantity is provided
     if (stockQuantity !== undefined) {
       if (product.stock.length > 0) {
         updateData.stock = {
@@ -189,13 +217,7 @@ export async function PUT(req: NextRequest) {
       include: { stock: true },
     });
 
-    return NextResponse.json({
-      ...updatedProduct,
-      stockQuantity: updatedProduct.stock.reduce(
-        (sum, s) => sum + s.quantity,
-        0
-      ),
-    });
+    return NextResponse.json(normalizeProduct(updatedProduct));
   } catch (error: any) {
     console.error("PUT /api/products error:", error);
     return NextResponse.json(
@@ -218,13 +240,8 @@ export async function DELETE(req: NextRequest) {
       );
     }
 
-    // Check if product is used in orders or sales
-    const usedInOrder = await prisma.order.count({
-      where: { productId },
-    });
-    const usedInSale = await prisma.saleitem.count({
-      where: { productId },
-    });
+    const usedInOrder = await prisma.order.count({ where: { productId } });
+    const usedInSale = await prisma.saleitem.count({ where: { productId } });
 
     if (usedInOrder > 0 || usedInSale > 0) {
       return NextResponse.json(
@@ -236,19 +253,9 @@ export async function DELETE(req: NextRequest) {
       );
     }
 
-    // Delete related records
-    await prisma.restock.deleteMany({
-      where: { productId },
-    });
-
-    await prisma.stock.deleteMany({
-      where: { productId },
-    });
-
-    // Now delete the product safely
-    await prisma.product.delete({
-      where: { id: productId },
-    });
+    await prisma.restock.deleteMany({ where: { productId } });
+    await prisma.stock.deleteMany({ where: { productId } });
+    await prisma.product.delete({ where: { id: productId } });
 
     return NextResponse.json({ success: true });
   } catch (error: any) {

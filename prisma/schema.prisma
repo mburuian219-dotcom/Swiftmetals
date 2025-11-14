@@ -249,6 +249,8 @@ model sale {
   customer         customer          @relation(fields: [customerId], references: [id], map: "Sale_customerId_fkey")
   saleitem         saleitem[]
   smsreminder      smsreminder[]
+  updatedBy       String?    // Optional, store the user email/id
+  createdBy       String?   // ✅ who created the sale
 
   @@index([checkDepositDate], map: "Sale_checkDepositDate_idx")
   @@index([customerId], map: "Sale_customerId_fkey")

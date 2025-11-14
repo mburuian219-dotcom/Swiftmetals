@@ -42,6 +42,13 @@ interface QuickSaleItem {
   price: number;
 }
 
+interface RestockForm {
+  quantity: number;
+  costPrice: string;
+  paymentSource: "cash" | "credit";
+  creditorName: string;
+}
+
 export default function AdminDashboard() {
   const [quickStats, setQuickStats] = useState<any[]>([]);
   const [notifications, setNotifications] = useState<any[]>([]);
@@ -59,7 +66,7 @@ export default function AdminDashboard() {
   const [showProductDropdown, setShowProductDropdown] = useState(false);
   const [saleItems, setSaleItems] = useState<QuickSaleItem[]>([]);
   const [currentProduct, setCurrentProduct] = useState<Product | null>(null);
-  const [currentQuantity, setCurrentQuantity] = useState(0);
+  const [currentQuantity, setCurrentQuantity] = useState(1);
   const [currentPrice, setCurrentPrice] = useState("");
   const [payments, setPayments] = useState<any[]>([]);
   const [currentPayment, setCurrentPayment] = useState({
@@ -74,6 +81,18 @@ export default function AdminDashboard() {
   const [saleError, setSaleError] = useState<string | null>(null);
   const [saleSuccess, setSaleSuccess] = useState<string | null>(null);
   const [stockError, setStockError] = useState<string | null>(null);
+
+  // Restock Modal States
+  const [showRestockModal, setShowRestockModal] = useState(false);
+  const [restockingProduct, setRestockingProduct] = useState<Product | null>(null);
+  const [restockForm, setRestockForm] = useState<RestockForm>({
+    quantity: 1,
+    costPrice: "",
+    paymentSource: "cash",
+    creditorName: ""
+  });
+  const [restocking, setRestocking] = useState(false);
+  const [restockError, setRestockError] = useState<string | null>(null);
 
   // Refs for dropdown management
   const customerDropdownRef = useRef<HTMLDivElement>(null);
@@ -343,6 +362,132 @@ export default function AdminDashboard() {
     return product.stock?.quantity || 0;
   };
 
+  const isLowStock = (product: Product) => {
+    const stock = getProductStock(product);
+    return stock <= 5;
+  };
+
+  const isOutOfStock = (product: Product) => {
+    const stock = getProductStock(product);
+    return stock === 0;
+  };
+
+  const openRestockModal = (product: Product) => {
+    setRestockingProduct(product);
+    setRestockForm({
+      quantity: 1,
+      costPrice: product.price?.toString() || "",
+      paymentSource: "cash",
+      creditorName: ""
+    });
+    setRestockError(null);
+    setShowRestockModal(true);
+  };
+
+  const closeRestockModal = () => {
+    setShowRestockModal(false);
+    setRestockingProduct(null);
+    setRestockForm({
+      quantity: 1,
+      costPrice: "",
+      paymentSource: "cash",
+      creditorName: ""
+    });
+    setRestockError(null);
+  };
+
+  const handleRestockSubmit = async () => {
+    if (!restockingProduct) return;
+
+    // Validation
+    if (restockForm.quantity <= 0) {
+      setRestockError("Quantity must be greater than 0");
+      setTimeout(() => setRestockError(null), 3000);
+      return;
+    }
+
+    const costPrice = parseFloat(restockForm.costPrice);
+    if (isNaN(costPrice) || costPrice <= 0) {
+      setRestockError("Please enter a valid cost price");
+      setTimeout(() => setRestockError(null), 3000);
+      return;
+    }
+
+    if (restockForm.paymentSource === "credit" && !restockForm.creditorName.trim()) {
+      setRestockError("Creditor name is required for credit purchases");
+      setTimeout(() => setRestockError(null), 3000);
+      return;
+    }
+
+    setRestocking(true);
+    setRestockError(null);
+
+    try {
+      // Calculate total cost
+      const totalCost = restockForm.quantity * costPrice;
+
+      // Prepare the request body to match Prisma schema
+      const requestBody: any = {
+        productId: restockingProduct.id,
+        quantity: restockForm.quantity,
+        costPrice: costPrice,
+        totalCost: totalCost,
+        paymentSource: restockForm.paymentSource.toLowerCase(), // "cash" or "credit"
+      };
+
+      // Only include creditor info if payment source is credit
+      if (restockForm.paymentSource === "credit") {
+        requestBody.creditorName = restockForm.creditorName.trim();
+      }
+
+      console.log("Restock request body:", requestBody);
+
+      const response = await fetch("/api/restock", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(requestBody)
+      });
+
+      const responseData = await response.json();
+      console.log("Restock response:", responseData);
+
+      if (!response.ok) {
+        throw new Error(responseData.error || responseData.message || "Failed to restock product");
+      }
+
+      console.log("Restock successful:", responseData);
+
+      // Show success message
+      setSaleSuccess(`✅ ${restockingProduct.name} restocked successfully!`);
+      setTimeout(() => setSaleSuccess(null), 3000);
+
+      // Refresh products list to get updated stock
+      const productsRes = await fetch("/api/products");
+      if (productsRes.ok) {
+        const productsData = await productsRes.json();
+        setProducts(Array.isArray(productsData) ? productsData : []);
+        
+        // Update current product if it's the one being restocked
+        if (currentProduct && currentProduct.id === restockingProduct.id) {
+          const updatedProduct = (Array.isArray(productsData) ? productsData : [])
+            .find((p: Product) => p.id === restockingProduct.id);
+          if (updatedProduct) {
+            setCurrentProduct(updatedProduct);
+          }
+        }
+      }
+
+      // Close modal
+      closeRestockModal();
+
+    } catch (error: any) {
+      console.error("Error restocking:", error);
+      setRestockError(error.message || "Failed to restock product");
+    } finally {
+      setRestocking(false);
+    }
+  };
+
   const addItemToSale = () => {
     if (!currentProduct || currentQuantity <= 0) {
       setSaleError("Please select a product and enter quantity");
@@ -396,7 +541,7 @@ export default function AdminDashboard() {
 
     // Clear all product-related states
     setCurrentProduct(null);
-    setCurrentQuantity(0);
+    setCurrentQuantity(1);
     setCurrentPrice("");
     setProductSearch("");
     setShowProductDropdown(false);
@@ -451,17 +596,6 @@ export default function AdminDashboard() {
       setSaleError("Due date is MANDATORY for credit/pay later payments");
       setTimeout(() => setSaleError(null), 3000);
       return;
-    }
-
-    // Validation for electronic payments - only check if something was entered
-    if (["MPESA", "BANK", "CARD"].includes(currentPayment.method)) {
-      // Only require reference if method is electronic, but allow empty for now
-      // You can uncomment the lines below to enforce reference ID
-      // if (!currentPayment.referenceId?.trim()) {
-      //   setSaleError("Please enter transaction reference for electronic payments");
-      //   setTimeout(() => setSaleError(null), 3000);
-      //   return;
-      // }
     }
 
     // Add the payment
@@ -899,6 +1033,7 @@ export default function AdminDashboard() {
                                 setCurrentPrice(product.price?.toString() || "");
                                 setProductSearch("");
                                 setShowProductDropdown(false);
+                                setStockError(null);
                               }}
                               className="w-full text-left px-4 py-3 hover:bg-blue-50 border-b last:border-b-0 transition-colors"
                             >
@@ -919,6 +1054,65 @@ export default function AdminDashboard() {
 
                   {currentProduct && (
                     <div className="bg-blue-50 border-2 border-blue-200 rounded-lg p-4">
+                      {/* Stock Info and Restock Button - Always Visible */}
+                      <div className={`mb-4 p-3 rounded-lg border-2 ${
+                        isOutOfStock(currentProduct) 
+                          ? 'bg-red-50 border-red-300' 
+                          : isLowStock(currentProduct)
+                          ? 'bg-orange-50 border-orange-300'
+                          : 'bg-green-50 border-green-300'
+                      }`}>
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="flex items-start gap-2 flex-1">
+                            {isOutOfStock(currentProduct) || isLowStock(currentProduct) ? (
+                              <AlertTriangle className={`w-5 h-5 mt-0.5 flex-shrink-0 ${
+                                isOutOfStock(currentProduct) ? 'text-red-600' : 'text-orange-600'
+                              }`} />
+                            ) : (
+                              <Package className="w-5 h-5 mt-0.5 flex-shrink-0 text-green-600" />
+                            )}
+                            <div className="flex-1">
+                              <p className={`font-semibold text-sm ${
+                                isOutOfStock(currentProduct) 
+                                  ? 'text-red-800' 
+                                  : isLowStock(currentProduct)
+                                  ? 'text-orange-800'
+                                  : 'text-green-800'
+                              }`}>
+                                {isOutOfStock(currentProduct) 
+                                  ? '⚠️ Product is OUT OF STOCK' 
+                                  : isLowStock(currentProduct)
+                                  ? '⚠️ Stock is LOW for this product'
+                                  : '✓ Stock Available'}
+                              </p>
+                              <p className={`text-xs mt-0.5 ${
+                                isOutOfStock(currentProduct) 
+                                  ? 'text-red-700' 
+                                  : isLowStock(currentProduct)
+                                  ? 'text-orange-700'
+                                  : 'text-green-700'
+                              }`}>
+                                Available: {getProductStock(currentProduct)} units
+                              </p>
+                            </div>
+                          </div>
+                          <button
+                            onClick={() => openRestockModal(currentProduct)}
+                            type="button"
+                            className={`px-3 py-1.5 rounded-lg text-white text-sm font-medium transition-all hover:shadow-md flex items-center gap-1.5 whitespace-nowrap ${
+                              isOutOfStock(currentProduct)
+                                ? 'bg-red-600 hover:bg-red-700'
+                                : isLowStock(currentProduct)
+                                ? 'bg-orange-600 hover:bg-orange-700'
+                                : 'bg-blue-600 hover:bg-blue-700'
+                            }`}
+                          >
+                            <Package className="w-4 h-4" />
+                            Restock
+                          </button>
+                        </div>
+                      </div>
+
                       <div className="flex items-center justify-between mb-3">
                         <div className="flex-1">
                           <div className="font-semibold text-blue-900">{currentProduct.name}</div>
@@ -1250,6 +1444,174 @@ export default function AdminDashboard() {
                     <>
                       <CheckCircle className="w-5 h-5" />
                       Create Sale
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Restock Modal */}
+      {showRestockModal && restockingProduct && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-[60]">
+          <div className="bg-white rounded-2xl max-w-md w-full shadow-2xl">
+            <div className="bg-gradient-to-r from-orange-600 to-orange-700 text-white p-6 rounded-t-2xl">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <Package className="w-8 h-8" />
+                  <div>
+                    <h2 className="text-2xl font-bold">Restock Product</h2>
+                    <p className="text-orange-100 text-sm">{restockingProduct.name}</p>
+                  </div>
+                </div>
+                <button
+                  onClick={closeRestockModal}
+                  disabled={restocking}
+                  type="button"
+                  className="text-white hover:bg-white/20 p-2 rounded-lg transition-colors disabled:opacity-50"
+                >
+                  <X className="w-6 h-6" />
+                </button>
+              </div>
+            </div>
+
+            <div className="p-6 space-y-4">
+              {restockError && (
+                <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg flex items-start gap-2">
+                  <AlertTriangle className="w-5 h-5 flex-shrink-0 mt-0.5" />
+                  <div className="flex-1">
+                    <span>{restockError}</span>
+                  </div>
+                  <button onClick={() => setRestockError(null)} type="button" className="text-red-700 hover:text-red-900">
+                    <X size={16} />
+                  </button>
+                </div>
+              )}
+
+              {/* Current Stock Info */}
+              <div className="bg-orange-50 border border-orange-200 rounded-lg p-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm text-orange-700 font-medium">Current Stock</p>
+                    <p className="text-2xl font-bold text-orange-900">{getProductStock(restockingProduct)} units</p>
+                  </div>
+                  <Package className="w-12 h-12 text-orange-300" />
+                </div>
+              </div>
+
+              {/* Restock Form */}
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-semibold text-black mb-2">
+                    Quantity to Add *
+                  </label>
+                  <input
+                    type="number"
+                    min="1"
+                    value={restockForm.quantity}
+                    onChange={(e) => setRestockForm({
+                      ...restockForm,
+                      quantity: Math.max(1, parseInt(e.target.value) || 1)
+                    })}
+                    className="w-full px-4 py-3 border-2 border-slate-200 rounded-lg focus:border-orange-500 focus:ring-2 focus:ring-orange-200 transition-all text-black"
+                    disabled={restocking}
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-semibold text-black mb-2">
+                    Cost Price (KSh) *
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={restockForm.costPrice}
+                    onChange={(e) => setRestockForm({...restockForm, costPrice: e.target.value})}
+                    placeholder="Enter cost price"
+                    className="w-full px-4 py-3 border-2 border-slate-200 rounded-lg focus:border-orange-500 focus:ring-2 focus:ring-orange-200 transition-all text-black placeholder-gray-400"
+                    disabled={restocking}
+                  />
+                  {restockForm.costPrice && restockForm.quantity > 0 && (
+                    <p className="text-sm text-gray-600 mt-1">
+                      Total Cost: KSh {(parseFloat(restockForm.costPrice || "0") * restockForm.quantity).toLocaleString()}
+                    </p>
+                  )}
+                </div>
+
+                <div>
+                  <label className="block text-sm font-semibold text-black mb-2">
+                    Payment Source *
+                  </label>
+                  <select
+                    value={restockForm.paymentSource}
+                    onChange={(e) => setRestockForm({
+                      ...restockForm,
+                      paymentSource: e.target.value as "cash" | "credit",
+                      creditorName: e.target.value === "cash" ? "" : restockForm.creditorName
+                    })}
+                    className="w-full px-4 py-3 border-2 border-slate-200 rounded-lg focus:border-orange-500 focus:ring-2 focus:ring-orange-200 transition-all text-black"
+                    disabled={restocking}
+                  >
+                    <option value="cash">Cash Payment</option>
+                    <option value="credit">Credit/Pay Later</option>
+                  </select>
+                </div>
+
+                {restockForm.paymentSource === "credit" && (
+                  <div>
+                    <label className="block text-sm font-semibold text-black mb-2">
+                      Creditor Name * <span className="text-red-600">(Required)</span>
+                    </label>
+                    <input
+                      type="text"
+                      value={restockForm.creditorName}
+                      onChange={(e) => setRestockForm({...restockForm, creditorName: e.target.value})}
+                      placeholder="Enter creditor/supplier name"
+                      className="w-full px-4 py-3 border-2 border-slate-200 rounded-lg focus:border-orange-500 focus:ring-2 focus:ring-orange-200 transition-all text-black placeholder-gray-400"
+                      disabled={restocking}
+                    />
+                  </div>
+                )}
+
+                {/* New Stock Preview */}
+                {restockForm.quantity > 0 && (
+                  <div className="bg-green-50 border border-green-200 rounded-lg p-4">
+                    <p className="text-sm text-green-700 font-medium mb-1">After Restock:</p>
+                    <p className="text-2xl font-bold text-green-900">
+                      {getProductStock(restockingProduct) + restockForm.quantity} units
+                    </p>
+                  </div>
+                )}
+              </div>
+
+              {/* Action Buttons */}
+              <div className="flex gap-3 pt-4">
+                <button
+                  onClick={closeRestockModal}
+                  disabled={restocking}
+                  type="button"
+                  className="flex-1 px-6 py-3 border-2 border-slate-300 text-black rounded-lg hover:bg-slate-50 font-medium transition-colors disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleRestockSubmit}
+                  disabled={restocking}
+                  type="button"
+                  className="flex-1 px-6 py-3 bg-gradient-to-r from-orange-600 to-orange-700 text-white rounded-lg hover:from-orange-700 hover:to-orange-800 font-medium transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 shadow-lg"
+                >
+                  {restocking ? (
+                    <>
+                      <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
+                      Restocking...
+                    </>
+                  ) : (
+                    <>
+                      <CheckCircle className="w-5 h-5" />
+                      Restock Product
                     </>
                   )}
                 </button>
