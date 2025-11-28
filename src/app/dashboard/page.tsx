@@ -1,11 +1,11 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState } from "react";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { 
-  ChevronRight, Eye, Search, Heart, ShoppingBag, MessageCircle, Star, ArrowRight, 
-  Zap, Shield, Truck, List, Grid3X3, Sparkles, Menu, X 
+  Eye, Search, Heart, ShoppingBag, MessageCircle, Star, 
+  Shield, Sparkles, Menu, X 
 } from "lucide-react";
 
 // ================= Types =================
@@ -434,24 +434,6 @@ const ProductCard: React.FC<ProductCardProps> = ({ product, isNewProduct = false
   </div>
 );
 
-// ================= Loading Skeleton =================
-const ProductSkeleton: React.FC = () => (
-  <div className="bg-white rounded-2xl overflow-hidden shadow-lg border border-slate-100 animate-pulse">
-    <div className="w-full h-40 sm:h-48 bg-gradient-to-br from-slate-200 to-slate-300"></div>
-    <div className="p-4 sm:p-6 space-y-3 sm:space-y-4">
-      <div className="flex space-x-1">
-        {[...Array(5)].map((_, i) => (
-          <div key={i} className="w-3 sm:w-4 h-3 sm:h-4 bg-slate-200 rounded"></div>
-        ))}
-      </div>
-      <div className="w-16 h-4 bg-slate-200 rounded-full"></div>
-      <div className="w-3/4 h-4 sm:h-5 bg-slate-200 rounded"></div>
-      <div className="w-full h-3 sm:h-4 bg-slate-200 rounded"></div>
-      <div className="w-full h-8 sm:h-10 bg-slate-200 rounded-lg"></div>
-    </div>
-  </div>
-);
-
 // ================= Section Divider =================
 const SectionDivider: React.FC<SectionDividerProps> = ({ title, description, showNew = false }) => (
   <div className="text-center py-6 sm:py-8">
@@ -467,91 +449,9 @@ const SectionDivider: React.FC<SectionDividerProps> = ({ title, description, sho
 
 // ================= Catalog =================
 const Catalog: React.FC<CatalogProps> = ({ products = sampleProducts }) => {
-  const [adminProducts, setAdminProducts] = useState<Product[]>([]);
-  const [loading, setLoading] = useState<boolean>(true);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-   const fetchAdminProducts = async () => {
-  try {
-    setLoading(true);
-    const response = await fetch("/api/catalog-products", { cache: "no-store" });
-
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`);
-    }
-
-    const data = await response.json();
-    console.log("Fetched admin products:", data);
-
-    if (Array.isArray(data)) {
-      setAdminProducts(
-        data.map((p: any) => ({
-          name: p.name,
-          category: p.category || "Uncategorized",
-          image: p.image || "/uploads/placeholder.png",
-          description: p.description || "",
-          inStock: p.inStock ?? true,
-        }))
-      );
-    } else {
-      console.warn("API returned non-array data:", data);
-      setAdminProducts([]);
-    }
-  } catch (err) {
-    const errorMessage = err instanceof Error ? err.message : "An unknown error occurred";
-    console.error("Failed to fetch admin products:", err);
-    setError(errorMessage);
-    setAdminProducts([]);
-  } finally {
-    setLoading(false);
-  }
-};
-
-    fetchAdminProducts();
-  }, []);
-
-  if (loading) {
-    return (
-      <div className="space-y-8 sm:space-y-12">
-        <div className="text-center">
-          <div className="inline-flex items-center gap-2 text-emerald-600 mb-4">
-            <div className="animate-spin w-4 sm:w-5 h-4 sm:h-5 border-2 border-emerald-600 border-t-transparent rounded-full"></div>
-            <span className="text-base sm:text-lg font-medium">Loading latest products...</span>
-          </div>
-        </div>
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">
-          {[...Array(6)].map((_, index) => (
-            <ProductSkeleton key={index} />
-          ))}
-        </div>
-      </div> 
-    );
-  }
-
   return (
     <div className="space-y-8 sm:space-y-12">
-      {/* Admin Products Section */}
-      {adminProducts.length > 0 && (
-        <div>
-          <SectionDivider 
-            title="Latest Arrivals" 
-            description="Check out our newest products, recently added by our team"
-            showNew={true}
-          />
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6 mb-6 sm:mb-8">
-            {adminProducts.map((product, index) => (
-              <ProductCard 
-                key={`admin-${index}`} 
-                product={product} 
-                isNewProduct={true}
-              />
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Default Products Section */}
+      {/* Products Section */}
       {products.length > 0 && (
         <div>
           <SectionDivider 
@@ -562,7 +462,7 @@ const Catalog: React.FC<CatalogProps> = ({ products = sampleProducts }) => {
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">
             {products.map((product, index) => (
               <ProductCard 
-                key={`default-${index}`} 
+                key={`product-${index}`} 
                 product={product} 
                 isNewProduct={false}
               />
@@ -571,20 +471,8 @@ const Catalog: React.FC<CatalogProps> = ({ products = sampleProducts }) => {
         </div>
       )}
 
-      {/* Error State */}
-      {error && adminProducts.length === 0 && (
-        <div className="text-center py-6 sm:py-8">
-          <div className="bg-red-50 border border-red-200 rounded-lg p-4 sm:p-6 max-w-md mx-auto">
-            <h3 className="text-red-800 font-semibold mb-2 text-sm sm:text-base">Unable to Load Latest Products</h3>
-            <p className="text-red-600 text-xs sm:text-sm">
-              Don't worry! Our main catalog is still available below.
-            </p>
-          </div>
-        </div>
-      )}
-
       {/* Empty State */}
-      {!loading && adminProducts.length === 0 && products.length === 0 && !error && (
+      {products.length === 0 && (
         <div className="text-center py-12 sm:py-16">
           <div className="bg-slate-50 rounded-2xl p-8 sm:p-12 max-w-md mx-auto">
             <ShoppingBag className="w-12 sm:w-16 h-12 sm:h-16 text-slate-400 mx-auto mb-4" />

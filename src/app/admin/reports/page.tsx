@@ -3,10 +3,11 @@ import { useEffect, useState, useMemo } from "react";
 import { TrendingUp, Wallet, CreditCard, Users, Package, DollarSign, Download, BookOpen, Search, X, Edit2, Check } from "lucide-react";
 
 // Import separated components
-import CashLedger from "../CashLedger";
+import DailyTransactionsTracker from "../CashLedger"; 
 import CreditorsSection from "../CreditorsSection";
 import DebtorsSection from "../DebtorsSection";
 import BalanceSheetSection from "../BalanceSheetSection";
+import InventorySection from "../inventory";
 
 type CashTransaction = {
   id: string;
@@ -52,6 +53,11 @@ type InventoryItem = {
   supplier?: string;
   dateAdded: string;
 };
+export type CashLedgerProps = {
+  transactions: CashTransaction[];
+  cashBalance: number;
+  onDownload: () => void;
+};
 
 type BalanceSheet = {
   assets: {
@@ -59,6 +65,12 @@ type BalanceSheet = {
       cash: number;
       accountsReceivable: number;
       inventory: number;
+      total: number;
+    };
+    nonCurrentAssets?: {
+      machinery: number;
+      motorVehicle: number;
+      phoneAndAccessories: number;
       total: number;
     };
     totalAssets: number;
@@ -481,6 +493,12 @@ export default function AccountingSystem() {
           inventory: totalInventoryValue,
           total: runningBal + totalDebtorBalance + totalInventoryValue,
         },
+        nonCurrentAssets: {
+          machinery: 0,
+          motorVehicle: 0,
+          phoneAndAccessories: 0,
+          total: 0
+        },
         totalAssets,
       },
       liabilities: {
@@ -544,6 +562,177 @@ export default function AccountingSystem() {
     }
   };
 
+  // FIXED: Download COGS Ledger function with proper error handling
+ // DEBUG VERSION: Download COGS Ledger with detailed logging
+const downloadCOGSLedger = async () => {
+  try {
+    console.log("🔄 Starting COGS ledger download...");
+    
+    const apiUrl = "/api/reports/cogs-ledger";
+    console.log("📡 Fetching from:", apiUrl);
+    
+    const response = await fetch(apiUrl);
+    
+    console.log("📨 Response status:", response.status, response.statusText);
+    console.log("📨 Response OK:", response.ok);
+    
+    if (!response.ok) {
+      console.error("❌ API response not OK");
+      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    }
+
+    const result = await response.json();
+    console.log("📊 Raw API result:", result);
+    console.log("📊 Result type:", typeof result);
+    console.log("📊 Result keys:", Object.keys(result));
+
+    // Check if we have the data property
+    if (!result.hasOwnProperty('data')) {
+      console.error("❌ No 'data' property in response");
+      console.error("❌ Available properties:", Object.keys(result));
+      throw new Error("API response missing 'data' property");
+    }
+
+    const cogsData = result.data;
+    console.log("📦 cogsData type:", typeof cogsData);
+    console.log("📦 cogsData is array:", Array.isArray(cogsData));
+    
+    if (Array.isArray(cogsData)) {
+      console.log("📦 cogsData length:", cogsData.length);
+      if (cogsData.length > 0) {
+        console.log("📦 First item:", cogsData[0]);
+      }
+    } else {
+      console.error("❌ cogsData is not an array:", cogsData);
+      throw new Error("cogsData is not an array");
+    }
+
+    // Handle empty data
+    if (cogsData.length === 0) {
+      console.warn("⚠️ No data in cogsData array");
+      alert("No COGS data available to download");
+      return;
+    }
+
+    console.log("✅ Data validation passed, creating CSV...");
+
+    // Create CSV content
+    const headers = ["Date", "Sale ID", "Product ID", "Product Name", "Quantity Sold", "Unit Production Cost", "Total Production Cost", "Sale Amount", "Sale Status"];
+    console.log("📋 Headers:", headers);
+    
+    const rows = cogsData.map((item, index) => {
+      const row = [
+        item.date || "N/A",
+        item.saleId || "N/A",
+        item.productId || "N/A",
+        item.productName || "Unknown",
+        item.quantitySold || 0,
+        Number(item.unitProductionCost || 0).toFixed(2),
+        Number(item.totalProductionCost || 0).toFixed(2),
+        Number(item.saleAmount || 0).toFixed(2),
+        item.saleStatus || "N/A"
+      ];
+      
+      if (index === 0) {
+        console.log("📋 First row sample:", row);
+      }
+      
+      return row;
+    });
+
+    const csvContent = [headers, ...rows]
+      .map(row => row.map((cell: string | number) => `"${String(cell).replace(/"/g, '""')}"`).join(","))
+      .join("\n");
+
+    console.log("📄 CSV content length:", csvContent.length);
+    console.log("📄 First 200 chars of CSV:", csvContent.substring(0, 200));
+
+    // Download the file
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `cogs-ledger-${new Date().toISOString().split('T')[0]}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    
+    setTimeout(() => URL.revokeObjectURL(url), 100);
+    
+    console.log("✅ COGS ledger downloaded successfully!");
+    
+  } catch (error) {
+    console.error('❌ Error downloading COGS ledger:', error);
+    
+    if (error instanceof Error) {
+      console.error('❌ Error name:', error.name);
+      console.error('❌ Error message:', error.message);
+      console.error('❌ Error stack:', error.stack);
+      
+      alert(`Failed to download COGS ledger: ${error.message}\n\nCheck browser console for details.`);
+    } else {
+      console.error('❌ Unknown error type:', error);
+      alert("An unexpected error occurred while downloading the COGS ledger. Check console for details.");
+    }
+  }
+};
+
+  // FIXED: Download Cash Ledger function with proper error handling
+  const downloadCashLedger = async () => {
+    try {
+      // Fetch cash ledger data from API
+      const response = await fetch("/api/money");
+      if (!response.ok) {
+        throw new Error(`Failed to fetch cash ledger: ${response.status}`);
+      }
+      
+      const cashData = await response.json();
+      
+      // Validate response data
+      const dataToUse = Array.isArray(cashData) ? cashData : cashTransactions;
+      
+      if (!Array.isArray(dataToUse)) {
+        throw new Error("Invalid cash data format");
+      }
+
+      // Handle empty data gracefully
+      if (dataToUse.length === 0) {
+        alert("No cash ledger data available to download");
+        return;
+      }
+
+      // Create CSV content with proper validation
+      const csvContent = [
+        ["Date", "Description", "Category", "Type", "Amount", "Balance", "Accounts Affected"],
+        ...dataToUse.map((txn: any) => [
+          new Date(txn.date || txn.createdAt || new Date()).toLocaleDateString(),
+          txn.description || "",
+          txn.category || "",
+          txn.type || "",
+          Number(txn.amount || 0).toFixed(2),
+          Number(txn.runningBalance || txn.balance || 0).toFixed(2),
+          txn.affectedAccounts || ""
+        ])
+      ].map(row => row.map((cell: string | number) => `"${String(cell).replace(/"/g, '""')}"`).join(",")).join("\n");
+
+      const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `cash-ledger-${new Date().toISOString().split('T')[0]}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      
+      // Clean up URL object after download
+      setTimeout(() => URL.revokeObjectURL(url), 100);
+      
+    } catch (error) {
+      console.error('Error downloading cash ledger:', error);
+      alert("Failed to download cash ledger. Please try again.");
+    }
+  };
+
   const generateReceipt = (debtor: Debtor, sale: any) => {
     const receiptWindow = window.open("", "_blank");
     if (receiptWindow) {
@@ -584,32 +773,13 @@ export default function AccountingSystem() {
     }
   };
 
-  const downloadCashLedger = () => {
-    const csvContent = [
-      ["Date", "Description", "Category", "Type", "Amount", "Balance", "Accounts Affected"],
-      ...cashTransactions.map(txn => [
-        new Date(txn.date).toLocaleDateString(),
-        txn.description,
-        txn.category,
-        txn.type,
-        Number(txn.amount || 0).toFixed(2),
-        Number(txn.runningBalance || 0).toFixed(2),
-        txn.affectedAccounts || ""
-      ])
-    ].map(row => row.map(cell => `"${cell}"`).join(",")).join("\n");
-
-    const blob = new Blob([csvContent], { type: "text/csv" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `cash-ledger-${new Date().toISOString().split('T')[0]}.csv`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-  };
-
   const downloadInventoryReport = () => {
+    // Validate inventory data
+    if (!Array.isArray(inventory) || inventory.length === 0) {
+      alert("No inventory data available to download");
+      return;
+    }
+
     const csvContent = [
       ["Item Name", "Supplier", "Quantity", "Cost Price", "Selling Price", "Total Cost Value", "Total Selling Value", "Markup %", "Date Added"],
       ...inventory.map(item => {
@@ -628,9 +798,9 @@ export default function AccountingSystem() {
           new Date(item.dateAdded).toLocaleDateString()
         ];
       })
-    ].map(row => row.map(cell => `"${cell}"`).join(",")).join("\n");
+    ].map(row => row.map((cell: string | number) => `"${String(cell).replace(/"/g, '""')}"`).join(",")).join("\n");
 
-    const blob = new Blob([csvContent], { type: "text/csv" });
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
@@ -638,7 +808,7 @@ export default function AccountingSystem() {
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    setTimeout(() => URL.revokeObjectURL(url), 100);
   };
 
   const fetchInventoryHistory = async (productId: number) => {
@@ -667,6 +837,12 @@ export default function AccountingSystem() {
   };
 
   const downloadItemHistory = (item: InventoryItem) => {
+    // Validate history data
+    if (!Array.isArray(inventoryHistory) || inventoryHistory.length === 0) {
+      alert("No history data available for this item");
+      return;
+    }
+
     const csvContent = [
       ["Item History Report"],
       [`Item: ${item.name}`],
@@ -677,15 +853,15 @@ export default function AccountingSystem() {
       ["Restock History"],
       ["Date", "Quantity Added", "Cost Price", "Supplier/Notes", "Added By"],
       ...inventoryHistory.map(record => [
-        new Date(record?.createdAt || record?.date).toLocaleDateString(),
+        new Date(record?.createdAt || record?.date || new Date()).toLocaleDateString(),
         record?.quantity || 0,
         Number(record?.costPrice || 0).toFixed(2),
         record?.supplier || record?.notes || "N/A",
         record?.addedBy || "System"
       ])
-    ].map(row => Array.isArray(row) ? row.map(cell => `"${cell}"`).join(",") : `"${row}"`).join("\n");
+    ].map(row => Array.isArray(row) ? row.map((cell: string | number) => `"${String(cell).replace(/"/g, '""')}"`).join(",") : `"${String(row).replace(/"/g, '""')}"`).join("\n");
 
-    const blob = new Blob([csvContent], { type: "text/csv" });
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
@@ -693,77 +869,43 @@ export default function AccountingSystem() {
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-  };
-
-  const downloadBalanceSheet = () => {
-    if (!balanceSheet) return;
-
-    const csvContent = [
-      ["BALANCE SHEET"],
-      [`As of ${new Date(balanceSheet.date).toLocaleDateString()}`],
-      [""],
-      ["ASSETS"],
-      ["Current Assets"],
-      ["  Cash", balanceSheet.assets.currentAssets.cash.toFixed(2)],
-      ["  Accounts Receivable", balanceSheet.assets.currentAssets.accountsReceivable.toFixed(2)],
-      ["  Inventory", balanceSheet.assets.currentAssets.inventory.toFixed(2)],
-      ["Total Current Assets", balanceSheet.assets.currentAssets.total.toFixed(2)],
-      [""],
-      ["TOTAL ASSETS", balanceSheet.assets.totalAssets.toFixed(2)],
-      [""],
-      ["LIABILITIES"],
-      ["Current Liabilities"],
-      ["  Accounts Payable", balanceSheet.liabilities.currentLiabilities.accountsPayable.toFixed(2)],
-      ["Total Current Liabilities", balanceSheet.liabilities.currentLiabilities.total.toFixed(2)],
-      [""],
-      ["TOTAL LIABILITIES", balanceSheet.liabilities.totalLiabilities.toFixed(2)],
-      [""],
-      ["EQUITY"],
-      ["  Capital", balanceSheet.equity.capital.toFixed(2)],
-      ["  Retained Earnings", balanceSheet.equity.retainedEarnings.toFixed(2)],
-      ["TOTAL EQUITY", balanceSheet.equity.totalEquity.toFixed(2)],
-      [""],
-      ["TOTAL LIABILITIES & EQUITY", (balanceSheet.liabilities.totalLiabilities + balanceSheet.equity.totalEquity).toFixed(2)],
-    ].map(row => row.map(cell => `"${cell}"`).join(",")).join("\n");
-
-    const blob = new Blob([csvContent], { type: "text/csv" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `balance-sheet-${new Date().toISOString().split('T')[0]}.csv`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    setTimeout(() => URL.revokeObjectURL(url), 100);
   };
 
   // Memoized filtered data for better performance
   const filteredCashTxns = useMemo(() => 
-    cashTransactions.filter(txn =>
-      txn.description.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      txn.category.toLowerCase().includes(searchTerm.toLowerCase())
-    ), [cashTransactions, searchTerm]
+    Array.isArray(cashTransactions) 
+      ? cashTransactions.filter(txn =>
+          txn.description.toLowerCase().includes(searchTerm.toLowerCase()) ||
+          txn.category.toLowerCase().includes(searchTerm.toLowerCase())
+        )
+      : [], [cashTransactions, searchTerm]
   );
 
   const filteredCreditors = useMemo(() =>
-    creditors.filter(c =>
-      c.name.toLowerCase().includes(searchTerm.toLowerCase())
-    ), [creditors, searchTerm]
+    Array.isArray(creditors)
+      ? creditors.filter(c =>
+          c.name.toLowerCase().includes(searchTerm.toLowerCase())
+        )
+      : [], [creditors, searchTerm]
   );
 
   const filteredDebtors = useMemo(() =>
-    debtors.filter(d =>
-      d.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      d.email.toLowerCase().includes(searchTerm.toLowerCase())
-    ), [debtors, searchTerm]
+    Array.isArray(debtors)
+      ? debtors.filter(d =>
+          d.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+          d.email.toLowerCase().includes(searchTerm.toLowerCase())
+        )
+      : [], [debtors, searchTerm]
   );
 
   const filteredInventory = useMemo(() =>
-    inventory.filter(i =>
-      i.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      i.supplier?.toLowerCase().includes(searchTerm.toLowerCase())
-    ), [inventory, searchTerm]
+    Array.isArray(inventory)
+      ? inventory.filter(i =>
+          i.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+          i.supplier?.toLowerCase().includes(searchTerm.toLowerCase())
+        )
+      : [], [inventory, searchTerm]
   );
 
   if (loading) {
@@ -838,6 +980,30 @@ export default function AccountingSystem() {
           </div>
         </div>
 
+        {/* UPDATED: Download Section in Overview - REMOVED Balance Sheet Button */}
+        {activeTab === "overview" && (
+          <div className="bg-white rounded-xl shadow-lg p-4 sm:p-6 mb-6 sm:mb-8 border-2 border-green-200">
+            <h3 className="text-lg sm:text-xl font-bold text-gray-800 mb-4">Download Reports</h3>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <button
+                onClick={downloadCashLedger}
+                className="bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 px-4 rounded-lg transition-all flex items-center justify-center gap-3 shadow-lg hover:shadow-xl"
+              >
+                <Download className="w-5 h-5" />
+                <span>Cash Ledger</span>
+              </button>
+              
+              <button
+                onClick={downloadCOGSLedger}
+                className="bg-orange-600 hover:bg-orange-700 text-white font-semibold py-3 px-4 rounded-lg transition-all flex items-center justify-center gap-3 shadow-lg hover:shadow-xl"
+              >
+                <Download className="w-5 h-5" />
+                <span>COGS Ledger</span>
+              </button>
+            </div>
+          </div>
+        )}
+
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6 mb-6 sm:mb-8">
           <div className="bg-white rounded-xl shadow-lg p-4 sm:p-6 border-l-4 border-red-500">
             <div className="flex items-center justify-between mb-2">
@@ -847,7 +1013,7 @@ export default function AccountingSystem() {
             <p className="text-xl sm:text-2xl lg:text-3xl font-bold text-gray-900 break-all">
               KES {Number(stats.totalCreditors || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}
             </p>
-            <p className="text-xs text-gray-500 mt-1">{creditors.length} suppliers</p>
+            <p className="text-xs text-gray-500 mt-1">{Array.isArray(creditors) ? creditors.length : 0} suppliers</p>
           </div>
 
           <div className="bg-white rounded-xl shadow-lg p-4 sm:p-6 border-l-4 border-amber-500">
@@ -858,7 +1024,7 @@ export default function AccountingSystem() {
             <p className="text-xl sm:text-2xl lg:text-3xl font-bold text-gray-900 break-all">
               KES {Number(stats.totalDebtors || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}
             </p>
-            <p className="text-xs text-gray-500 mt-1">{debtors.length} customers</p>
+            <p className="text-xs text-gray-500 mt-1">{Array.isArray(debtors) ? debtors.length : 0} customers</p>
           </div>
 
           <div className="bg-white rounded-xl shadow-lg p-4 sm:p-6 border-l-4 border-blue-500">
@@ -869,7 +1035,7 @@ export default function AccountingSystem() {
             <p className="text-xl sm:text-2xl lg:text-3xl font-bold text-gray-900 break-all">
               KES {Number(stats.inventoryValue || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}
             </p>
-            <p className="text-xs text-gray-500 mt-1">{inventory.length} items</p>
+            <p className="text-xs text-gray-500 mt-1">{Array.isArray(inventory) ? inventory.length : 0} items</p>
           </div>
         </div>
 
@@ -1009,13 +1175,10 @@ export default function AccountingSystem() {
               </div>
             )}
 
-            {activeTab === "cash" && (
-              <CashLedger 
-                transactions={filteredCashTxns}
-                cashBalance={stats.cashBalance}
-                onDownload={downloadCashLedger}
-              />
-            )}
+            // With:
+{activeTab === "cash" && (
+  <DailyTransactionsTracker />
+)}
 
             {activeTab === "creditors" && (
               <CreditorsSection />
@@ -1026,235 +1189,10 @@ export default function AccountingSystem() {
             )}
 
             {activeTab === "inventory" && (
-              <div>
-                <div className="mb-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-                  <h3 className="text-lg sm:text-xl font-bold text-gray-800">Inventory/Stock Management</h3>
-                  <button
-                    onClick={downloadInventoryReport}
-                    className="bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 px-3 sm:px-4 rounded-lg transition-all flex items-center gap-2 text-sm whitespace-nowrap"
-                  >
-                    <Download className="w-4 h-4" />
-                    Download Full Inventory
-                  </button>
-                </div>
-                <div className="mb-4 bg-gradient-to-r from-green-50 to-emerald-50 rounded-lg p-4 border border-green-200">
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                    <div>
-                      <p className="text-xs sm:text-sm text-gray-600 mb-1">Potential Revenue (at selling price)</p>
-                      <p className="text-xl sm:text-2xl font-bold text-green-600 break-all">
-                        KES {Number(stats.estimatedInventoryValue || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}
-                      </p>
-                      <p className="text-xs text-gray-500 mt-1">If all inventory sold</p>
-                    </div>
-                    <div>
-                      <p className="text-xs sm:text-sm text-gray-600 mb-1">Inventory Cost Value</p>
-                      <p className="text-xl sm:text-2xl font-bold text-blue-600 break-all">
-                        KES {Number(stats.inventoryValue || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}
-                      </p>
-                      <p className="text-xs text-gray-500 mt-1">Total cost invested</p>
-                    </div>
-                    <div className="text-left sm:text-right">
-                      <p className="text-xs sm:text-sm text-gray-600 mb-1">Potential Profit</p>
-                      <p className="text-xl sm:text-2xl font-bold text-purple-600 break-all">
-                        KES {(Number(stats.estimatedInventoryValue || 0) - Number(stats.inventoryValue || 0)).toLocaleString('en-US', { minimumFractionDigits: 2 })}
-                      </p>
-                      <p className="text-xs text-gray-500 mt-1">{inventory.length} items in stock</p>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="overflow-x-auto -mx-4 sm:mx-0">
-                  <div className="inline-block min-w-full align-middle">
-                    <table className="min-w-full">
-                      <thead className="bg-gray-50 border-b-2 border-gray-200">
-                        <tr>
-                          <th className="text-left p-2 sm:p-3 text-xs sm:text-sm font-semibold text-gray-700">Item Name</th>
-                          <th className="text-left p-2 sm:p-3 text-xs sm:text-sm font-semibold text-gray-700 hidden md:table-cell">Supplier</th>
-                          <th className="text-right p-2 sm:p-3 text-xs sm:text-sm font-semibold text-gray-700">Quantity</th>
-                          <th className="text-right p-2 sm:p-3 text-xs sm:text-sm font-semibold text-gray-700 hidden lg:table-cell">Cost Price</th>
-                          <th className="text-right p-2 sm:p-3 text-xs sm:text-sm font-semibold text-gray-700 hidden sm:table-cell">Selling Price</th>
-                          <th className="text-right p-2 sm:p-3 text-xs sm:text-sm font-semibold text-gray-700">Total Value</th>
-                          <th className="text-right p-2 sm:p-3 text-xs sm:text-sm font-semibold text-gray-700 hidden md:table-cell">Markup</th>
-                          <th className="text-center p-2 sm:p-3 text-xs sm:text-sm font-semibold text-gray-700">Actions</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {filteredInventory.map((item, idx) => {
-                          const markup = Number(item.sellingPrice || 0) > 0 && Number(item.costPrice || 0) > 0
-                            ? ((Number(item.sellingPrice || 0) - Number(item.costPrice || 0)) / Number(item.costPrice || 0) * 100)
-                            : 0;
-                          
-                          return (
-                            <tr key={item.id} className={`border-b hover:bg-gray-50 ${idx % 2 === 0 ? 'bg-white' : 'bg-gray-25'}`}>
-                              <td className="p-2 sm:p-3">
-                                <div>
-                                  <p className="font-semibold text-gray-900 text-xs sm:text-sm break-words">{item.name}</p>
-                                  <p className="text-xs text-gray-500">Added: {new Date(item.dateAdded).toLocaleDateString()}</p>
-                                </div>
-                              </td>
-                              <td className="p-2 sm:p-3 text-xs sm:text-sm text-gray-600 hidden md:table-cell">{item.supplier || "N/A"}</td>
-                              <td className="p-2 sm:p-3 text-right">
-                                <span className={`inline-block px-2 py-1 rounded-full text-xs font-medium ${
-                                  item.quantity > 10 ? "bg-green-100 text-green-800" :
-                                  item.quantity > 5 ? "bg-amber-100 text-amber-800" :
-                                  "bg-red-100 text-red-800"
-                                }`}>
-                                  {item.quantity}
-                                </span>
-                              </td>
-                              <td className="p-2 sm:p-3 text-right font-semibold text-gray-700 text-xs sm:text-sm hidden lg:table-cell break-all">
-                                {Number(item.costPrice || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}
-                              </td>
-                              <td className="p-2 sm:p-3 text-right font-semibold text-gray-900 text-xs sm:text-sm hidden sm:table-cell break-all">
-                                {Number(item.sellingPrice || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}
-                              </td>
-                              <td className="p-2 sm:p-3 text-right font-bold text-blue-600 text-xs sm:text-sm break-all">
-                                {Number(item.totalValue || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}
-                              </td>
-                              <td className="p-2 sm:p-3 text-right hidden md:table-cell">
-                                <span className={`font-semibold text-xs sm:text-sm ${markup > 30 ? 'text-green-600' : markup > 15 ? 'text-blue-600' : 'text-amber-600'}`}>
-                                  {markup.toFixed(1)}%
-                                </span>
-                              </td>
-                              <td className="p-2 sm:p-3 text-center">
-                                <button
-                                  onClick={() => handleViewItemDetails(item)}
-                                  className="bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-1 px-2 sm:px-3 rounded text-xs transition-all"
-                                >
-                                  View
-                                </button>
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-                {filteredInventory.length === 0 && (
-                  <div className="text-center py-12 text-gray-500">
-                    <Package className="w-12 h-12 sm:w-16 sm:h-16 mx-auto mb-4 text-gray-300" />
-                    <p className="text-sm sm:text-base">No inventory items found</p>
-                  </div>
-                )}
-
-                {selectedInventoryItem && (
-                  <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-                    <div className="bg-white rounded-xl shadow-2xl max-w-4xl w-full max-h-[90vh] overflow-y-auto">
-                      <div className="sticky top-0 bg-gradient-to-r from-indigo-600 to-purple-600 text-white p-4 sm:p-6 flex justify-between items-start">
-                        <div>
-                          <h2 className="text-xl sm:text-2xl font-bold mb-2">{selectedInventoryItem.name}</h2>
-                          <p className="text-sm opacity-90">Product ID: {selectedInventoryItem.id}</p>
-                        </div>
-                        <button
-                          onClick={() => {
-                            setSelectedInventoryItem(null);
-                            setInventoryHistory([]);
-                          }}
-                          className="text-white hover:bg-white hover:bg-opacity-20 rounded-lg p-2 transition-all"
-                        >
-                          <X className="w-6 h-6" />
-                        </button>
-                      </div>
-
-                      <div className="p-4 sm:p-6">
-                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-                          <div className="bg-blue-50 rounded-lg p-4 border border-blue-200">
-                            <p className="text-xs text-gray-600 mb-1">Current Quantity</p>
-                            <p className="text-2xl font-bold text-blue-600">{selectedInventoryItem.quantity}</p>
-                          </div>
-                          <div className="bg-green-50 rounded-lg p-4 border border-green-200">
-                            <p className="text-xs text-gray-600 mb-1">Cost Price</p>
-                            <p className="text-xl font-bold text-green-600">
-                              KES {Number(selectedInventoryItem.costPrice || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}
-                            </p>
-                          </div>
-                          <div className="bg-purple-50 rounded-lg p-4 border border-purple-200">
-                            <p className="text-xs text-gray-600 mb-1">Selling Price</p>
-                            <p className="text-xl font-bold text-purple-600">
-                              KES {Number(selectedInventoryItem.sellingPrice || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}
-                            </p>
-                          </div>
-                          <div className="bg-amber-50 rounded-lg p-4 border border-amber-200">
-                            <p className="text-xs text-gray-600 mb-1">Total Cost Value</p>
-                            <p className="text-xl font-bold text-amber-600">
-                              KES {Number(selectedInventoryItem.totalValue || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}
-                            </p>
-                          </div>
-                        </div>
-
-                        <div className="mb-4 flex justify-between items-center">
-                          <h3 className="text-lg sm:text-xl font-bold text-gray-800">Restock History</h3>
-                          <button
-                            onClick={() => downloadItemHistory(selectedInventoryItem)}
-                            className="bg-green-600 hover:bg-green-700 text-white font-semibold py-2 px-3 sm:px-4 rounded-lg transition-all flex items-center gap-2 text-sm"
-                          >
-                            <Download className="w-4 h-4" />
-                            Download Report
-                          </button>
-                        </div>
-
-                        {loadingHistory ? (
-                          <div className="text-center py-8">
-                            <div className="animate-spin rounded-full h-8 w-8 border-4 border-indigo-500 border-t-transparent mx-auto mb-2"></div>
-                            <p className="text-sm text-gray-600">Loading history...</p>
-                          </div>
-                        ) : inventoryHistory.length > 0 ? (
-                          <div className="overflow-x-auto">
-                            <table className="min-w-full">
-                              <thead className="bg-gray-50 border-b-2 border-gray-200">
-                                <tr>
-                                  <th className="text-left p-3 text-xs sm:text-sm font-semibold text-gray-700">Date</th>
-                                  <th className="text-right p-3 text-xs sm:text-sm font-semibold text-gray-700">Quantity Added</th>
-                                  <th className="text-right p-3 text-xs sm:text-sm font-semibold text-gray-700">Cost Price</th>
-                                  <th className="text-left p-3 text-xs sm:text-sm font-semibold text-gray-700 hidden sm:table-cell">Supplier/Notes</th>
-                                  <th className="text-left p-3 text-xs sm:text-sm font-semibold text-gray-700 hidden md:table-cell">Added By</th>
-                                </tr>
-                              </thead>
-                              <tbody>
-                                {inventoryHistory.map((record, idx) => (
-                                  <tr key={idx} className={`border-b hover:bg-gray-50 ${idx % 2 === 0 ? 'bg-white' : 'bg-gray-25'}`}>
-                                    <td className="p-3 text-xs sm:text-sm text-gray-900">
-                                      {new Date(record?.createdAt || record?.date).toLocaleString()}
-                                    </td>
-                                    <td className="p-3 text-right">
-                                      <span className="font-semibold text-green-600 text-xs sm:text-sm">
-                                        +{record?.quantity || 0}
-                                      </span>
-                                    </td>
-                                    <td className="p-3 text-right font-semibold text-gray-700 text-xs sm:text-sm">
-                                      KES {Number(record?.costPrice || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}
-                                    </td>
-                                    <td className="p-3 text-xs sm:text-sm text-gray-600 hidden sm:table-cell">
-                                      {record?.supplier || record?.notes || "N/A"}
-                                    </td>
-                                    <td className="p-3 text-xs sm:text-sm text-gray-600 hidden md:table-cell">
-                                      {record?.addedBy || "System"}
-                                    </td>
-                                  </tr>
-                                ))}
-                              </tbody>
-                            </table>
-                          </div>
-                        ) : (
-                          <div className="text-center py-8 text-gray-500">
-                            <Package className="w-12 h-12 mx-auto mb-2 text-gray-300" />
-                            <p className="text-sm">No restock history found for this item</p>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                )}
-              </div>
+              <InventorySection/>
             )}
-
-            {activeTab === "balance-sheet" && balanceSheet && (
-              <BalanceSheetSection 
-                balanceSheet={balanceSheet}
-                onDownload={downloadBalanceSheet}
-              />
-            )}
+           
+           
           </div>
         </div>
 

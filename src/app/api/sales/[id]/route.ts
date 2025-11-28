@@ -53,18 +53,75 @@ export async function PUT(
       return NextResponse.json({ error: "Sale not found" }, { status: 404 });
     }
 
-    // ------------------ Update existing sale items ------------------
+    // ------------------ Comprehensive Sale Items Update ------------------
     if (body.saleItems && Array.isArray(body.saleItems)) {
-      for (const item of body.saleItems) {
-        if (!item.id) continue;
-        await prisma.saleitem.update({
-          where: { id: item.id },
-          data: {
-            productId: item.productId,
-            quantity: item.quantity,
-            price: item.price,
-          },
+      // Get current sale items to identify which ones to delete
+      const currentSaleItems = await prisma.saleitem.findMany({
+        where: { saleId: Number(id) }
+      });
+
+      const incomingItemIds = body.saleItems
+        .map((item: any) => item.id)
+        .filter((id: any) => id !== undefined);
+
+      // Identify items to delete (present in DB but not in incoming data)
+      const itemsToDelete = currentSaleItems.filter(
+        (currentItem) => !incomingItemIds.includes(currentItem.id)
+      );
+
+      // Delete removed items
+      if (itemsToDelete.length > 0) {
+        await prisma.saleitem.deleteMany({
+          where: {
+            id: { in: itemsToDelete.map(item => item.id) }
+          }
         });
+      }
+
+      // Process each incoming sale item
+      for (const item of body.saleItems) {
+        // Validate required fields
+        if (!item.productId || item.quantity === undefined || item.price === undefined) {
+          console.warn("Skipping invalid sale item:", item);
+          continue;
+        }
+
+        // Verify product exists
+        const product = await prisma.product.findUnique({
+          where: { id: item.productId }
+        });
+
+        if (!product) {
+          console.warn(`Product with ID ${item.productId} not found, skipping item`);
+          continue;
+        }
+
+        // Calculate item total
+        const itemTotal = item.quantity * item.price;
+
+        if (item.id) {
+          // Update existing sale item
+          await prisma.saleitem.update({
+            where: { id: item.id },
+            data: {
+              productId: item.productId,
+              quantity: item.quantity,
+              price: item.price,
+              total: itemTotal,
+            },
+          });
+        } else {
+          // Create new sale item
+          await prisma.saleitem.create({
+            data: {
+              saleId: Number(id),
+              productId: item.productId,
+              quantity: item.quantity,
+              price: item.price,
+              total: itemTotal,
+            },
+          });
+        }
       }
     }
 
@@ -72,6 +129,7 @@ export async function PUT(
     if (body.payments && Array.isArray(body.payments)) {
       for (const p of body.payments) {
         if (!p.id) continue;
+        
         await prisma.payment.update({
           where: { id: p.id },
           data: {
@@ -88,9 +146,15 @@ export async function PUT(
     // ------------------ Add new payments ------------------
     if (body.newPayments && Array.isArray(body.newPayments)) {
       for (const np of body.newPayments) {
+        // Validate payment data
+        if (!np.amount || !np.method) {
+          console.warn("Skipping invalid payment:", np);
+          continue;
+        }
+
         await prisma.payment.create({
           data: {
-            saleId: sale.id,
+            saleId: Number(id),
             amount: Number(np.amount),
             method: np.method,
             referenceId: np.referenceId || null,
@@ -103,20 +167,37 @@ export async function PUT(
     }
 
     // ------------------ Recalculate totals & status ------------------
-    const allPayments = await prisma.payment.findMany({ where: { saleId: sale.id } });
-    const totalPaid = allPayments.filter(p => p.status === "CLEARED").reduce((sum, p) => sum + p.amount, 0);
+    // Recalculate total sale amount from sale items
+    const updatedSaleItems = await prisma.saleitem.findMany({
+      where: { saleId: Number(id) },
+      include: { product: true }
+    });
+
+    const recalculatedAmount = updatedSaleItems.reduce(
+      (total, item) => total + (item.quantity * item.price), 
+      0
+    );
+
+    const allPayments = await prisma.payment.findMany({ 
+      where: { saleId: Number(id) } 
+    });
+    
+    const totalPaid = allPayments
+      .filter(p => p.status === "CLEARED")
+      .reduce((sum, p) => sum + p.amount, 0);
+      
     const pendingPayments = allPayments.filter(p => p.status === "PENDING");
-    const balance = (body.amount ?? sale.amount) - totalPaid;
+    const balance = recalculatedAmount - totalPaid;
 
     let status: "UNPAID" | "PARTIAL" | "PAID" = "UNPAID";
     if (balance <= 0 && pendingPayments.length === 0) status = "PAID";
     else if (totalPaid > 0 || pendingPayments.length > 0) status = "PARTIAL";
 
-    // ------------------ Update sale ------------------
+    // ------------------ Update sale with recalculated amount ------------------
     const updatedSale = await prisma.sale.update({
-      where: { id: sale.id },
+      where: { id: Number(id) },
       data: {
-        amount: body.amount ?? sale.amount,
+        amount: recalculatedAmount,
         dueDate: body.dueDate ? new Date(body.dueDate) : sale.dueDate,
         paymentMethod: body.paymentMethod ?? sale.paymentMethod,
         checkDepositDate: body.checkDepositDate ? new Date(body.checkDepositDate) : sale.checkDepositDate,
@@ -130,7 +211,11 @@ export async function PUT(
       },
     });
 
-    return NextResponse.json({ ...updatedSale, balance, totalPaid });
+    return NextResponse.json({ 
+      ...updatedSale, 
+      remainingAmount: Math.max(0, balance),
+      totalPaid 
+    });
   } catch (error: any) {
     console.error("❌ Update Sale Error:", error);
     return NextResponse.json(
@@ -148,11 +233,29 @@ export async function DELETE(
   try {
     const { id } = await params;
 
-    const sale = await prisma.sale.delete({
-      where: { id: Number(id) },
+    // Use transaction to ensure all related records are deleted
+    const result = await prisma.$transaction(async (tx) => {
+      // Delete related records first
+      await tx.saleitem.deleteMany({
+        where: { saleId: Number(id) }
+      });
+
+      await tx.payment.deleteMany({
+        where: { saleId: Number(id) }
+      });
+
+      // Then delete the sale
+      const sale = await tx.sale.delete({
+        where: { id: Number(id) },
+      });
+
+      return sale;
     });
 
-    return NextResponse.json({ message: "Sale deleted successfully", sale });
+    return NextResponse.json({ 
+      message: "Sale deleted successfully", 
+      sale: result 
+    });
   } catch (error: any) {
     console.error("❌ Delete Sale Error:", error);
     return NextResponse.json(

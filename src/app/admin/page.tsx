@@ -116,14 +116,6 @@ export default function AdminDashboard() {
       stats: "KSh 45,230 this month",
     },
     {
-      title: "Orders",
-      description: "Track customer orders and fulfillment status.",
-      href: "/admin/orders",
-      icon: ShoppingCart,
-      color: "bg-orange-500",
-      stats: "15 pending orders",
-    },
-    {
       title: "Customers",
       description: "Manage customer relationships and information.",
       href: "/admin/customers",
@@ -147,14 +139,7 @@ export default function AdminDashboard() {
       color: "bg-gray-600",
       stats: "Last updated 2d ago",
     },
-    {
-      title: "Catalog",
-      description: "Manage products shown to customers & visitors.",
-      href: "/admin/catalog-products",
-      icon: Package,
-      color: "bg-blue-500",
-      stats: "Public-facing items",
-    },
+    
   ];
 
   const paymentMethods = [
@@ -1138,7 +1123,7 @@ export default function AdminDashboard() {
                           <label className="block text-xs font-semibold text-black mb-1">Quantity *</label>
                           <input
                             type="number"
-                            min="1"
+                            min="0"
                             value={currentQuantity}
                             onChange={(e) => {
                               const val = parseInt(e.target.value);

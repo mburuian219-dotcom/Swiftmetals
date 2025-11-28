@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useState, useMemo } from "react";
-import { Search, Package, Edit2, Trash2, Plus, X, DollarSign, TrendingUp } from "lucide-react";
+import { useEffect, useState, useMemo, useRef } from "react";
+import { Search, Package, Edit2, Trash2, Plus, X, DollarSign, TrendingUp, Minus } from "lucide-react";
 
 interface Stock {
   quantity: number;
@@ -41,33 +41,42 @@ export default function ProductsPage() {
     stock: "",
     category: "",
   });
-  const [editingId, setEditingId] = useState<number | null>(null);
-  const [showForm, setShowForm] = useState(false);
-  const [restockModal, setRestockModal] = useState<{
-    show: boolean;
-    product: Product | null;
-  }>({ show: false, product: null });
-  const [restockForm, setRestockForm] = useState({
+  const [stockOperation, setStockOperation] = useState({
+    mode: 'add' as 'add' | 'remove',
     quantity: "",
-    paymentSource: "cash",
     totalCost: "",
+    paymentSource: "cash",
     creditorName: "",
     creditorPhone: "",
     creditorEmail: "",
+    reason: "",
   });
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [showForm, setShowForm] = useState(false);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
-  const [restocking, setRestocking] = useState(false);
+  const [processingStock, setProcessingStock] = useState(false);
   const [deleting, setDeleting] = useState<number | null>(null);
   const [creditors, setCreditors] = useState<any[]>([]);
   const [loadingCreditors, setLoadingCreditors] = useState(false);
-  const [restockSuccess, setRestockSuccess] = useState<StockSummary | null>(null);
+
+  const formRef = useRef<HTMLDivElement>(null);
 
   // Fetch products and creditors on mount
   useEffect(() => {
     fetchProducts();
     fetchCreditors();
   }, []);
+
+  // Scroll to form when editing starts
+  useEffect(() => {
+    if (showForm && formRef.current) {
+      formRef.current.scrollIntoView({ 
+        behavior: 'smooth', 
+        block: 'start' 
+      });
+    }
+  }, [showForm]);
 
   const fetchCreditors = async () => {
     setLoadingCreditors(true);
@@ -149,12 +158,6 @@ export default function ProductsPage() {
       payload.stockQuantity = form.stock ? parseInt(form.stock) : 0;
     } else {
       payload.id = editingId;
-      // When editing, if stock is provided, add it to existing stock
-      if (form.stock && parseInt(form.stock) > 0) {
-        const currentProduct = products.find(p => p.id === editingId);
-        const currentStock = currentProduct?.stockQuantity || 0;
-        payload.stockQuantity = currentStock + parseInt(form.stock);
-      }
     }
 
     const method = editingId ? "PUT" : "POST";
@@ -182,16 +185,10 @@ export default function ProductsPage() {
         setProducts((prev) => [savedProduct, ...prev]);
       }
 
-      setForm({
-        name: "",
-        description: "",
-        productionCost: "",
-        price: "",
-        stock: "",
-        category: "",
-      });
-      setEditingId(null);
-      setShowForm(false);
+      // Reset form and close
+      resetFormAndClose();
+      
+      alert(editingId ? "✅ Product updated successfully!" : "✅ Product added successfully!");
     } catch (error) {
       console.error("Error saving product:", error);
       alert("Failed to save product");
@@ -200,7 +197,177 @@ export default function ProductsPage() {
     }
   };
 
-  // Populate form for editing
+  // Handle stock operation (add or remove)
+  const handleStockOperation = async () => {
+    if (!editingId) return;
+
+    const quantity = parseInt(stockOperation.quantity);
+    const currentProduct = products.find(p => p.id === editingId);
+    const currentStock = currentProduct?.stockQuantity || 0;
+
+    if (isNaN(quantity) || quantity <= 0) {
+      return alert("Please enter a valid quantity");
+    }
+
+    if (stockOperation.mode === 'remove' && quantity > currentStock) {
+      return alert(`Cannot remove more than current stock (${currentStock} units)`);
+    }
+
+    setProcessingStock(true);
+
+    try {
+      if (stockOperation.mode === 'add') {
+        // Handle adding stock
+        const totalCost = parseFloat(stockOperation.totalCost);
+
+        if (isNaN(totalCost) || totalCost <= 0) {
+          return alert("Please enter a valid total cost (must be greater than 0)");
+        }
+
+        if (!stockOperation.paymentSource) {
+          return alert("Please select a payment source");
+        }
+
+        if (stockOperation.paymentSource === "credit") {
+          if (!stockOperation.creditorName.trim()) {
+            return alert("Please enter the creditor name");
+          }
+          if (!stockOperation.creditorPhone.trim()) {
+            return alert("Please enter the creditor phone number");
+          }
+        }
+
+        const res = await fetch("/api/restock", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            productId: editingId,
+            quantity,
+            totalCost,
+            paymentSource: stockOperation.paymentSource,
+            creditorName:
+              stockOperation.paymentSource === "credit"
+                ? stockOperation.creditorName
+                : undefined,
+            creditorPhone:
+              stockOperation.paymentSource === "credit"
+                ? stockOperation.creditorPhone
+                : undefined,
+            creditorEmail:
+              stockOperation.paymentSource === "credit" && stockOperation.creditorEmail
+                ? stockOperation.creditorEmail
+                : undefined,
+          }),
+        });
+
+        const responseData = await res.json();
+
+        if (!res.ok) {
+          return alert(responseData.error || "Failed to add stock");
+        }
+
+        const { product: updatedProduct, stockSummary } = responseData;
+        const normalizedProduct = {
+          ...updatedProduct,
+          stockQuantity: updatedProduct.stock?.reduce((sum: number, s: Stock) => sum + s.quantity, 0) || 0,
+        };
+
+        setProducts((prev) =>
+          prev.map((p) =>
+            p.id === editingId ? normalizedProduct : p
+          )
+        );
+
+        if (stockOperation.paymentSource === "credit") {
+          await fetchCreditors();
+        }
+
+        const successMessage = 
+          stockOperation.paymentSource === "cash"
+            ? `✅ Stock Added Successfully!\n\n` +
+              `Previous Stock: ${stockSummary.previousQuantity} units\n` +
+              `Added: ${stockSummary.restockedQuantity} units\n` +
+              `New Total: ${stockSummary.newTotalQuantity} units\n\n` +
+              `Cash deducted: KSh ${totalCost.toFixed(2)}\n` +
+              `New Weighted Cost Price: KSh ${stockSummary.newWeightedCostPrice.toFixed(2)}/unit`
+            : `✅ Stock Added Successfully!\n\n` +
+              `Previous Stock: ${stockSummary.previousQuantity} units\n` +
+              `Added: ${stockSummary.restockedQuantity} units\n` +
+              `New Total: ${stockSummary.newTotalQuantity} units\n\n` +
+              `Added to ${stockOperation.creditorName}'s balance: KSh ${totalCost.toFixed(2)}\n` +
+              `New Weighted Cost Price: KSh ${stockSummary.newWeightedCostPrice.toFixed(2)}/unit`;
+
+        alert(successMessage);
+      } else {
+        // Handle removing stock
+        const res = await fetch("/api/restock", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            productId: editingId,
+            quantity,
+            reason: stockOperation.reason.trim() || "Stock adjustment",
+          }),
+        });
+
+        if (!res.ok) {
+          const data = await res.json();
+          return alert(data.error || "Failed to remove stock");
+        }
+
+        const { product: updatedProduct, removalSummary } = await res.json();
+        const normalizedProduct = {
+          ...updatedProduct,
+          stockQuantity: updatedProduct.stock?.reduce((sum: number, s: Stock) => sum + s.quantity, 0) || 0,
+        };
+
+        setProducts((prev) =>
+          prev.map((p) =>
+            p.id === editingId ? normalizedProduct : p
+          )
+        );
+
+        alert(`✅ Successfully removed ${quantity} units from ${currentProduct?.name}\nReason: ${stockOperation.reason || "Stock adjustment"}`);
+      }
+
+      // Reset stock operation form and close the main form
+      resetFormAndClose();
+      
+      // Refresh the product data
+      await fetchProducts();
+    } catch (error) {
+      console.error(`Error ${stockOperation.mode === 'add' ? 'adding' : 'removing'} stock:`, error);
+      alert(`❌ Failed to ${stockOperation.mode === 'add' ? 'add' : 'remove'} stock. Please try again.`);
+    } finally {
+      setProcessingStock(false);
+    }
+  };
+
+  // Reset form and close
+  const resetFormAndClose = () => {
+    setForm({
+      name: "",
+      description: "",
+      productionCost: "",
+      price: "",
+      stock: "",
+      category: "",
+    });
+    setStockOperation({
+      mode: 'add',
+      quantity: "",
+      totalCost: "",
+      paymentSource: "cash",
+      creditorName: "",
+      creditorPhone: "",
+      creditorEmail: "",
+      reason: "",
+    });
+    setEditingId(null);
+    setShowForm(false);
+  };
+
+  // Populate form for editing and scroll to it
   const handleEdit = (product: Product) => {
     setForm({
       name: product.name,
@@ -209,6 +376,16 @@ export default function ProductsPage() {
       price: String(product.price),
       stock: "",
       category: product.category || "",
+    });
+    setStockOperation({
+      mode: 'add',
+      quantity: "",
+      totalCost: "",
+      paymentSource: "cash",
+      creditorName: "",
+      creditorPhone: "",
+      creditorEmail: "",
+      reason: "",
     });
     setEditingId(product.id);
     setShowForm(true);
@@ -233,146 +410,13 @@ export default function ProductsPage() {
       }
 
       setProducts((prev) => prev.filter((p) => p.id !== id));
+      alert("✅ Product deleted successfully!");
     } catch (err) {
       console.error(err);
       alert("Error deleting product");
     } finally {
       setDeleting(null);
     }
-  };
-
-  // Handle restock - Updated to use new API response
-  const handleRestock = async () => {
-    if (!restockModal.product) return;
-
-    const quantity = parseInt(restockForm.quantity);
-    const totalCost = parseFloat(restockForm.totalCost);
-
-    if (isNaN(quantity) || quantity <= 0) {
-      return alert("Please enter a valid quantity");
-    }
-
-    if (isNaN(totalCost) || totalCost <= 0) {
-      return alert("Please enter a valid total cost (must be greater than 0)");
-    }
-
-    if (!restockForm.paymentSource) {
-      return alert("Please select a payment source");
-    }
-
-    if (restockForm.paymentSource === "credit") {
-      if (!restockForm.creditorName.trim()) {
-        return alert("Please enter the creditor name");
-      }
-      if (!restockForm.creditorPhone.trim()) {
-        return alert("Please enter the creditor phone number");
-      }
-    }
-
-    setRestocking(true);
-
-    try {
-      const res = await fetch("/api/restock", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          productId: restockModal.product.id,
-          quantity,
-          totalCost,
-          paymentSource: restockForm.paymentSource,
-          creditorName:
-            restockForm.paymentSource === "credit"
-              ? restockForm.creditorName
-              : undefined,
-          creditorPhone:
-            restockForm.paymentSource === "credit"
-              ? restockForm.creditorPhone
-              : undefined,
-          creditorEmail:
-            restockForm.paymentSource === "credit" && restockForm.creditorEmail
-              ? restockForm.creditorEmail
-              : undefined,
-        }),
-      });
-
-      const responseData = await res.json();
-
-      if (!res.ok) {
-        return alert(responseData.error || "Failed to restock");
-      }
-
-      // Extract updated product and stock summary from response
-      const { product: updatedProduct, stockSummary } = responseData;
-      
-      // Normalize the product data
-      const normalizedProduct = {
-        ...updatedProduct,
-        stockQuantity: updatedProduct.stock?.reduce((sum: number, s: Stock) => sum + s.quantity, 0) || 0,
-      };
-
-      // Update UI with new product data
-      setProducts((prev) =>
-        prev.map((p) =>
-          p.id === restockModal.product!.id ? normalizedProduct : p
-        )
-      );
-
-      // Store stock summary for success message
-      setRestockSuccess(stockSummary);
-
-      // Refresh creditors list if credit was used
-      if (restockForm.paymentSource === "credit") {
-        await fetchCreditors();
-      }
-
-      // Show success message with details
-      const successMessage = 
-        restockForm.paymentSource === "cash"
-          ? `✅ Restock Successful!\n\n` +
-            `Previous Stock: ${stockSummary.previousQuantity} units\n` +
-            `Added: ${stockSummary.restockedQuantity} units\n` +
-            `New Total: ${stockSummary.newTotalQuantity} units\n\n` +
-            `Cash deducted: KSh ${totalCost.toFixed(2)}\n` +
-            `New Weighted Cost Price: KSh ${stockSummary.newWeightedCostPrice.toFixed(2)}/unit`
-          : `✅ Restock Successful!\n\n` +
-            `Previous Stock: ${stockSummary.previousQuantity} units\n` +
-            `Added: ${stockSummary.restockedQuantity} units\n` +
-            `New Total: ${stockSummary.newTotalQuantity} units\n\n` +
-            `Added to ${restockForm.creditorName}'s balance: KSh ${totalCost.toFixed(2)}\n` +
-            `New Weighted Cost Price: KSh ${stockSummary.newWeightedCostPrice.toFixed(2)}/unit`;
-
-      alert(successMessage);
-
-      // Reset form & modal
-      setRestockForm({
-        quantity: "",
-        paymentSource: "cash",
-        totalCost: "",
-        creditorName: "",
-        creditorPhone: "",
-        creditorEmail: "",
-      });
-      setRestockModal({ show: false, product: null });
-    } catch (error) {
-      console.error("Error restocking:", error);
-      alert("❌ Failed to restock product. Please try again.");
-    } finally {
-      setRestocking(false);
-    }
-  };
-
-  // Open restock modal
-  const openRestockModal = (product: Product) => {
-    setRestockModal({ show: true, product });
-    setRestockForm({
-      quantity: "",
-      paymentSource: "cash",
-      totalCost: "",
-      creditorName: "",
-      creditorPhone: "",
-      creditorEmail: "",
-    });
-    setRestockSuccess(null);
   };
 
   // Import contact from phone
@@ -393,8 +437,8 @@ export default function ProductsPage() {
 
       if (contacts && contacts.length > 0) {
         const contact = contacts[0];
-        setRestockForm({
-          ...restockForm,
+        setStockOperation({
+          ...stockOperation,
           creditorName: contact.name?.[0] || "",
           creditorPhone: contact.tel?.[0] || "",
           creditorEmail: contact.email?.[0] || "",
@@ -414,6 +458,9 @@ export default function ProductsPage() {
     );
   }
 
+  const currentProduct = editingId ? products.find(p => p.id === editingId) : null;
+  const currentStock = currentProduct?.stockQuantity || 0;
+
   return (
     <div className="min-h-screen bg-gray-50 p-6">
       <div className="max-w-7xl mx-auto">
@@ -427,15 +474,7 @@ export default function ProductsPage() {
             onClick={() => {
               setShowForm(!showForm);
               if (showForm) {
-                setEditingId(null);
-                setForm({
-                  name: "",
-                  description: "",
-                  productionCost: "",
-                  price: "",
-                  stock: "",
-                  category: "",
-                });
+                resetFormAndClose();
               }
             }}
             className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg flex items-center gap-2 transition"
@@ -476,11 +515,11 @@ export default function ProductsPage() {
           </div>
         </div>
 
-        {/* Add/Edit Form */}
+        {/* Add/Edit Form - with ref for scrolling */}
         {showForm && (
-          <div className="bg-white rounded-lg shadow-sm p-6 mb-6">
+          <div ref={formRef} className="bg-white rounded-lg shadow-sm p-6 mb-6">
             <h2 className="text-xl font-semibold mb-4 text-black">
-              {editingId ? "Edit Product" : "Add New Product"}
+              {editingId ? `Edit Product: ${currentProduct?.name}` : "Add New Product"}
             </h2>
             <div className="grid md:grid-cols-2 gap-4">
               <input
@@ -523,51 +562,339 @@ export default function ProductsPage() {
                 value={form.price}
                 onChange={(e) => setForm({ ...form, price: e.target.value })}
               />
-              <div className="md:col-span-2">
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  {editingId ? "Add Stock (Restock)" : "Initial Stock"}
-                </label>
-                <input
-                  placeholder={editingId ? "Enter quantity to add" : "Initial Stock"}
-                  type="number"
-                  min="0"
-                  className="w-full border border-gray-300 p-3 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-black"
-                  value={form.stock}
-                  onChange={(e) => setForm({ ...form, stock: e.target.value })}
-                />
-                {editingId && form.stock && (
-                  <div className="mt-3 p-4 bg-gradient-to-r from-green-50 to-blue-50 rounded-lg border border-green-200">
-                    <div className="grid grid-cols-3 gap-4 text-sm">
+              
+              {/* Initial Stock for new products */}
+              {!editingId && (
+                <div className="md:col-span-2">
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Initial Stock
+                  </label>
+                  <input
+                    placeholder="Initial Stock"
+                    type="number"
+                    min="0"
+                    className="w-full border border-gray-300 p-3 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-black"
+                    value={form.stock}
+                    onChange={(e) => setForm({ ...form, stock: e.target.value })}
+                  />
+                </div>
+              )}
+
+              {/* Stock Management for existing products */}
+              {editingId && (
+                <div className="md:col-span-2">
+                  <div className="border-t pt-4 mt-4">
+                    <h3 className="text-lg font-semibold mb-4 text-black">Stock Management</h3>
+                    
+                    {/* Current Stock Display */}
+                    <div className="mb-4 p-4 bg-gray-50 rounded-lg">
+                      <p className="text-sm text-gray-600">Current Stock:</p>
+                      <p className="text-2xl font-bold text-black">{currentStock} units</p>
+                      {currentProduct?.stock?.[0]?.costPrice && (
+                        <p className="text-sm text-gray-600 mt-1">
+                          Current Avg. Cost: KSh {currentProduct.stock[0].costPrice.toFixed(2)}/unit
+                        </p>
+                      )}
+                    </div>
+
+                    {/* Stock Operation Toggle */}
+                    <div className="flex gap-2 mb-4">
+                      <button
+                        type="button"
+                        onClick={() => setStockOperation({...stockOperation, mode: 'add'})}
+                        className={`flex-1 py-2 px-4 rounded-lg font-medium transition ${
+                          stockOperation.mode === 'add' 
+                            ? 'bg-green-600 text-white' 
+                            : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                        }`}
+                      >
+                        <Plus className="w-4 h-4 inline mr-2" />
+                        Add Stock
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setStockOperation({...stockOperation, mode: 'remove'})}
+                        className={`flex-1 py-2 px-4 rounded-lg font-medium transition ${
+                          stockOperation.mode === 'remove' 
+                            ? 'bg-red-600 text-white' 
+                            : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                        }`}
+                      >
+                        <Minus className="w-4 h-4 inline mr-2" />
+                        Remove Stock
+                      </button>
+                    </div>
+
+                    {/* Stock Operation Form */}
+                    <div className="space-y-4">
                       <div>
-                        <p className="text-gray-600 font-medium">Previous Stock</p>
-                        <p className="text-2xl font-bold text-gray-800">
-                          {products.find(p => p.id === editingId)?.stockQuantity || 0}
-                        </p>
-                        <p className="text-xs text-gray-500">units</p>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">
+                          Quantity to {stockOperation.mode === 'add' ? 'Add' : 'Remove'} *
+                        </label>
+                        <input
+                          type="number"
+                          min="1"
+                          max={stockOperation.mode === 'remove' ? currentStock : undefined}
+                          placeholder={`Enter quantity ${stockOperation.mode === 'remove' ? `(max: ${currentStock})` : ''}`}
+                          value={stockOperation.quantity}
+                          onChange={(e) =>
+                            setStockOperation({ ...stockOperation, quantity: e.target.value })
+                          }
+                          className="w-full border border-gray-300 p-3 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-black"
+                        />
                       </div>
-                      <div className="flex items-center justify-center">
-                        <div className="text-green-600">
-                          <Plus className="w-6 h-6" />
+
+                      {stockOperation.mode === 'add' && (
+                        <>
+                          <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-1">
+                              Total Cost *
+                            </label>
+                            <input
+                              type="number"
+                              step="0.01"
+                              min="0.01"
+                              placeholder="Total cost for this stock addition"
+                              value={stockOperation.totalCost}
+                              onChange={(e) =>
+                                setStockOperation({ ...stockOperation, totalCost: e.target.value })
+                              }
+                              className="w-full border border-gray-300 p-3 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-black"
+                            />
+                            {stockOperation.quantity && stockOperation.totalCost && (
+                              <p className="text-xs text-gray-600 mt-1">
+                                Unit cost: KSh {(parseFloat(stockOperation.totalCost) / parseInt(stockOperation.quantity)).toFixed(2)}
+                              </p>
+                            )}
+                          </div>
+
+                          <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-1">
+                              Payment Source *
+                            </label>
+                            <select
+                              value={stockOperation.paymentSource}
+                              onChange={(e) =>
+                                setStockOperation({
+                                  ...stockOperation,
+                                  paymentSource: e.target.value,
+                                  creditorName: "",
+                                  creditorPhone: "",
+                                  creditorEmail: "",
+                                })
+                              }
+                              className="w-full border border-gray-300 p-3 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-black"
+                            >
+                              <option value="cash">Cash (Deduct from balance)</option>
+                              <option value="credit">Credit / Account</option>
+                              <option value="other">Other</option>
+                            </select>
+
+                            {stockOperation.paymentSource === "cash" && (
+                              <p className="text-xs text-orange-600 mt-2 flex items-center gap-1">
+                                <span>⚠️</span>
+                                <span>This amount will be deducted from your cash balance</span>
+                              </p>
+                            )}
+
+                            {stockOperation.paymentSource === "credit" && (
+                              <div className="mt-4 space-y-4 p-4 bg-blue-50 rounded-lg">
+                                <div className="flex items-center justify-between mb-2">
+                                  <h3 className="font-semibold text-black">Creditor Information</h3>
+                                  <button
+                                    type="button"
+                                    onClick={importContact}
+                                    className="text-xs bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded transition"
+                                  >
+                                    📱 Import from Contacts
+                                  </button>
+                                </div>
+
+                                {Array.isArray(creditors) && creditors.length > 0 && (
+                                  <div>
+                                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                                      Select Existing Creditor (optional)
+                                    </label>
+                                    {loadingCreditors ? (
+                                      <p className="text-gray-500 text-sm">Loading contacts...</p>
+                                    ) : (
+                                      <select
+                                        value=""
+                                        onChange={(e) => {
+                                          const selected = creditors.find(
+                                            (c) => c.id === parseInt(e.target.value)
+                                          );
+                                          if (selected) {
+                                            setStockOperation({
+                                              ...stockOperation,
+                                              creditorName: selected.name || "",
+                                              creditorPhone: selected.phone || "",
+                                              creditorEmail: selected.email || "",
+                                            });
+                                          }
+                                        }}
+                                        className="w-full border border-gray-300 p-3 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-black"
+                                      >
+                                        <option value="">-- Select from saved creditors --</option>
+                                        {creditors.map((c) => (
+                                          <option key={c.id} value={c.id}>
+                                            {c.name} {c.phone ? `(${c.phone})` : ""} - Owed: KSh {c.totalOwed?.toFixed(2) || "0.00"}
+                                          </option>
+                                        ))}
+                                      </select>
+                                    )}
+                                  </div>
+                                )}
+
+                                <div>
+                                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                                    Creditor Name *
+                                  </label>
+                                  <input
+                                    type="text"
+                                    placeholder="Enter creditor name"
+                                    value={stockOperation.creditorName}
+                                    onChange={(e) =>
+                                      setStockOperation({
+                                        ...stockOperation,
+                                        creditorName: e.target.value,
+                                      })
+                                    }
+                                    className="w-full border border-gray-300 p-3 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-black"
+                                    required
+                                  />
+                                </div>
+
+                                <div>
+                                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                                    Phone Number *
+                                  </label>
+                                  <input
+                                    type="tel"
+                                    placeholder="Enter phone number"
+                                    value={stockOperation.creditorPhone}
+                                    onChange={(e) =>
+                                      setStockOperation({
+                                        ...stockOperation,
+                                        creditorPhone: e.target.value,
+                                      })
+                                    }
+                                    className="w-full border border-gray-300 p-3 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-black"
+                                    required
+                                  />
+                                </div>
+
+                                <div>
+                                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                                    Email (optional)
+                                  </label>
+                                  <input
+                                    type="email"
+                                    placeholder="Enter email address"
+                                    value={stockOperation.creditorEmail}
+                                    onChange={(e) =>
+                                      setStockOperation({
+                                        ...stockOperation,
+                                        creditorEmail: e.target.value,
+                                      })
+                                    }
+                                    className="w-full border border-gray-300 p-3 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-black"
+                                  />
+                                </div>
+
+                                <p className="text-xs text-gray-600 mt-2">
+                                  💡 The total cost (KSh {stockOperation.totalCost || "0"}) will be added to this creditor's balance
+                                </p>
+                              </div>
+                            )}
+                          </div>
+                        </>
+                      )}
+
+                      {stockOperation.mode === 'remove' && (
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-1">
+                            Reason for Removal (Optional)
+                          </label>
+                          <textarea
+                            placeholder="Enter reason (e.g., damaged, expired, sold, etc.)"
+                            value={stockOperation.reason}
+                            onChange={(e) =>
+                              setStockOperation({ ...stockOperation, reason: e.target.value })
+                            }
+                            className="w-full border border-gray-300 p-3 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-black"
+                            rows={2}
+                          />
                         </div>
-                        <div className="ml-2">
-                          <p className="text-gray-600 font-medium">Adding</p>
-                          <p className="text-2xl font-bold text-green-600">
-                            {form.stock}
-                          </p>
-                          <p className="text-xs text-gray-500">units</p>
+                      )}
+
+                      {/* Stock Preview */}
+                      {stockOperation.quantity && (
+                        <div className={`p-3 rounded-lg border ${
+                          stockOperation.mode === 'add' 
+                            ? 'bg-green-50 border-green-200' 
+                            : 'bg-red-50 border-red-200'
+                        }`}>
+                          <div className="grid grid-cols-3 gap-4 text-sm">
+                            <div>
+                              <p className="text-gray-600 font-medium">Current Stock</p>
+                              <p className="text-2xl font-bold text-gray-800">{currentStock}</p>
+                              <p className="text-xs text-gray-500">units</p>
+                            </div>
+                            <div className="flex items-center justify-center">
+                              <div className={stockOperation.mode === 'add' ? 'text-green-600' : 'text-red-600'}>
+                                {stockOperation.mode === 'add' ? <Plus className="w-6 h-6" /> : <Minus className="w-6 h-6" />}
+                              </div>
+                              <div className="ml-2">
+                                <p className="text-gray-600 font-medium">{stockOperation.mode === 'add' ? 'Adding' : 'Removing'}</p>
+                                <p className={`text-2xl font-bold ${stockOperation.mode === 'add' ? 'text-green-600' : 'text-red-600'}`}>
+                                  {stockOperation.quantity}
+                                </p>
+                                <p className="text-xs text-gray-500">units</p>
+                              </div>
+                            </div>
+                            <div className={`bg-white rounded-lg p-2 border-2 ${
+                              stockOperation.mode === 'add' ? 'border-green-500' : 'border-red-500'
+                            }`}>
+                              <p className="text-gray-600 font-medium">New Total</p>
+                              <p className={`text-2xl font-bold ${stockOperation.mode === 'add' ? 'text-green-600' : 'text-red-600'}`}>
+                                {stockOperation.mode === 'add' 
+                                  ? currentStock + parseInt(stockOperation.quantity || '0')
+                                  : currentStock - parseInt(stockOperation.quantity || '0')
+                                }
+                              </p>
+                              <p className="text-xs text-gray-500">units</p>
+                            </div>
+                          </div>
                         </div>
-                      </div>
-                      <div className="bg-white rounded-lg p-2 border-2 border-green-500">
-                        <p className="text-gray-600 font-medium">New Total</p>
-                        <p className="text-2xl font-bold text-green-600">
-                          {(products.find(p => p.id === editingId)?.stockQuantity || 0) + parseInt(form.stock || '0')}
-                        </p>
-                        <p className="text-xs text-gray-500">units</p>
-                      </div>
+                      )}
+
+                      {/* Stock Operation Button */}
+                      <button
+                        type="button"
+                        onClick={handleStockOperation}
+                        disabled={processingStock || !stockOperation.quantity}
+                        className={`w-full ${
+                          stockOperation.mode === 'add' 
+                            ? 'bg-green-600 hover:bg-green-700 disabled:bg-green-400' 
+                            : 'bg-red-600 hover:bg-red-700 disabled:bg-red-400'
+                        } text-white px-4 py-3 rounded-lg font-medium transition disabled:cursor-not-allowed flex items-center justify-center gap-2`}
+                      >
+                        {processingStock ? (
+                          <>
+                            <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
+                            <span>{stockOperation.mode === 'add' ? 'Adding...' : 'Removing...'}</span>
+                          </>
+                        ) : (
+                          `${stockOperation.mode === 'add' ? 'Add' : 'Remove'} Stock`
+                        )}
+                      </button>
                     </div>
                   </div>
-                )}
-              </div>
+                </div>
+              )}
+
+              {/* Submit Button */}
               <button
                 onClick={handleSubmit}
                 disabled={submitting}
@@ -669,16 +996,9 @@ export default function ProductsPage() {
                     </div>
                     <div className="flex gap-2 ml-4">
                       <button
-                        onClick={() => openRestockModal(p)}
-                        className="bg-green-500 hover:bg-green-600 text-white p-2 rounded-lg transition"
-                        title="Restock"
-                      >
-                        <TrendingUp className="w-5 h-5" />
-                      </button>
-                      <button
                         onClick={() => handleEdit(p)}
                         className="bg-yellow-500 hover:bg-yellow-600 text-white p-2 rounded-lg transition"
-                        title="Edit"
+                        title="Edit Product & Manage Stock"
                       >
                         <Edit2 className="w-5 h-5" />
                       </button>
@@ -695,240 +1015,6 @@ export default function ProductsPage() {
                 </div>
               );
             })}
-          </div>
-        )}
-
-        {/* Restock Modal */}
-        {restockModal.show && restockModal.product && (
-          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-            <div className="bg-white rounded-lg shadow-xl max-w-md w-full p-6 max-h-[90vh] overflow-y-auto">
-              <h2 className="text-2xl font-bold mb-4 text-black">
-                Restock {restockModal.product.name}
-              </h2>
-              <div className="mb-4 p-3 bg-gray-100 rounded">
-                <p className="text-sm text-gray-600">Current Stock:</p>
-                <p className="text-xl font-semibold text-black">
-                  {restockModal.product.stockQuantity} units
-                </p>
-                {restockModal.product.stock?.[0]?.costPrice && (
-                  <p className="text-sm text-gray-600 mt-1">
-                    Current Avg. Cost: KSh {restockModal.product.stock[0].costPrice.toFixed(2)}/unit
-                  </p>
-                )}
-              </div>
-              <div className="space-y-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Quantity to Add *
-                  </label>
-                  <input
-                    type="number"
-                    min="1"
-                    placeholder="Enter quantity"
-                    value={restockForm.quantity}
-                    onChange={(e) =>
-                      setRestockForm({ ...restockForm, quantity: e.target.value })
-                    }
-                    className="w-full border border-gray-300 p-3 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-black"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Total Cost *
-                  </label>
-                  <input
-                    type="number"
-                    step="0.01"
-                    min="0.01"
-                    placeholder="Total cost for this restock"
-                    value={restockForm.totalCost}
-                    onChange={(e) =>
-                      setRestockForm({ ...restockForm, totalCost: e.target.value })
-                    }
-                    className="w-full border border-gray-300 p-3 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-black"
-                  />
-                  {restockForm.quantity && restockForm.totalCost && (
-                    <p className="text-xs text-gray-600 mt-1">
-                      Unit cost: KSh {(parseFloat(restockForm.totalCost) / parseInt(restockForm.quantity)).toFixed(2)}
-                    </p>
-                  )}
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Payment Source *
-                  </label>
-
-                  <select
-                    value={restockForm.paymentSource}
-                    onChange={(e) =>
-                      setRestockForm({
-                        ...restockForm,
-                        paymentSource: e.target.value,
-                        creditorName: "",
-                        creditorPhone: "",
-                        creditorEmail: "",
-                      })
-                    }
-                    className="w-full border border-gray-300 p-3 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-black"
-                  >
-                    <option value="cash">Cash (Deduct from balance)</option>
-                    <option value="credit">Credit / Account</option>
-                    <option value="other">Other</option>
-                  </select>
-
-                  {restockForm.paymentSource === "cash" && (
-                    <p className="text-xs text-orange-600 mt-2 flex items-center gap-1">
-                      <span>⚠️</span>
-                      <span>This amount will be deducted from your cash balance</span>
-                    </p>
-                  )}
-
-                  {restockForm.paymentSource === "credit" && (
-                    <div className="mt-4 space-y-4 p-4 bg-blue-50 rounded-lg">
-                      <div className="flex items-center justify-between mb-2">
-                        <h3 className="font-semibold text-black">Creditor Information</h3>
-                        <button
-                          type="button"
-                          onClick={importContact}
-                          className="text-xs bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded transition"
-                        >
-                          📱 Import from Contacts
-                        </button>
-                      </div>
-
-                      {Array.isArray(creditors) && creditors.length > 0 && (
-                        <div>
-                          <label className="block text-sm font-medium text-gray-700 mb-1">
-                            Select Existing Creditor (optional)
-                          </label>
-                          {loadingCreditors ? (
-                            <p className="text-gray-500 text-sm">Loading contacts...</p>
-                          ) : (
-                            <select
-                              value=""
-                              onChange={(e) => {
-                                const selected = creditors.find(
-                                  (c) => c.id === parseInt(e.target.value)
-                                );
-                                if (selected) {
-                                  setRestockForm({
-                                    ...restockForm,
-                                    creditorName: selected.name || "",
-                                    creditorPhone: selected.phone || "",
-                                    creditorEmail: selected.email || "",
-                                  });
-                                }
-                              }}
-                              className="w-full border border-gray-300 p-3 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-black"
-                            >
-                              <option value="">-- Select from saved creditors --</option>
-                              {creditors.map((c) => (
-                                <option key={c.id} value={c.id}>
-                                  {c.name} {c.phone ? `(${c.phone})` : ""} - Owed: KSh {c.totalOwed?.toFixed(2) || "0.00"}
-                                </option>
-                              ))}
-                            </select>
-                          )}
-                        </div>
-                      )}
-
-                      <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">
-                          Creditor Name *
-                        </label>
-                        <input
-                          type="text"
-                          placeholder="Enter creditor name"
-                          value={restockForm.creditorName}
-                          onChange={(e) =>
-                            setRestockForm({
-                              ...restockForm,
-                              creditorName: e.target.value,
-                            })
-                          }
-                          className="w-full border border-gray-300 p-3 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-black"
-                          required
-                        />
-                      </div>
-
-                      <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">
-                          Phone Number *
-                        </label>
-                        <input
-                          type="tel"
-                          placeholder="Enter phone number"
-                          value={restockForm.creditorPhone}
-                          onChange={(e) =>
-                            setRestockForm({
-                              ...restockForm,
-                              creditorPhone: e.target.value,
-                            })
-                          }
-                          className="w-full border border-gray-300 p-3 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-black"
-                          required
-                        />
-                      </div>
-
-                      <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">
-                          Email (optional)
-                        </label>
-                        <input
-                          type="email"
-                          placeholder="Enter email address"
-                          value={restockForm.creditorEmail}
-                          onChange={(e) =>
-                            setRestockForm({
-                              ...restockForm,
-                              creditorEmail: e.target.value,
-                            })
-                          }
-                          className="w-full border border-gray-300 p-3 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-black"
-                        />
-                      </div>
-
-                      <p className="text-xs text-gray-600 mt-2">
-                        💡 The total cost (KSh {restockForm.totalCost || "0"}) will be added to this creditor's balance
-                      </p>
-                    </div>
-                  )}
-                </div>
-              </div>
-              <div className="flex gap-3 mt-6">
-                <button
-                  onClick={handleRestock}
-                  disabled={restocking}
-                  className="flex-1 bg-green-600 hover:bg-green-700 text-white px-4 py-3 rounded-lg font-medium transition disabled:bg-green-400 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-                >
-                  {restocking ? (
-                    <>
-                      <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
-                      <span>Restocking...</span>
-                    </>
-                  ) : (
-                    "Confirm Restock"
-                  )}
-                </button>
-                <button
-                  onClick={() => {
-                    setRestockModal({ show: false, product: null });
-                    setRestockForm({
-                      quantity: "",
-                      paymentSource: "cash",
-                      totalCost: "",
-                      creditorName: "",
-                      creditorPhone: "",
-                      creditorEmail: "",
-                    });
-                  }}
-                  disabled={restocking}
-                  className="flex-1 bg-gray-300 hover:bg-gray-400 text-gray-800 px-4 py-3 rounded-lg font-medium transition disabled:bg-gray-200 disabled:cursor-not-allowed"
-                >
-                  Cancel
-                </button>
-              </div>
-            </div>
           </div>
         )}
       </div>

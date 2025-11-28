@@ -79,16 +79,11 @@ const EnhancedSalesPage = () => {
   const [sales, setSales] = useState<Sale[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
-  const [showAddSale, setShowAddSale] = useState(false);
-  const [newSale, setNewSale] = useState({
-    customerId: "",
-    dueDate: new Date().toISOString().split('T')[0],
-  });
   const [stockError, setStockError] = useState<string | null>(null);
   const [stockValidationTimeout, setStockValidationTimeout] = useState<NodeJS.Timeout | null>(null);
   
-  const [saleItems, setSaleItems] = useState<NewSaleItem[]>([]);
-  const [currentItem, setCurrentItem] = useState<NewSaleItem>({
+  const [editSaleItems, setEditSaleItems] = useState<NewSaleItem[]>([]);
+  const [currentEditItem, setCurrentEditItem] = useState<NewSaleItem>({
     productId: 0,
     quantity: 0,
     price: 0,
@@ -100,7 +95,7 @@ const EnhancedSalesPage = () => {
   const [showCustomerDropdown, setShowCustomerDropdown] = useState(false);
   const [showProductDropdown, setShowProductDropdown] = useState(false);
 
-  const [payments, setPayments] = useState<NewPayment[]>([]);
+  const [editPayments, setEditPayments] = useState<NewPayment[]>([]);
   const [currentPayment, setCurrentPayment] = useState<NewPayment>({
     amount: "",
     method: "CASH",
@@ -110,8 +105,6 @@ const EnhancedSalesPage = () => {
   });
   
   const [editingSale, setEditingSale] = useState<Sale | null>(null);
-  const [editPayments, setEditPayments] = useState<NewPayment[]>([]);
-  const [editSaleItems, setEditSaleItems] = useState<NewSaleItem[]>([]);
   const [deletingPaymentId, setDeletingPaymentId] = useState<number | null>(null);
   const [currentUser, setCurrentUser] = useState<string>("");
   const [loading, setLoading] = useState(false);
@@ -324,15 +317,15 @@ const EnhancedSalesPage = () => {
     { value: "CREDIT", label: "Credit/Pay Later", color: "bg-yellow-100 text-yellow-800" }
   ];
 
-  const handleAddItemToSale = () => {
+  const handleAddItemToEditSale = () => {
     if (stockValidationTimeout) clearTimeout(stockValidationTimeout);
     
-    if (!currentItem.productId || currentItem.quantity <= 0 || currentItem.price <= 0) {
+    if (!currentEditItem.productId || currentEditItem.quantity <= 0 || currentEditItem.price <= 0) {
       setError("Please fill in all item details");
       return;
     }
     
-    const product = products.find(p => p.id === currentItem.productId);
+    const product = products.find(p => p.id === currentEditItem.productId);
     if (!product) {
       setError("Product not found");
       return;
@@ -348,9 +341,9 @@ const EnhancedSalesPage = () => {
       productStock = Number(product.stock) || 0;
     }
     
-    const existingItem = saleItems.find(item => item.productId === currentItem.productId);
+    const existingItem = editSaleItems.find(item => item.productId === currentEditItem.productId);
     const existingQuantity = existingItem ? existingItem.quantity : 0;
-    const totalQuantity = existingQuantity + currentItem.quantity;
+    const totalQuantity = existingQuantity + currentEditItem.quantity;
     
     if (totalQuantity > productStock) {
       const errorMsg = `Insufficient stock for ${product.name}. Available: ${productStock}, Requested: ${totalQuantity}`;
@@ -365,22 +358,22 @@ const EnhancedSalesPage = () => {
       return;
     }
     
-    const existingItemIndex = saleItems.findIndex(item => item.productId === currentItem.productId);
+    const existingItemIndex = editSaleItems.findIndex(item => item.productId === currentEditItem.productId);
 
     if (existingItemIndex >= 0) {
-      const updatedItems = [...saleItems];
-      updatedItems[existingItemIndex].quantity += currentItem.quantity;
-      updatedItems[existingItemIndex].price = currentItem.price;
-      setSaleItems(updatedItems);
+      const updatedItems = [...editSaleItems];
+      updatedItems[existingItemIndex].quantity += currentEditItem.quantity;
+      updatedItems[existingItemIndex].price = currentEditItem.price;
+      setEditSaleItems(updatedItems);
     } else {
-      setSaleItems([...saleItems, { 
-        ...currentItem, 
+      setEditSaleItems([...editSaleItems, { 
+        ...currentEditItem, 
         productName: product.name,
         originalPrice: product.price
       }]);
     }
     
-    setCurrentItem({
+    setCurrentEditItem({
       productId: 0,
       quantity: 0,
       price: 0,
@@ -391,190 +384,6 @@ const EnhancedSalesPage = () => {
     setStockError(null);
   };
 
-  const handleAddPayment = () => {
-    const amount = parseFloat(currentPayment.amount);
-    const remainingAmount = getRemainingAmount();
-    
-    if (currentPayment.method !== "CREDIT") {
-      if (!amount || amount <= 0) {
-        setError("Please enter a valid payment amount");
-        return;
-      }
-
-      if (amount > remainingAmount) {
-        setError(`Payment amount cannot exceed remaining balance of Ksh ${remainingAmount.toFixed(2)}`);
-        return;
-      }
-    }
-
-    if (currentPayment.method === "CHECK" && !currentPayment.checkDepositDate) {
-      setError("Please specify check deposit date");
-      return;
-    }
-
-    if (currentPayment.method === "CREDIT" && !currentPayment.dueDate) {
-      setError("Due date is MANDATORY for credit/pay later payments");
-      return;
-    }
-
-    if (["MPESA", "BANK", "CARD"].includes(currentPayment.method) && !currentPayment.referenceId) {
-      setError("Please enter transaction reference");
-      return;
-    }
-
-    setPayments([
-      ...payments,
-      {
-        ...currentPayment,
-        amount: currentPayment.method === "CREDIT" ? "0" : currentPayment.amount,
-        referenceId: currentPayment.referenceId || "",
-        checkDepositDate: currentPayment.checkDepositDate || "",
-        dueDate: currentPayment.dueDate || "",
-      },
-    ]);
-
-    setCurrentPayment({
-      amount: "",
-      method: "CASH",
-      referenceId: "",
-      checkDepositDate: "",
-      dueDate: "",
-    });
-    setError(null);
-  };
-
-  const removePayment = (index: number) => {
-    setPayments(payments.filter((_, i) => i !== index));
-  };
-
-  const calculateTotalAmount = () => {
-    return saleItems.reduce((total, item) => total + (Number(item.quantity) * Number(item.price)), 0);
-  };
-
-  const calculateTotalPayments = () => {
-    return payments.reduce((total, payment) => total + Number(payment.amount || 0), 0);
-  };
-
-  const getRemainingAmount = () => {
-    return Math.max(0, calculateTotalAmount() - calculateTotalPayments());
-  };
-
-  const handleCreateSale = async () => {
-    if (saleItems.length === 0) {
-      setError("Please add at least one item to the sale");
-      return;
-    }
-
-    if (!newSale.customerId) {
-      setError("Please select a customer");
-      return;
-    }
-
-    if (!currentUser) {
-      setError("Please log in to create a sale");
-      return;
-    }
-
-    setLoading(true);
-    setError(null);
-    setSuccess("Creating sale, please wait...");
-    
-    try {
-      const totalAmount = calculateTotalAmount();
-      const totalPayments = calculateTotalPayments();
-      const remainingAmount = totalAmount - totalPayments;
-
-      if (remainingAmount > 0 && !newSale.dueDate) {
-        setError("Due date is MANDATORY when there's an outstanding balance");
-        setLoading(false);
-        setSuccess(null);
-        return;
-      }
-
-      let status: "PAID" | "PARTIAL" | "UNPAID";
-      if (remainingAmount <= 0.01) {
-        status = "PAID";
-      } else if (totalPayments > 0) {
-        status = "PARTIAL";
-      } else {
-        status = "UNPAID";
-      }
-
-      const paymentsData = payments.length > 0
-        ? payments.map(p => {
-            const isCheck = p.method?.toUpperCase() === "CHECK";
-            return {
-              amount: Number(p.amount),
-              method: p.method || "CASH",
-              referenceId: p.referenceId?.trim() || null,
-              checkDepositDate: p.checkDepositDate || null,
-              checkNumber: p.checkNumber?.trim() || null,
-              bankName: p.bankName?.trim() || null,
-              checkDate: p.checkDate || null,
-              date: new Date().toISOString(),
-              status: isCheck ? "PENDING" : "COMPLETED",
-            };
-          })
-        : [];
-
-      const saleData = {
-        customerId: parseInt(newSale.customerId),
-        amount: totalAmount,
-        status,
-        dueDate: newSale.dueDate || null,
-        saleItems: saleItems.map(item => ({
-          productId: item.productId,
-          quantity: item.quantity,
-          price: item.price,
-        })),
-        payments: paymentsData,
-        createdBy: currentUser,
-      };
-
-      const response = await fetch("/api/sales", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(saleData),
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || "Failed to create sale");
-      }
-
-      const createdSale = await response.json();
-      const processedSale = calculateSaleStatus(createdSale);
-      setSales([processedSale, ...sales]);
-
-      setShowAddSale(false);
-      setSaleItems([]);
-      setPayments([]);
-      setCustomerSearch("");
-      setProductSearch("");
-      setNewSale({
-        customerId: "",
-        dueDate: new Date().toISOString().split("T")[0],
-      });
-      setSuccess("Sale created successfully!");
-      setTimeout(() => setSuccess(null), 3000);
-
-      // Refresh sales list
-      const salesRes = await fetch("/api/sales");
-      if (salesRes.ok) {
-        const updatedSales = await salesRes.json();
-        const processedSales = updatedSales.map(calculateSaleStatus);
-        setSales(processedSales);
-      }
-    } catch (err: any) {
-      setError(err.message || "Failed to create sale");
-      console.error("Error creating sale:", err);
-    } finally {
-      setLoading(false);
-    }
-  };
-  
   const handleEditSale = (sale: Sale) => {
     setEditingSale(sale);
     setEditPayments(sale.payments.map(p => ({
@@ -943,23 +752,6 @@ const EnhancedSalesPage = () => {
             <Download size={20} />
             Export CSV
           </button>
-          <button
-            onClick={() => {
-              setShowAddSale(!showAddSale);
-              if (showAddSale) {
-                setSaleItems([]);
-                setPayments([]);
-                setCustomerSearch("");
-                setProductSearch("");
-                setError(null);
-                setStockError(null);
-              }
-            }}
-            className="flex-1 md:flex-none bg-blue-600 text-white px-6 py-3 rounded-xl hover:bg-blue-700 flex items-center justify-center gap-2 shadow-lg transition-all"
-          >
-            {showAddSale ? <ChevronUp size={20} /> : <Plus size={20} />}
-            {showAddSale ? "Close" : "New Sale"}
-          </button>
         </div>
       </div>
 
@@ -1011,428 +803,9 @@ const EnhancedSalesPage = () => {
         </div>
       </div>
 
-      {showAddSale && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50 overflow-y-auto">
-          <div className="bg-white rounded-xl max-w-4xl w-full max-h-[90vh] overflow-y-auto my-4">
-            <div className="p-4 md:p-6 border-b sticky top-0 bg-white z-10">
-              <div className="flex justify-between items-center">
-                <h2 className="text-xl md:text-2xl font-bold text-black">Create New Sale</h2>
-                <button
-                  onClick={() => setShowAddSale(false)}
-                  className="text-gray-500 hover:text-gray-700"
-                >
-                  <X size={24} />
-                </button>
-              </div>
-            </div>
-
-            <div className="p-4 md:p-6 space-y-6">
-              <div className="relative customer-dropdown-container">
-                <label className="block text-sm font-medium text-black mb-2">Customer *</label>
-                <input
-                  type="text"
-                  placeholder="Search customer by name or phone..."
-                  value={customerSearch}
-                  onChange={(e) => {
-                    setCustomerSearch(e.target.value);
-                    setShowCustomerDropdown(true);
-                  }}
-                  onFocus={() => setShowCustomerDropdown(true)}
-                  className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 text-black"
-                />
-                {showCustomerDropdown && filteredCustomers.length > 0 && (
-                  <div className="absolute z-10 w-full mt-1 bg-white border border-gray-300 rounded-lg shadow-lg max-h-60 overflow-y-auto">
-                    {filteredCustomers.map(customer => (
-                      <div
-                        key={customer.id}
-                        onClick={() => {
-                          setNewSale({...newSale, customerId: customer.id.toString()});
-                          setCustomerSearch(customer.name);
-                          setShowCustomerDropdown(false);
-                        }}
-                        className="p-3 hover:bg-blue-50 cursor-pointer border-b last:border-b-0"
-                      >
-                        <div className="font-medium text-black">{customer.name}</div>
-                        {customer.phone && (
-                          <div className="text-sm text-gray-600">{customer.phone}</div>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                )}
-                {showCustomerDropdown && customerSearch && filteredCustomers.length === 0 && (
-                  <div className="absolute z-10 w-full mt-1 bg-white border border-gray-300 rounded-lg shadow-lg p-3">
-                    <div className="text-gray-500 text-sm">No customers found</div>
-                  </div>
-                )}
-                {newSale.customerId && (
-                  <div className="mt-2 text-sm text-green-600 flex items-center gap-1">
-                    <CheckCircle size={16} />
-                    Customer selected
-                  </div>
-                )}
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-black mb-2">Sale Date</label>
-                <input
-                  type="date"
-                  value={newSale.dueDate}
-                  onChange={(e) => setNewSale({...newSale, dueDate: e.target.value})}
-                  className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 text-black"
-                />
-              </div>
-
-              <div>
-                <h3 className="text-lg font-semibold mb-4 text-black">Sale Items</h3>
-                
-                <div className="space-y-3 mb-4 p-4 bg-gray-50 rounded-lg">
-                  <div className="grid grid-cols-1 gap-3">
-                    <div className="relative product-dropdown-container">
-                      <label className="block text-sm font-medium text-black mb-1">Product *</label>
-                      <input
-                        type="text"
-                        placeholder="Search product by name..."
-                        value={productSearch}
-                        onChange={(e) => {
-                          setProductSearch(e.target.value);
-                          setShowProductDropdown(true);
-                        }}
-                        onFocus={() => setShowProductDropdown(true)}
-                        className="w-full p-2 border border-gray-300 rounded text-black"
-                      />
-                      {showProductDropdown && filteredProducts.length > 0 && (
-                        <div className="absolute z-20 w-full mt-1 bg-white border border-gray-300 rounded-lg shadow-lg max-h-60 overflow-y-auto">
-                          {[...filteredProducts].sort((a, b) => a.name.localeCompare(b.name)).map(product => (
-                            <div
-                              key={product.id}
-                              onClick={() => {
-                                setCurrentItem({
-                                  ...currentItem,
-                                  productId: product.id,
-                                  price: product.price || 0,
-                                  productName: product.name
-                                });
-                                setProductSearch(product.name);
-                                setShowProductDropdown(false);
-                              }}
-                              className="p-3 hover:bg-blue-50 cursor-pointer border-b last:border-b-0"
-                            >
-                              <div className="flex justify-between items-center">
-                                <div>
-                                  <div className="font-medium text-black">{product.name}</div>
-                                  <div className="text-sm text-gray-600">
-                                    Stock:{" "}
-                                    {Array.isArray(product.stock)
-                                      ? product.stock.reduce((total, s) => total + (s.quantity || 0), 0)
-                                      : 0}
-                                    {" "} | Price: Ksh {product.price?.toLocaleString() || 0}
-                                  </div>
-                                </div>
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                      {showProductDropdown && productSearch && filteredProducts.length === 0 && (
-                        <div className="absolute z-20 w-full mt-1 bg-white border border-gray-300 rounded-lg shadow-lg p-3">
-                          <div className="text-gray-500 text-sm">No products found</div>
-                        </div>
-                      )}
-                      {currentItem.productId > 0 && (
-                        <div className="mt-1 text-sm text-green-600 flex items-center gap-1">
-                          <CheckCircle size={14} />
-                          {currentItem.productName} selected
-                        </div>
-                      )}
-                    </div>
-                    
-                    <div className="grid grid-cols-2 gap-3">
-                      <div>
-                        <label className="block text-sm font-medium text-black mb-1">Quantity *</label>
-                        <input
-                          type="number"
-                          min="0"
-                          value={currentItem.quantity}
-                          onChange={(e) => setCurrentItem({...currentItem, quantity: parseInt(e.target.value) || 1})}
-                          className="w-full p-2 border border-gray-300 rounded text-black"
-                        />
-                      </div>
-                      
-                      <div>
-                        <label className="block text-sm font-medium text-black mb-1">Unit Price *</label>
-                        <input
-                          type="number"
-                          min="0"
-                          step="0.01"
-                          value={currentItem.price}
-                          onChange={(e) => setCurrentItem({...currentItem, price: parseFloat(e.target.value) || 0})}
-                          className="w-full p-2 border border-gray-300 rounded text-black"
-                        />
-                      </div>
-                    </div>
-                    
-                    {currentItem.productId > 0 && (
-                      <div className="bg-blue-50 p-3 rounded-lg text-sm">
-                        <div className="font-medium text-black">
-                          Total: Ksh {(currentItem.quantity * currentItem.price).toFixed(2)}
-                        </div>
-                      </div>
-                    )}
-                    
-                    <button
-                      type="button"
-                      onClick={handleAddItemToSale}
-                      disabled={!currentItem.productId || currentItem.quantity <= 0 || currentItem.price <= 0}
-                      className="w-full bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-                    >
-                      <Plus size={16} />
-                      Add Item to Sale
-                    </button>
-                  </div>
-                </div>
-
-                {saleItems.length > 0 && (
-                  <div className="space-y-2 mb-4">
-                    <h4 className="font-medium text-black">Items in Sale:</h4>
-                    {saleItems.map((item, index) => (
-                      <div key={index} className="flex flex-col sm:flex-row justify-between items-start sm:items-center bg-white p-3 rounded-lg border gap-2">
-                        <div className="flex-1 min-w-0 w-full sm:w-auto">
-                          <span className="font-medium text-black block truncate">{item.productName}</span>
-                          <span className="text-black text-sm">×{item.quantity} @ Ksh {item.price.toFixed(2)}</span>
-                        </div>
-                        <div className="flex items-center gap-2 w-full sm:w-auto justify-between sm:justify-end">
-                          <span className="font-bold text-green-600 whitespace-nowrap">Ksh {(item.quantity * item.price).toFixed(2)}</span>
-                          <button
-                            onClick={() => setSaleItems(saleItems.filter((_, i) => i !== index))}
-                            className="text-red-500 hover:text-red-700 p-1"
-                          >
-                            <Trash2 size={16} />
-                          </button>
-                        </div>
-                      </div>
-                    ))}
-                    <div className="bg-blue-50 p-3 rounded-lg">
-                      <div className="flex justify-between items-center">
-                        <span className="font-semibold text-black">Total Amount:</span>
-                        <span className="font-bold text-blue-600 text-lg">Ksh {calculateTotalAmount().toFixed(2)}</span>
-                      </div>
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              <div className="border-t pt-4 mb-4">
-                <h3 className="text-lg font-semibold mb-4 text-black">Payments</h3>
-
-                <div className="space-y-3 mb-4 p-4 bg-gray-50 rounded-lg">
-                  <div className="grid grid-cols-1 md:grid-cols-6 gap-3">
-                    <select
-                      value={currentPayment.method}
-                      onChange={(e) =>
-                        setCurrentPayment({
-                          ...currentPayment,
-                          method: e.target.value as any,
-                          amount: e.target.value === "CREDIT" ? "0" : currentPayment.amount,
-                        })
-                      }
-                      className="p-3 border rounded-lg text-black"
-                    >
-                      {paymentMethods.map((method) => (
-                        <option key={method.value} value={method.value}>
-                          {method.label}
-                        </option>
-                      ))}
-                    </select>
-
-                    {currentPayment.method !== "CREDIT" && (
-                      <input
-                        type="number"
-                        placeholder="Amount"
-                        min="0"
-                        step="0.01"
-                        max={getRemainingAmount()}
-                        value={currentPayment.amount}
-                        onChange={(e) =>
-                          setCurrentPayment({
-                            ...currentPayment,
-                            amount: e.target.value,
-                          })
-                        }
-                        className="p-3 border rounded-lg text-black"
-                      />
-                    )}
-
-                    {["MPESA", "BANK", "CARD"].includes(currentPayment.method) && (
-                      <input
-                        type="text"
-                        placeholder="Reference ID *"
-                        value={currentPayment.referenceId}
-                        onChange={(e) =>
-                          setCurrentPayment({
-                            ...currentPayment,
-                            referenceId: e.target.value,
-                          })
-                        }
-                        className="p-3 border rounded-lg text-black"
-                      />
-                    )}
-
-                    {currentPayment.method === "CHECK" && (
-                      <input
-                        type="date"
-                        placeholder="Check Deposit Date"
-                        value={currentPayment.checkDepositDate}
-                        onChange={(e) =>
-                          setCurrentPayment({
-                            ...currentPayment,
-                            checkDepositDate: e.target.value,
-                          })
-                        }
-                        className="p-3 border rounded-lg text-black"
-                      />
-                    )}
-
-                    {(currentPayment.method === "CREDIT" ||
-                      getRemainingAmount() > parseFloat(currentPayment.amount || "0")) && (
-                      <input
-                        type="date"
-                        placeholder="Due Date *"
-                        value={currentPayment.dueDate}
-                        onChange={(e) =>
-                          setCurrentPayment({
-                            ...currentPayment,
-                            dueDate: e.target.value,
-                          })
-                        }
-                        className="p-3 border rounded-lg text-black col-span-2"
-                        title="MANDATORY for credit/partial payments"
-                        min={new Date().toISOString().split("T")[0]}
-                      />
-                    )}
-
-                    <button
-                      type="button"
-                      onClick={handleAddPayment}
-                      className="bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 flex items-center justify-center gap-2 col-span-1"
-                    >
-                      <Plus size={20} /> Add Payment
-                    </button>
-                  </div>
-                </div>
-
-                {payments.length > 0 && (
-                  <div className="border rounded-lg p-3 bg-gray-50">
-                    <h4 className="font-semibold mb-2 text-black">Payments:</h4>
-                    {payments.map((payment, index) => (
-                      <div
-                        key={index}
-                        className="flex flex-col sm:flex-row justify-between items-start sm:items-center p-2 bg-white rounded mb-2 gap-2"
-                      >
-                        <div className="flex-1">
-                          <span className="text-black font-medium">
-                            {payment.method}
-                          </span>
-                          {payment.referenceId && (
-                            <span className="text-gray-600 text-sm ml-2">
-                              Ref: {payment.referenceId}
-                            </span>
-                          )}
-                          {payment.dueDate && (
-                            <span className="text-orange-600 text-sm ml-2">
-                              Due: {payment.dueDate}
-                            </span>
-                          )}
-                        </div>
-                        <div className="flex items-center gap-3">
-                          <span className="text-black">
-                            Ksh {Number(payment.amount).toFixed(2)}
-                          </span>
-                          <button
-                            onClick={() => removePayment(index)}
-                            className="text-red-600 hover:text-red-800"
-                          >
-                            <Trash2 size={20} />
-                          </button>
-                        </div>
-                      </div>
-                    ))}
-                    <div className="border-t pt-2 mt-2">
-                      <div className="flex justify-between text-black">
-                        <span>Total Paid:</span>
-                        <span>Ksh {calculateTotalPayments().toFixed(2)}</span>
-                      </div>
-                      <div className="flex justify-between font-bold text-black">
-                        <span>Remaining:</span>
-                        <span
-                          className={
-                            getRemainingAmount() > 0
-                              ? "text-red-600"
-                              : "text-green-600"
-                          }
-                        >
-                          Ksh {getRemainingAmount().toFixed(2)}
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {getRemainingAmount() > 0 && (
-                  <div className="mt-4 p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
-                    <label className="block text-sm font-medium text-black mb-2">
-                      Payment Due Date *{" "}
-                      <span className="text-red-600">
-                        (MANDATORY for outstanding balance)
-                      </span>
-                    </label>
-                    <input
-                      type="date"
-                      value={newSale.dueDate}
-                      onChange={(e) =>
-                        setNewSale({
-                          ...newSale,
-                          dueDate: e.target.value,
-                        })
-                      }
-                      className="w-full p-3 border rounded-lg text-black"
-                      min={new Date().toISOString().split("T")[0]}
-                    />
-                  </div>
-                )}
-              </div>
-
-              <div className="flex flex-col sm:flex-row gap-3 pt-6 border-t">
-                <button
-                  onClick={() => setShowAddSale(false)}
-                  disabled={loading}
-                  className="flex-1 bg-gray-500 text-white px-6 py-3 rounded-lg hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={handleCreateSale}
-                  disabled={saleItems.length === 0 || !newSale.customerId || loading}
-                  className="flex-1 bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-                >
-                  {loading ? (
-                    <>
-                      <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
-                      Creating Sale...
-                    </>
-                  ) : (
-                    "Create Sale"
-                  )}
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
       {editingSale && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50 overflow-y-auto">
-          <div className="bg-white rounded-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto my-4">
+          <div className="bg-white rounded-xl max-w-4xl w-full max-h-[90vh] overflow-y-auto my-4">
             <div className="p-4 md:p-6 border-b sticky top-0 bg-white z-10">
               <div className="flex justify-between items-center">
                 <h2 className="text-xl md:text-2xl font-bold text-black">Edit Sale #{editingSale.id}</h2>
@@ -1519,6 +892,116 @@ const EnhancedSalesPage = () => {
                   <Calculator size={20} />
                   Edit Sale Items
                 </h3>
+                
+                {/* Add New Item Section */}
+                <div className="space-y-3 mb-4 p-4 bg-gray-50 rounded-lg">
+                  <h4 className="font-medium text-black">Add New Item</h4>
+                  <div className="grid grid-cols-1 gap-3">
+                    <div className="relative product-dropdown-container">
+                      <label className="block text-sm font-medium text-black mb-1">Product *</label>
+                      <input
+                        type="text"
+                        placeholder="Search product by name..."
+                        value={productSearch}
+                        onChange={(e) => {
+                          setProductSearch(e.target.value);
+                          setShowProductDropdown(true);
+                        }}
+                        onFocus={() => setShowProductDropdown(true)}
+                        className="w-full p-2 border border-gray-300 rounded text-black"
+                      />
+                      {showProductDropdown && filteredProducts.length > 0 && (
+                        <div className="absolute z-20 w-full mt-1 bg-white border border-gray-300 rounded-lg shadow-lg max-h-60 overflow-y-auto">
+                          {[...filteredProducts].sort((a, b) => a.name.localeCompare(b.name)).map(product => (
+                            <div
+                              key={product.id}
+                              onClick={() => {
+                                setCurrentEditItem({
+                                  ...currentEditItem,
+                                  productId: product.id,
+                                  price: product.price || 0,
+                                  productName: product.name
+                                });
+                                setProductSearch(product.name);
+                                setShowProductDropdown(false);
+                              }}
+                              className="p-3 hover:bg-blue-50 cursor-pointer border-b last:border-b-0"
+                            >
+                              <div className="flex justify-between items-center">
+                                <div>
+                                  <div className="font-medium text-black">{product.name}</div>
+                                  <div className="text-sm text-gray-600">
+                                    Stock:{" "}
+                                    {Array.isArray(product.stock)
+                                      ? product.stock.reduce((total, s) => total + (s.quantity || 0), 0)
+                                      : 0}
+                                    {" "} | Price: Ksh {product.price?.toLocaleString() || 0}
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      {showProductDropdown && productSearch && filteredProducts.length === 0 && (
+                        <div className="absolute z-20 w-full mt-1 bg-white border border-gray-300 rounded-lg shadow-lg p-3">
+                          <div className="text-gray-500 text-sm">No products found</div>
+                        </div>
+                      )}
+                      {currentEditItem.productId > 0 && (
+                        <div className="mt-1 text-sm text-green-600 flex items-center gap-1">
+                          <CheckCircle size={14} />
+                          {currentEditItem.productName} selected
+                        </div>
+                      )}
+                    </div>
+                    
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-xs font-medium text-gray-700 mb-1">Quantity *</label>
+                        <input
+                          type="number"
+                          min="1"
+                          value={currentEditItem.quantity}
+                          onChange={(e) => setCurrentEditItem({...currentEditItem, quantity: parseInt(e.target.value) || 1})}
+                          className="w-full p-2 border rounded text-black text-sm"
+                        />
+                      </div>
+                      
+                      <div>
+                        <label className="block text-xs font-medium text-gray-700 mb-1">Price *</label>
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          value={currentEditItem.price}
+                          onChange={(e) => setCurrentEditItem({...currentEditItem, price: parseFloat(e.target.value) || 0})}
+                          className="w-full p-2 border rounded text-black text-sm"
+                        />
+                      </div>
+                    </div>
+                    
+                    {currentEditItem.productId > 0 && (
+                      <div className="bg-blue-50 p-3 rounded-lg text-sm">
+                        <div className="font-medium text-black">
+                          Total: Ksh {(currentEditItem.quantity * currentEditItem.price).toFixed(2)}
+                        </div>
+                      </div>
+                    )}
+                    
+                    <button
+                      type="button"
+                      onClick={handleAddItemToEditSale}
+                      disabled={!currentEditItem.productId || currentEditItem.quantity <= 0 || currentEditItem.price <= 0}
+                      className="w-full bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                    >
+                      <Plus size={16} />
+                      Add Item to Sale
+                    </button>
+                  </div>
+                </div>
+
+                {/* Existing Items */}
                 <div className="space-y-3">
                   {editSaleItems.map((item, index) => (
                     <div key={index} className="bg-gray-50 p-4 rounded-lg border">

@@ -195,21 +195,22 @@ model restock {
   @@index([productId])
   @@index([creditorId])
 }
-
 model cashledger {
-  id               Int       @id @default(autoincrement())
-  date             DateTime  @default(now())
-  description      String
-  type             String
-  category         String
-  amount           Float
-  runningBalance   Float     @default(0)
-  relatedTo        String?
-  affectedAccounts String?
-  referenceId      Int?
-  referenceType    String?
-  createdAt        DateTime  @default(now())
-  updatedAt        DateTime  @updatedAt
+  id                   Int                    @id @default(autoincrement())
+  date                 DateTime               @default(now())
+  description          String
+  type                 String
+  category             String
+  amount               Float
+  runningBalance       Float?                 // make nullable for now
+  relatedTo            String?
+  affectedAccounts     String?
+  referenceId          Int?
+  referenceType        String?
+  createdAt            DateTime               @default(now())
+  updatedAt            DateTime               @updatedAt
+  email                String?                // make nullable
+  token                String?                // make nullable
 
   saleId     Int?
   sale       sale?       @relation(fields: [saleId], references: [id])
@@ -218,7 +219,10 @@ model cashledger {
   expense    expense?    @relation(fields: [expenseId], references: [id])
 
   restockId  Int?
-  restock    restock?    @relation("RestockToLedger", fields: [restockId], references: [id]) // ✅ link back to restock
+  restock    restock?    @relation("RestockToLedger", fields: [restockId], references: [id])
+
+  dailyOpeningBalanceId Int?
+  dailyOpeningBalance   dailyopeningbalance?  @relation(fields: [dailyOpeningBalanceId], references: [id])
 
   @@index([date])
   @@index([type])
@@ -226,6 +230,16 @@ model cashledger {
   @@index([referenceType])
 }
 
+model dailyopeningbalance {
+  id          Int           @id @default(autoincrement())
+  date        DateTime      @default(now())
+  amount      Float
+  description String?
+  recordedBy  String?
+  cashledgers cashledger[]  // 👈 add opposite relation
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+}
 
 
 

@@ -228,15 +228,184 @@ export async function POST(req: Request) {
   }
 }
 
-// ---------------- GET ALL RESTOCKS ----------------
-export async function GET() {
+// ---------------- REMOVE STOCK (NEW ENDPOINT) ----------------
+export async function PUT(req: Request) {
   try {
+    const body = await req.json();
+    const { productId, quantity, reason } = body;
+
+    // ---------------- VALIDATION ----------------
+    if (!productId || !quantity || !reason?.trim()) {
+      return NextResponse.json(
+        { error: "Missing required fields: productId, quantity, and reason are required" },
+        { status: 400 }
+      );
+    }
+
+    const productIdNum = Number(productId);
+    const quantityNum = Number(quantity);
+
+    if (isNaN(productIdNum) || isNaN(quantityNum)) {
+      return NextResponse.json(
+        { error: "Invalid number format" },
+        { status: 400 }
+      );
+    }
+
+    if (quantityNum <= 0) {
+      return NextResponse.json(
+        { error: "Quantity must be positive" },
+        { status: 400 }
+      );
+    }
+
+    // ---------------- FETCH PRODUCT ----------------
+    const product = await prisma.product.findUnique({
+      where: { id: productIdNum },
+      include: { stock: true },
+    });
+
+    if (!product) {
+      return NextResponse.json(
+        { error: "Product not found" },
+        { status: 404 }
+      );
+    }
+
+    // ---------------- CHECK CURRENT STOCK ----------------
+    const currentQuantity = product.stock.reduce((sum, s) => sum + s.quantity, 0);
+    
+    if (currentQuantity < quantityNum) {
+      return NextResponse.json(
+        { error: `Insufficient stock. Current stock: ${currentQuantity}, requested to remove: ${quantityNum}` },
+        { status: 400 }
+      );
+    }
+
+    // ---------------- CALCULATE CURRENT STOCK VALUES ----------------
+    const currentValue = product.stock.reduce(
+      (sum, s) => sum + s.quantity * s.costPrice,
+      0
+    );
+
+    // ---------------- CALCULATE NEW VALUES AFTER REMOVAL ----------------
+    const newTotalQuantity = currentQuantity - quantityNum;
+    
+    // For removal, we maintain the same average cost price since we're not adding new cost
+    const currentAvgCostPrice = currentQuantity > 0 ? currentValue / currentQuantity : 0;
+    const newTotalValue = newTotalQuantity * currentAvgCostPrice;
+    const removedValue = quantityNum * currentAvgCostPrice;
+
+    // ---------------- TRANSACTION ----------------
+    const { updatedProduct } = await prisma.$transaction(
+      async (tx) => {
+        // ---------------- UPDATE STOCK ----------------
+        let updatedProduct;
+
+        if (product.stock.length > 0) {
+          // Update first stock record
+          const existingStock = product.stock[0];
+          await tx.stock.update({
+            where: { id: existingStock.id },
+            data: {
+              quantity: newTotalQuantity,
+              // Keep the same cost price for remaining stock
+              costPrice: currentAvgCostPrice,
+            },
+          });
+
+          updatedProduct = await tx.product.findUnique({
+            where: { id: productIdNum },
+            include: { stock: true },
+          });
+        } else {
+          // This shouldn't happen due to earlier validation, but handle it
+          throw new Error("No stock records found for product");
+        }
+
+        // ---------------- CREATE CASH LEDGER RECORD FOR STOCK REMOVAL ----------------
+        const lastLedger = await tx.cashledger.findFirst({
+          orderBy: { createdAt: "desc" },
+        });
+        const prevBalance = lastLedger?.runningBalance || 0;
+
+        await tx.cashledger.create({
+          data: {
+            description: `Stock Removal: ${quantityNum} units of ${product.name} - ${reason}`,
+            type: "INFO",
+            category: "Inventory Adjustment",
+            amount: removedValue,
+            runningBalance: prevBalance,
+            relatedTo: `Product: ${product.name}`,
+            affectedAccounts: "Inventory (-)",
+            referenceType: "stock_removal",
+            date: new Date(),
+          },
+        });
+
+        return { updatedProduct };
+      },
+      {
+        maxWait: 10000,
+        timeout: 15000,
+      }
+    );
+
+    // ---------------- RESPONSE ----------------
+    return NextResponse.json({
+      success: true,
+      message: "Stock removed successfully",
+      product: {
+        ...updatedProduct,
+        stockQuantity: newTotalQuantity,
+        avgCostPrice: currentAvgCostPrice,
+      },
+      removalSummary: {
+        previousQuantity: currentQuantity,
+        removedQuantity: quantityNum,
+        newTotalQuantity,
+        previousValue: currentValue,
+        removedValue,
+        newTotalValue,
+        avgCostPrice: currentAvgCostPrice,
+      },
+    });
+  } catch (error) {
+    console.error("PUT /api/restock error (remove stock):", error);
+    if (error instanceof Error) {
+      return NextResponse.json({ error: error.message }, { status: 500 });
+    }
+    return NextResponse.json(
+      { error: "Failed to remove stock" },
+      { status: 500 }
+    );
+  }
+}
+
+// ---------------- GET RESTOCKS (WITH OPTIONAL FILTER) ----------------
+export async function GET(req: Request) {
+  try {
+    const { searchParams } = new URL(req.url);
+    const productId = searchParams.get('productId');
+    
+    let whereClause = {};
+    
+    if (productId) {
+      const productIdNum = Number(productId);
+      if (!isNaN(productIdNum)) {
+        whereClause = {
+          productId: productIdNum
+        };
+      }
+    }
+
     const restocks = await prisma.restock.findMany({
+      where: whereClause,
       include: {
         product: { include: { stock: true } },
         creditor: true,
       },
-      orderBy: { createdAt: "desc" },
+      orderBy: { createdAt: 'desc' },
     });
 
     const normalizedRestocks = restocks.map((r) => {
@@ -264,9 +433,9 @@ export async function GET() {
       restocks: normalizedRestocks,
     });
   } catch (error) {
-    console.error("GET /api/restock error:", error);
+    console.error('GET /api/restock error:', error);
     return NextResponse.json(
-      { error: "Failed to fetch restocks" },
+      { error: 'Failed to fetch restocks' },
       { status: 500 }
     );
   }
