@@ -1175,7 +1175,7 @@ const downloadCOGSLedger = async () => {
               </div>
             )}
 
-            // With:
+            
 {activeTab === "cash" && (
   <DailyTransactionsTracker />
 )}
@@ -1191,7 +1191,87 @@ const downloadCOGSLedger = async () => {
             {activeTab === "inventory" && (
               <InventorySection/>
             )}
-           
+
+{activeTab === "balance-sheet" && (
+  <BalanceSheetSection 
+    balanceSheet={
+      balanceSheet ? {
+        assets: {
+          currentAssets: {
+            inventory: balanceSheet.assets.currentAssets.inventory,
+            cash: balanceSheet.assets.currentAssets.cash,
+            bankBalances: 0, // Add default
+            accountsReceivable: balanceSheet.assets.currentAssets.accountsReceivable,
+            pettyCash: 0, // Add default
+            total: balanceSheet.assets.currentAssets.total
+          },
+          nonCurrentAssets: {
+            machinery: 0, // Add default
+            motorVehicle: 0, // Add default
+            phoneAndAccessories: 0, // Add default
+            total: 0 // Add default
+          },
+          totalAssets: balanceSheet.assets.totalAssets
+        },
+        liabilities: {
+          currentLiabilities: {
+            shortTermLoans: 0, // Add default
+            creditors: balanceSheet.liabilities.currentLiabilities.accountsPayable,
+            total: balanceSheet.liabilities.currentLiabilities.total
+          },
+          nonCurrentLiabilities: {
+            longTermLoans: 0, // Add default
+            total: 0 // Add default
+          },
+          totalLiabilities: balanceSheet.liabilities.totalLiabilities
+        },
+        equity: {
+          shareCapital: balanceSheet.equity.capital,
+          retainedEarnings: balanceSheet.equity.retainedEarnings,
+          totalEquity: balanceSheet.equity.totalEquity
+        },
+        netAssets: 0, // Add default
+        date: balanceSheet.date
+      } : undefined
+    }
+    pettyCashBalance={0}
+    onDownload={() => {
+      // Simple download function
+      if (balanceSheet) {
+        const csvContent = [
+          ["Balance Sheet", `As of ${new Date(balanceSheet.date).toLocaleDateString()}`],
+          [""],
+          ["ASSETS", "Amount (KES)"],
+          ["Cash", balanceSheet.assets.currentAssets.cash.toLocaleString()],
+          ["Accounts Receivable", balanceSheet.assets.currentAssets.accountsReceivable.toLocaleString()],
+          ["Inventory", balanceSheet.assets.currentAssets.inventory.toLocaleString()],
+          ["Total Assets", balanceSheet.assets.totalAssets.toLocaleString()],
+          [""],
+          ["LIABILITIES & EQUITY", "Amount (KES)"],
+          ["Accounts Payable", balanceSheet.liabilities.currentLiabilities.accountsPayable.toLocaleString()],
+          ["Total Liabilities", balanceSheet.liabilities.totalLiabilities.toLocaleString()],
+          ["Capital", balanceSheet.equity.capital.toLocaleString()],
+          ["Retained Earnings", balanceSheet.equity.retainedEarnings.toLocaleString()],
+          ["Total Equity", balanceSheet.equity.totalEquity.toLocaleString()]
+        ].map(row => row.map(cell => `"${cell}"`).join(",")).join("\n");
+
+        const blob = new Blob([csvContent], { type: "text/csv" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `balance-sheet-${new Date().toISOString().split('T')[0]}.csv`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      }
+    }}
+    onManualInputChange={(category, field, value) => {
+      console.log('Manual input changed:', category, field, value);
+      // You can implement manual input handling here if needed
+    }}
+  />
+)}
            
           </div>
         </div>
