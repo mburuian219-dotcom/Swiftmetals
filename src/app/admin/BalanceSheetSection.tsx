@@ -175,10 +175,11 @@ export default function BalanceSheetSection({
         },
         totalLiabilities: safeNumber(balanceSheet.liabilities?.totalLiabilities)
       },
-      equity: balanceSheet.equity ? {
-        ...balanceSheet.equity,
-        totalEquity: safeNumber(balanceSheet.equity.totalEquity)
-      } : undefined,
+      equity: {
+        shareCapital: manualInputs['equity-shareCapital'] ?? safeNumber(balanceSheet.equity?.shareCapital),
+        retainedEarnings: safeNumber(balanceSheet.equity?.retainedEarnings),
+        totalEquity: safeNumber(balanceSheet.equity?.totalEquity)
+      },
       netAssets: safeNumber(balanceSheet.netAssets)
     };
     
@@ -251,11 +252,13 @@ export default function BalanceSheetSection({
     // Calculate retained earnings (if not provided from API)
     const retainedEarnings = Number(baseSheet.equity.retainedEarnings || 0);
 
-    // Auto-calculate share capital to balance: Assets = Liabilities + Equity
-    // Share Capital = Total Assets - Total Liabilities - Retained Earnings
-    const calculatedShareCapital = Math.max(0, totalAssets - totalLiabilities - retainedEarnings);
+    // Use manual share capital if provided, otherwise auto-calculate
+    const manualShareCapital = baseSheet.equity.shareCapital || 0;
+    const shareCapital = manualShareCapital > 0 
+      ? manualShareCapital  // Use manual input
+      : Math.max(0, totalAssets - totalLiabilities - retainedEarnings); // Auto-calculate if no manual input
 
-    const totalEquity = calculatedShareCapital + retainedEarnings;
+    const totalEquity = shareCapital + retainedEarnings;
     const netAssets = totalAssets - totalLiabilities;
 
     return {
@@ -285,7 +288,7 @@ export default function BalanceSheetSection({
         totalLiabilities: totalLiabilities
       },
       equity: {
-        shareCapital: calculatedShareCapital,
+        shareCapital: shareCapital,
         retainedEarnings: retainedEarnings,
         totalEquity: totalEquity
       },
@@ -328,6 +331,11 @@ export default function BalanceSheetSection({
           ...updated.assets.currentAssets,
           pettyCash: numValue
         };
+      } else if (category === 'equity' && field === 'shareCapital') {
+        updated.equity = {
+          ...updated.equity,
+          shareCapital: numValue
+        };
       }
       
       const totalCreditorsBalance = calculateTotalCreditors(creditorsData);
@@ -349,6 +357,9 @@ export default function BalanceSheetSection({
 
   // UPDATED: Download function that includes ALL data
   const handleDownload = () => {
+    // Check if share capital is manually inputted
+    const isShareCapitalManual = manualInputs['equity-shareCapital'] !== undefined;
+    
     // Create CSV content with ALL data including manual inputs
     const csvContent = [
       ["BALANCE SHEET - COMPLETE DATA"],
@@ -384,7 +395,7 @@ export default function BalanceSheetSection({
       ["TOTAL LIABILITIES", formatCurrency(localBalanceSheet.liabilities.totalLiabilities)],
       [""],
       ["SHAREHOLDERS' FUNDS", ""],
-      ["  Share Capital (Auto-calculated)", formatCurrency(localBalanceSheet.equity.shareCapital)],
+      [`  Share Capital ${isShareCapitalManual ? "(Manual Input)" : "(Auto-calculated)"}`, formatCurrency(localBalanceSheet.equity.shareCapital)],
       ["  Retained Earnings", formatCurrency(localBalanceSheet.equity.retainedEarnings)],
       ["  Total Equity", formatCurrency(localBalanceSheet.equity.totalEquity)],
       [""],
@@ -399,6 +410,7 @@ export default function BalanceSheetSection({
       ["Manual Inputs", Object.keys(manualInputs).length > 0 ? "Yes" : "No"],
       ["Creditors Count", creditorsData.length.toString()],
       ["Petty Cash Source", "Manual Input"],
+      ["Share Capital Source", isShareCapitalManual ? "Manual Input" : "Auto-calculated"],
       ["Inventory Source", "Inventory API"],
       ["Accounts Receivable Source", "Debtors API"],
       ["Retained Earnings Source", "Income Statement API"]
@@ -695,13 +707,21 @@ export default function BalanceSheetSection({
             </h4>
             
             <div className="space-y-3">
-              {/* Share Capital - Auto-calculated (Read-only) */}
+              {/* Share Capital - Manual Input (CHANGED FROM AUTO) */}
               <div className="flex justify-between items-center">
-                <span className="text-sm font-medium text-black">Share Capital (Auto)</span>
-                <span className="font-bold text-black bg-gray-100 px-3 py-1 rounded">
-                  {formatCurrency(localBalanceSheet.equity.shareCapital)}
-                </span>
+                <label className="text-sm font-medium text-black">Share Capital</label>
+                <input
+                  type="number"
+                  step="0.01"
+                  value={localBalanceSheet.equity.shareCapital || ''}
+                  onChange={(e) => handleInputChange('equity', 'shareCapital', e.target.value)}
+                  className="w-32 px-3 py-1 text-sm border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-green-500 text-black text-right"
+                  placeholder="0.00"
+                />
               </div>
+              <p className="text-xs text-gray-500 text-right">
+                {manualInputs['equity-shareCapital'] !== undefined ? "Manual Input" : "Auto-calculated"}
+              </p>
 
               {/* Retained Earnings - From API */}
               <div className="flex justify-between items-center">
@@ -760,6 +780,7 @@ export default function BalanceSheetSection({
             {Object.keys(manualInputs).length > 0 && (
               <p className="text-xs text-blue-600 mt-1">
                 Includes {Object.keys(manualInputs).length} manual input(s)
+                {manualInputs['equity-shareCapital'] !== undefined && " (including share capital)"}
               </p>
             )}
           </div>

@@ -44,7 +44,7 @@ export default function ProductsPage() {
   const [stockOperation, setStockOperation] = useState({
     mode: 'add' as 'add' | 'remove',
     quantity: "",
-    totalCost: "",
+    // Removed manual totalCost input
     paymentSource: "cash",
     creditorName: "",
     creditorPhone: "",
@@ -132,6 +132,19 @@ export default function ProductsPage() {
     });
   }, [products, searchQuery, selectedCategory]);
 
+  // Calculate total cost based on quantity and production cost
+  const calculateTotalCost = useMemo(() => {
+    if (!editingId || !stockOperation.quantity) return 0;
+    
+    const currentProduct = products.find(p => p.id === editingId);
+    const productionCost = currentProduct?.productionCost || 0;
+    const quantity = parseInt(stockOperation.quantity);
+    
+    if (isNaN(quantity) || quantity <= 0 || productionCost <= 0) return 0;
+    
+    return quantity * productionCost;
+  }, [editingId, stockOperation.quantity, products]);
+
   // Add or update product
   const handleSubmit = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
@@ -204,6 +217,7 @@ export default function ProductsPage() {
     const quantity = parseInt(stockOperation.quantity);
     const currentProduct = products.find(p => p.id === editingId);
     const currentStock = currentProduct?.stockQuantity || 0;
+    const productionCost = currentProduct?.productionCost || 0;
 
     if (isNaN(quantity) || quantity <= 0) {
       return alert("Please enter a valid quantity");
@@ -213,15 +227,19 @@ export default function ProductsPage() {
       return alert(`Cannot remove more than current stock (${currentStock} units)`);
     }
 
+    if (stockOperation.mode === 'add' && productionCost <= 0) {
+      return alert("Please set a production cost before adding stock");
+    }
+
     setProcessingStock(true);
 
     try {
       if (stockOperation.mode === 'add') {
-        // Handle adding stock
-        const totalCost = parseFloat(stockOperation.totalCost);
+        // Calculate total cost automatically
+        const totalCost = calculateTotalCost;
 
-        if (isNaN(totalCost) || totalCost <= 0) {
-          return alert("Please enter a valid total cost (must be greater than 0)");
+        if (totalCost <= 0) {
+          return alert("Invalid calculation. Please check quantity and production cost.");
         }
 
         if (!stockOperation.paymentSource) {
@@ -356,7 +374,6 @@ export default function ProductsPage() {
     setStockOperation({
       mode: 'add',
       quantity: "",
-      totalCost: "",
       paymentSource: "cash",
       creditorName: "",
       creditorPhone: "",
@@ -380,7 +397,6 @@ export default function ProductsPage() {
     setStockOperation({
       mode: 'add',
       quantity: "",
-      totalCost: "",
       paymentSource: "cash",
       creditorName: "",
       creditorPhone: "",
@@ -460,6 +476,7 @@ export default function ProductsPage() {
 
   const currentProduct = editingId ? products.find(p => p.id === editingId) : null;
   const currentStock = currentProduct?.stockQuantity || 0;
+  const productionCost = currentProduct?.productionCost || 0;
 
   return (
     <div className="min-h-screen bg-gray-50 p-6">
@@ -544,14 +561,28 @@ export default function ProductsPage() {
                 }
               />
               <input
-                placeholder="Production Cost"
+                placeholder="Production Cost *"
                 type="number"
                 step="0.01"
+                required
                 className="border border-gray-300 p-3 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-black"
                 value={form.productionCost}
-                onChange={(e) =>
-                  setForm({ ...form, productionCost: e.target.value })
-                }
+                onChange={(e) => {
+                  setForm({ ...form, productionCost: e.target.value });
+                  // When production cost changes, update the form but keep the rest
+                  if (editingId) {
+                    const currentProduct = products.find(p => p.id === editingId);
+                    if (currentProduct) {
+                      const updatedProduct = {
+                        ...currentProduct,
+                        productionCost: parseFloat(e.target.value) || 0
+                      };
+                      setProducts(prev => prev.map(p => 
+                        p.id === editingId ? updatedProduct : p
+                      ));
+                    }
+                  }
+                }}
               />
               <input
                 placeholder="Selling Price *"
@@ -588,13 +619,28 @@ export default function ProductsPage() {
                     
                     {/* Current Stock Display */}
                     <div className="mb-4 p-4 bg-gray-50 rounded-lg">
-                      <p className="text-sm text-gray-600">Current Stock:</p>
-                      <p className="text-2xl font-bold text-black">{currentStock} units</p>
-                      {currentProduct?.stock?.[0]?.costPrice && (
-                        <p className="text-sm text-gray-600 mt-1">
-                          Current Avg. Cost: KSh {currentProduct.stock[0].costPrice.toFixed(2)}/unit
-                        </p>
-                      )}
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                        <div>
+                          <p className="text-sm text-gray-600">Current Stock:</p>
+                          <p className="text-2xl font-bold text-black">{currentStock} units</p>
+                        </div>
+                        <div>
+                          <p className="text-sm text-gray-600">Production Cost:</p>
+                          <p className="text-2xl font-bold text-blue-600">
+                            KSh {productionCost.toFixed(2)}
+                          </p>
+                          <p className="text-xs text-gray-500">per unit</p>
+                        </div>
+                        {currentProduct?.stock?.[0]?.costPrice && (
+                          <div>
+                            <p className="text-sm text-gray-600">Avg. Cost Price:</p>
+                            <p className="text-xl font-bold text-purple-600">
+                              KSh {currentProduct.stock[0].costPrice.toFixed(2)}
+                            </p>
+                            <p className="text-xs text-gray-500">per unit</p>
+                          </div>
+                        )}
+                      </div>
                     </div>
 
                     {/* Stock Operation Toggle */}
@@ -646,24 +692,27 @@ export default function ProductsPage() {
 
                       {stockOperation.mode === 'add' && (
                         <>
-                          <div>
-                            <label className="block text-sm font-medium text-gray-700 mb-1">
-                              Total Cost *
-                            </label>
-                            <input
-                              type="number"
-                              step="0.01"
-                              min="0.01"
-                              placeholder="Total cost for this stock addition"
-                              value={stockOperation.totalCost}
-                              onChange={(e) =>
-                                setStockOperation({ ...stockOperation, totalCost: e.target.value })
-                              }
-                              className="w-full border border-gray-300 p-3 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-black"
-                            />
-                            {stockOperation.quantity && stockOperation.totalCost && (
-                              <p className="text-xs text-gray-600 mt-1">
-                                Unit cost: KSh {(parseFloat(stockOperation.totalCost) / parseInt(stockOperation.quantity)).toFixed(2)}
+                          {/* Total Cost Display (Automatically Calculated) */}
+                          <div className="p-4 bg-blue-50 rounded-lg border border-blue-200">
+                            <div className="flex justify-between items-center">
+                              <div>
+                                <p className="text-sm text-gray-700">Total Cost:</p>
+                                <p className="text-2xl font-bold text-blue-700">
+                                  KSh {calculateTotalCost.toFixed(2)}
+                                </p>
+                              </div>
+                              <div className="text-right">
+                                <p className="text-sm text-gray-600">
+                                  {stockOperation.quantity || 0} units × KSh {productionCost.toFixed(2)}
+                                </p>
+                                <p className="text-xs text-gray-500 mt-1">
+                                  Automatically calculated
+                                </p>
+                              </div>
+                            </div>
+                            {parseInt(stockOperation.quantity) > 0 && productionCost > 0 && (
+                              <p className="text-xs text-green-600 mt-2">
+                                Unit cost: KSh {(calculateTotalCost / parseInt(stockOperation.quantity)).toFixed(2)}
                               </p>
                             )}
                           </div>
@@ -693,7 +742,7 @@ export default function ProductsPage() {
                             {stockOperation.paymentSource === "cash" && (
                               <p className="text-xs text-orange-600 mt-2 flex items-center gap-1">
                                 <span>⚠️</span>
-                                <span>This amount will be deducted from your cash balance</span>
+                                <span>KSh {calculateTotalCost.toFixed(2)} will be deducted from your cash balance</span>
                               </p>
                             )}
 
@@ -803,7 +852,7 @@ export default function ProductsPage() {
                                 </div>
 
                                 <p className="text-xs text-gray-600 mt-2">
-                                  💡 The total cost (KSh {stockOperation.totalCost || "0"}) will be added to this creditor's balance
+                                  💡 KSh {calculateTotalCost.toFixed(2)} will be added to this creditor's balance
                                 </p>
                               </div>
                             )}
@@ -866,6 +915,14 @@ export default function ProductsPage() {
                               <p className="text-xs text-gray-500">units</p>
                             </div>
                           </div>
+                          {stockOperation.mode === 'add' && calculateTotalCost > 0 && (
+                            <div className="mt-3 pt-3 border-t border-green-200">
+                              <p className="text-gray-600 font-medium">Total Cost:</p>
+                              <p className="text-xl font-bold text-green-700">
+                                KSh {calculateTotalCost.toFixed(2)}
+                              </p>
+                            </div>
+                          )}
                         </div>
                       )}
 
@@ -873,7 +930,8 @@ export default function ProductsPage() {
                       <button
                         type="button"
                         onClick={handleStockOperation}
-                        disabled={processingStock || !stockOperation.quantity}
+                        disabled={processingStock || !stockOperation.quantity || 
+                          (stockOperation.mode === 'add' && (calculateTotalCost <= 0 || productionCost <= 0))}
                         className={`w-full ${
                           stockOperation.mode === 'add' 
                             ? 'bg-green-600 hover:bg-green-700 disabled:bg-green-400' 

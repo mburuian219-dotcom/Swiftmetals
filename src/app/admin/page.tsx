@@ -19,13 +19,21 @@ import {
   Plus,
   Zap,
   Search,
-  Trash2
+  Trash2,
+  UserPlus,
+  Phone,
+  Upload,
+  Copy,
+  CreditCard,
+  Wallet,
+  Coins
 } from "lucide-react";
 
 interface Customer {
   id: number;
   name: string;
   phone?: string;
+  email?: string;
 }
 
 interface Product {
@@ -49,6 +57,9 @@ interface RestockForm {
   creditorName: string;
 }
 
+// Payment types for the new system
+type PaymentOption = 'cash' | 'partial' | 'credit';
+
 export default function AdminDashboard() {
   const [quickStats, setQuickStats] = useState<any[]>([]);
   const [notifications, setNotifications] = useState<any[]>([]);
@@ -66,21 +77,30 @@ export default function AdminDashboard() {
   const [showProductDropdown, setShowProductDropdown] = useState(false);
   const [saleItems, setSaleItems] = useState<QuickSaleItem[]>([]);
   const [currentProduct, setCurrentProduct] = useState<Product | null>(null);
-  const [currentQuantity, setCurrentQuantity] = useState(1);
-  const [currentPrice, setCurrentPrice] = useState("");
-  const [payments, setPayments] = useState<any[]>([]);
-  const [currentPayment, setCurrentPayment] = useState({
-    amount: "",
-    method: "CASH",
-    referenceId: "",
-    checkDepositDate: "",
-    dueDate: ""
-  });
-  const [dueDate, setDueDate] = useState(new Date().toISOString().split('T')[0]);
+  const [currentQuantity, setCurrentQuantity] = useState<number>(0); // Explicitly typed
+  const [currentPrice, setCurrentPrice] = useState<string>("");
   const [creating, setCreating] = useState(false);
   const [saleError, setSaleError] = useState<string | null>(null);
   const [saleSuccess, setSaleSuccess] = useState<string | null>(null);
   const [stockError, setStockError] = useState<string | null>(null);
+
+  // New Customer Creation States
+  const [showAddCustomer, setShowAddCustomer] = useState(false);
+  const [newCustomer, setNewCustomer] = useState({
+    name: "",
+    phone: "",
+    email: ""
+  });
+  const [addingCustomer, setAddingCustomer] = useState(false);
+
+  // New Payment System States
+  const [paymentOption, setPaymentOption] = useState<PaymentOption>('cash');
+  const [amountPaid, setAmountPaid] = useState<string>("");
+  const [isCreating, setIsCreating] = useState(false);
+
+  // Optimistic UI States
+  const [optimisticSale, setOptimisticSale] = useState<any>(null);
+  const [optimisticProducts, setOptimisticProducts] = useState<Product[]>([]);
 
   // Restock Modal States
   const [showRestockModal, setShowRestockModal] = useState(false);
@@ -94,9 +114,11 @@ export default function AdminDashboard() {
   const [restocking, setRestocking] = useState(false);
   const [restockError, setRestockError] = useState<string | null>(null);
 
-  // Refs for dropdown management
+  // Refs for dropdown management and debouncing
   const customerDropdownRef = useRef<HTMLDivElement>(null);
   const productDropdownRef = useRef<HTMLDivElement>(null);
+  const createSaleButtonRef = useRef<HTMLButtonElement>(null);
+ const createSaleTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   const adminSections = [
     {
@@ -139,16 +161,6 @@ export default function AdminDashboard() {
       color: "bg-gray-600",
       stats: "Last updated 2d ago",
     },
-    
-  ];
-
-  const paymentMethods = [
-    { value: "CASH", label: "Cash", color: "bg-green-100 text-green-800" },
-    { value: "MPESA", label: "M-Pesa", color: "bg-blue-100 text-blue-800" },
-    { value: "BANK", label: "Bank Transfer", color: "bg-purple-100 text-purple-800" },
-    { value: "CHECK", label: "Check", color: "bg-orange-100 text-orange-800" },
-    { value: "CARD", label: "Card Payment", color: "bg-pink-100 text-pink-800" },
-    { value: "CREDIT", label: "Credit/Pay Later", color: "bg-yellow-100 text-yellow-800" }
   ];
 
   const fetchDashboardData = useCallback(async () => {
@@ -160,7 +172,7 @@ export default function AdminDashboard() {
         fetch("/api/sales").catch(() => null)
       ]);
 
-      let customersRes = await fetch("/api/customers").catch(() => null);
+      let customersRes = await fetch("/api/customer").catch(() => null);
       if (!customersRes || !customersRes.ok) {
         customersRes = await fetch("/api/customer").catch(() => null);
       }
@@ -325,6 +337,21 @@ export default function AdminDashboard() {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [showQuickSale]);
 
+  // Reset payment option when total changes
+  useEffect(() => {
+    const total = calculateTotalAmount();
+    if (paymentOption === 'cash') {
+      setAmountPaid(total.toFixed(2));
+    } else if (paymentOption === 'credit') {
+      setAmountPaid("0");
+    } else {
+      // For partial, keep the current amount or set to empty
+      if (!amountPaid || parseFloat(amountPaid) > total) {
+        setAmountPaid("");
+      }
+    }
+  }, [saleItems, paymentOption, amountPaid]); // Added amountPaid to dependencies
+
   const filteredCustomers = useMemo(() => {
     if (!customerSearch.trim()) return customers.slice(0, 10);
     return customers.filter(c => 
@@ -356,6 +383,306 @@ export default function AdminDashboard() {
     const stock = getProductStock(product);
     return stock === 0;
   };
+
+  // ================ FIXED CUSTOMER CREATION ================
+  
+  const handleImportFromContacts = async () => {
+    try {
+      // Check if Contact Picker API is available
+      if ('contacts' in navigator && 'ContactsManager' in window) {
+        // @ts-ignore - Contact Picker API
+        const contacts = await navigator.contacts.select(['name', 'tel', 'email'], { multiple: false });
+        
+        if (contacts && contacts.length > 0) {
+          const contact = contacts[0];
+          setNewCustomer({
+            name: contact.name?.[0] || "",
+            phone: contact.tel?.[0] || "",
+            email: contact.email?.[0] || ""
+          });
+        }
+      } else {
+        // Fallback to clipboard/paste
+        try {
+          const text = await navigator.clipboard.readText();
+          if (text.includes('BEGIN:VCARD')) {
+            // Simple VCF parsing
+            const lines = text.split('\n');
+            let name = '', phone = '', email = '';
+            
+            for (const line of lines) {
+              if (line.startsWith('FN:')) name = line.substring(3);
+              if (line.startsWith('TEL;')) phone = line.split(':')[1];
+              if (line.startsWith('EMAIL;')) email = line.split(':')[1];
+            }
+            
+            setNewCustomer({ name, phone, email });
+          } else {
+            // If not VCF, maybe just a name
+            setNewCustomer(prev => ({ ...prev, name: text }));
+          }
+        } catch (clipboardError) {
+          // Show file upload option
+          const input = document.createElement('input');
+          input.type = 'file';
+          input.accept = '.vcf,.vcard,text/vcard';
+          input.onchange = (e) => {
+            const file = (e.target as HTMLInputElement).files?.[0];
+            if (file) {
+              const reader = new FileReader();
+              reader.onload = (event) => {
+                const content = event.target?.result as string;
+                // Simple VCF parsing
+                const lines = content.split('\n');
+                let name = '', phone = '', email = '';
+                
+                for (const line of lines) {
+                  if (line.startsWith('FN:')) name = line.substring(3);
+                  if (line.startsWith('TEL;')) phone = line.split(':')[1];
+                  if (line.startsWith('EMAIL;')) email = line.split(':')[1];
+                }
+                
+                setNewCustomer({ name, phone, email });
+              };
+              reader.readAsText(file);
+            }
+          };
+          input.click();
+        }
+      }
+    } catch (error) {
+      console.error("Error importing from contacts:", error);
+      setSaleError("Failed to import contact. Please enter manually.");
+      setTimeout(() => setSaleError(null), 3000);
+    }
+  };
+
+ const handleCreateCustomer = async () => {
+  if (!newCustomer.name.trim()) {
+    setSaleError("Customer name is required");
+    setTimeout(() => setSaleError(null), 3000);
+    return;
+  }
+
+  setAddingCustomer(true);
+
+  try {
+    const response = await fetch("/api/customer", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Accept": "application/json"
+      },
+      body: JSON.stringify({
+        name: newCustomer.name.trim(),
+        phone: newCustomer.phone.trim() || undefined,
+        email: newCustomer.email.trim() || undefined
+      })
+    });
+
+    // Read body ONCE only
+    const rawBody = await response.text();
+
+    let data: any = null;
+    let parseError = false;
+
+    // Try converting to JSON once
+    try {
+      data = JSON.parse(rawBody);
+    } catch {
+      parseError = true;
+    }
+
+    // If request failed
+    if (!response.ok) {
+      const errorMessage =
+        (!parseError && (data?.error || data?.message)) ||
+        rawBody ||
+        "Failed to create customer";
+
+      throw new Error(errorMessage);
+    }
+
+    // If success but response is not JSON
+    const createdCustomer = !parseError
+      ? data
+      : {
+          id: Date.now(),
+          name: newCustomer.name.trim(),
+          phone: newCustomer.phone.trim() || undefined,
+          email: newCustomer.email.trim() || undefined
+        };
+
+    // Update UI
+    setCustomers(prev => [...prev, createdCustomer]);
+    setSelectedCustomer(createdCustomer);
+    setShowAddCustomer(false);
+    setNewCustomer({ name: "", phone: "", email: "" });
+
+    setSaleSuccess("Customer added successfully!");
+    setTimeout(() => setSaleSuccess(null), 2000);
+
+  } catch (error: any) {
+    console.error("Error creating customer:", error);
+    setSaleError(error.message || "Failed to create customer");
+    setTimeout(() => setSaleError(null), 3000);
+  } finally {
+    setAddingCustomer(false);
+  }
+};
+
+  // ================ OPTIMIZED SALE CREATION ================
+
+  const createSaleMutation = async (saleData: any) => {
+    const response = await fetch("/api/sales", {
+      method: "POST",
+      headers: { 
+        "Content-Type": "application/json",
+        "Accept": "application/json"
+      },
+      body: JSON.stringify(saleData)
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      let errorMessage = "Failed to create sale";
+      
+      try {
+        const errorData = JSON.parse(errorText);
+        errorMessage = errorData.error || errorData.message || errorMessage;
+      } catch {
+        errorMessage = errorText || errorMessage;
+      }
+      
+      throw new Error(errorMessage);
+    }
+
+    return await response.json();
+  };
+
+ const handleCreateSaleOptimistic = async () => {
+  if (!selectedCustomer) {
+    setSaleError("Please select a customer");
+    setTimeout(() => setSaleError(null), 3000);
+    return;
+  }
+
+  if (saleItems.length === 0) {
+    setSaleError("Please add at least one item to the sale");
+    setTimeout(() => setSaleError(null), 3000);
+    return;
+  }
+
+  const totalAmount = calculateTotalAmount();
+  const paidAmount = parseFloat(amountPaid) || 0;
+
+  // Payment validation
+  if (paymentOption === "partial" && (!amountPaid || isNaN(paidAmount) || paidAmount <= 0)) {
+    setSaleError("Please enter a valid payment amount");
+    setTimeout(() => setSaleError(null), 3000);
+    return;
+  }
+
+  if (paymentOption === "partial" && paidAmount > totalAmount) {
+    setSaleError("Payment amount cannot exceed total amount");
+    setTimeout(() => setSaleError(null), 3000);
+    return;
+  }
+
+  // Build sale payload compatible with API
+  const saleData: any = {
+    customerId: selectedCustomer.id,
+    amount: totalAmount, // ✅ matches API
+    saleItems: saleItems.map(item => ({
+      productId: item.productId,
+      quantity: item.quantity,
+      price: item.price,
+    })),
+    date: new Date().toISOString(),
+    paymentMethod: paymentOption === "cash" || paymentOption === "partial" ? "CASH" : undefined,
+    payments:
+      paymentOption === "cash" || paymentOption === "partial"
+        ? [
+            {
+              amount: paidAmount,
+              method: "CASH",
+              status: "CLEARED",
+              paidAt: new Date().toISOString(),
+            },
+          ]
+        : [],
+    user: "CURRENT_USER_ID_OR_NAME", // replace with logged-in user
+  };
+
+  // Optimistic updates
+  setOptimisticSale(saleData);
+
+  const updatedProducts = products.map(product => {
+    const saleItem = saleItems.find(item => item.productId === product.id);
+    if (saleItem) {
+      const currentStock = getProductStock(product);
+      return {
+        ...product,
+        stock: { quantity: Math.max(0, currentStock - saleItem.quantity) },
+      };
+    }
+    return product;
+  });
+
+  setOptimisticProducts(updatedProducts);
+  setIsCreating(true);
+  setSaleError(null);
+
+  // Clear previous timeout if exists
+  if (createSaleTimeoutRef.current) clearTimeout(createSaleTimeoutRef.current);
+
+  // Debounced sale creation
+  const createSalePromise = new Promise<void>(resolve => {
+    createSaleTimeoutRef.current = setTimeout(async () => {
+      try {
+        const result = await createSaleMutation(saleData);
+
+        setSaleSuccess("Sale created successfully! 🎉");
+
+        // Reset form
+        setSelectedCustomer(null);
+        setCustomerSearch("");
+        setSaleItems([]);
+        setCurrentProduct(null);
+        setProductSearch("");
+        setCurrentQuantity(0);
+        setCurrentPrice("");
+        setPaymentOption("cash");
+        setAmountPaid("");
+
+        // Refresh dashboard
+        setTimeout(() => fetchDashboardData().catch(console.error), 1000);
+
+        setTimeout(() => {
+          setSaleSuccess(null);
+          setShowQuickSale(false);
+          setOptimisticSale(null);
+          setOptimisticProducts([]);
+          setIsCreating(false); // ✅ crucial fix
+          resolve();
+        }, 1500);
+      } catch (error: any) {
+        // Rollback optimistic updates
+        setOptimisticSale(null);
+        setOptimisticProducts([]);
+        setSaleError(error.message || "Failed to create sale");
+        setIsCreating(false);
+        resolve();
+      }
+    }, 100);
+  });
+
+  await createSalePromise;
+};
+
+
+  // Use optimistic products if available
+  const displayProducts = optimisticProducts.length > 0 ? optimisticProducts : products;
 
   const openRestockModal = (product: Product) => {
     setRestockingProduct(product);
@@ -408,61 +735,68 @@ export default function AdminDashboard() {
     setRestockError(null);
 
     try {
-      // Calculate total cost
       const totalCost = restockForm.quantity * costPrice;
 
-      // Prepare the request body to match Prisma schema
       const requestBody: any = {
         productId: restockingProduct.id,
         quantity: restockForm.quantity,
         costPrice: costPrice,
         totalCost: totalCost,
-        paymentSource: restockForm.paymentSource.toLowerCase(), // "cash" or "credit"
+        paymentSource: restockForm.paymentSource.toLowerCase(),
       };
 
-      // Only include creditor info if payment source is credit
       if (restockForm.paymentSource === "credit") {
         requestBody.creditorName = restockForm.creditorName.trim();
       }
 
-      console.log("Restock request body:", requestBody);
-
       const response = await fetch("/api/restock", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { 
+          "Content-Type": "application/json",
+          "Accept": "application/json"
+        },
         body: JSON.stringify(requestBody)
       });
 
-      const responseData = await response.json();
-      console.log("Restock response:", responseData);
-
       if (!response.ok) {
-        throw new Error(responseData.error || responseData.message || "Failed to restock product");
+        const errorText = await response.text();
+        let errorMessage = "Failed to restock product";
+        
+        try {
+          const errorData = JSON.parse(errorText);
+          errorMessage = errorData.error || errorData.message || errorMessage;
+        } catch {
+          errorMessage = errorText || errorMessage;
+        }
+        
+        throw new Error(errorMessage);
       }
 
-      console.log("Restock successful:", responseData);
+      const responseData = await response.json();
 
-      // Show success message
       setSaleSuccess(`✅ ${restockingProduct.name} restocked successfully!`);
       setTimeout(() => setSaleSuccess(null), 3000);
 
-      // Refresh products list to get updated stock
-      const productsRes = await fetch("/api/products");
-      if (productsRes.ok) {
-        const productsData = await productsRes.json();
-        setProducts(Array.isArray(productsData) ? productsData : []);
-        
-        // Update current product if it's the one being restocked
-        if (currentProduct && currentProduct.id === restockingProduct.id) {
-          const updatedProduct = (Array.isArray(productsData) ? productsData : [])
-            .find((p: Product) => p.id === restockingProduct.id);
-          if (updatedProduct) {
-            setCurrentProduct(updatedProduct);
-          }
-        }
+      // Optimistically update product stock
+      setProducts(prev => prev.map(p => 
+        p.id === restockingProduct.id 
+          ? { 
+              ...p, 
+              stock: { 
+                quantity: getProductStock(p) + restockForm.quantity 
+              } 
+            }
+          : p
+      ));
+
+      // Update current product if it's the one being restocked
+      if (currentProduct && currentProduct.id === restockingProduct.id) {
+        setCurrentProduct(prev => prev ? {
+          ...prev,
+          stock: { quantity: getProductStock(prev) + restockForm.quantity }
+        } : null);
       }
 
-      // Close modal
       closeRestockModal();
 
     } catch (error: any) {
@@ -475,12 +809,11 @@ export default function AdminDashboard() {
 
   const addItemToSale = () => {
     if (!currentProduct || currentQuantity <= 0) {
-      setSaleError("Please select a product and enter quantity");
+      setSaleError("Please select a product and enter quantity greater than 0");
       setTimeout(() => setSaleError(null), 3000);
       return;
     }
 
-    // Get the price - use entered price or fall back to product default
     let price = 0;
     if (currentPrice && currentPrice.trim() !== "") {
       price = parseFloat(currentPrice);
@@ -524,9 +857,8 @@ export default function AdminDashboard() {
       }]);
     }
 
-    // Clear all product-related states
     setCurrentProduct(null);
-    setCurrentQuantity(1);
+    setCurrentQuantity(0);
     setCurrentPrice("");
     setProductSearch("");
     setShowProductDropdown(false);
@@ -540,194 +872,6 @@ export default function AdminDashboard() {
 
   const calculateTotalAmount = () => {
     return saleItems.reduce((sum, item) => sum + (item.quantity * item.price), 0);
-  };
-
-  const calculateTotalPayments = () => {
-    return payments.reduce((total, payment) => total + Number(payment.amount || 0), 0);
-  };
-
-  const getRemainingAmount = () => {
-    return Math.max(0, calculateTotalAmount() - calculateTotalPayments());
-  };
-
-  const handleAddPayment = () => {
-    const amount = parseFloat(currentPayment.amount);
-    const remainingAmount = getRemainingAmount();
-    
-    // Validation for non-CREDIT payments
-    if (currentPayment.method !== "CREDIT") {
-      if (!currentPayment.amount || isNaN(amount) || amount <= 0) {
-        setSaleError("Please enter a valid payment amount");
-        setTimeout(() => setSaleError(null), 3000);
-        return;
-      }
-
-      if (amount > remainingAmount + 0.01) { // Small buffer for floating point
-        setSaleError(`Payment amount (KSh ${amount.toFixed(2)}) cannot exceed remaining balance of KSh ${remainingAmount.toFixed(2)}`);
-        setTimeout(() => setSaleError(null), 3000);
-        return;
-      }
-    }
-
-    // Validation for CHECK payment
-    if (currentPayment.method === "CHECK" && !currentPayment.checkDepositDate) {
-      setSaleError("Please specify check deposit date for CHECK payments");
-      setTimeout(() => setSaleError(null), 3000);
-      return;
-    }
-
-    // Validation for CREDIT payment
-    if (currentPayment.method === "CREDIT" && !currentPayment.dueDate) {
-      setSaleError("Due date is MANDATORY for credit/pay later payments");
-      setTimeout(() => setSaleError(null), 3000);
-      return;
-    }
-
-    // Add the payment
-    setPayments([
-      ...payments,
-      {
-        amount: currentPayment.method === "CREDIT" ? "0" : currentPayment.amount,
-        method: currentPayment.method,
-        referenceId: currentPayment.referenceId?.trim() || "",
-        checkDepositDate: currentPayment.checkDepositDate || "",
-        dueDate: currentPayment.dueDate || "",
-      },
-    ]);
-
-    // Reset the form
-    setCurrentPayment({
-      amount: "",
-      method: "CASH",
-      referenceId: "",
-      checkDepositDate: "",
-      dueDate: ""
-    });
-    setSaleError(null);
-    
-    // Show success message
-    setSaleSuccess("Payment added successfully!");
-    setTimeout(() => setSaleSuccess(null), 2000);
-  };
-
-  const removePayment = (index: number) => {
-    setPayments(payments.filter((_, i) => i !== index));
-  };
-
-  const handleCreateSale = async () => {
-    if (!selectedCustomer) {
-      setSaleError("Please select a customer");
-      setTimeout(() => setSaleError(null), 3000);
-      return;
-    }
-
-    if (saleItems.length === 0) {
-      setSaleError("Please add at least one item to the sale");
-      setTimeout(() => setSaleError(null), 3000);
-      return;
-    }
-
-    const totalAmount = calculateTotalAmount();
-    const totalPayments = calculateTotalPayments();
-    const remainingAmount = totalAmount - totalPayments;
-
-    if (remainingAmount > 0 && !dueDate) {
-      setSaleError("Due date is MANDATORY when there's an outstanding balance");
-      setTimeout(() => setSaleError(null), 3000);
-      return;
-    }
-
-    setCreating(true);
-    setSaleError(null);
-    setSaleSuccess("Creating sale, please wait...");
-
-    try {
-      let status: "PAID" | "PARTIAL" | "UNPAID";
-      if (remainingAmount <= 0.01) {
-        status = "PAID";
-      } else if (totalPayments > 0) {
-        status = "PARTIAL";
-      } else {
-        status = "UNPAID";
-      }
-
-      const paymentsData = payments.length > 0
-        ? payments.map(p => {
-            const isCheck = p.method?.toUpperCase() === "CHECK";
-            return {
-              amount: Number(p.amount),
-              method: p.method || "CASH",
-              referenceId: p.referenceId?.trim() || null,
-              checkDepositDate: p.checkDepositDate || null,
-              date: new Date().toISOString(),
-              status: isCheck ? "PENDING" : "COMPLETED",
-            };
-          })
-        : [];
-
-      const saleData = {
-        customerId: selectedCustomer.id,
-        amount: totalAmount,
-        status,
-        dueDate: dueDate || null,
-        saleItems: saleItems.map(item => ({
-          productId: item.productId,
-          quantity: item.quantity,
-          price: item.price,
-        })),
-        payments: paymentsData,
-      };
-
-      console.log("Creating sale with data:", saleData);
-
-      const response = await fetch("/api/sales", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(saleData)
-      });
-
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || "Failed to create sale");
-      }
-
-      const result = await response.json();
-      console.log("Sale created successfully:", result);
-
-      setSaleSuccess("Sale created successfully! 🎉");
-      
-      // Reset form
-      setSelectedCustomer(null);
-      setCustomerSearch("");
-      setSaleItems([]);
-      setPayments([]);
-      setCurrentProduct(null);
-      setProductSearch("");
-      setCurrentQuantity(1);
-      setCurrentPrice("");
-      setCurrentPayment({
-        amount: "",
-        method: "CASH",
-        referenceId: "",
-        checkDepositDate: "",
-        dueDate: ""
-      });
-      setDueDate(new Date().toISOString().split('T')[0]);
-      
-      // Refresh dashboard data
-      fetchDashboardData();
-      
-      setTimeout(() => {
-        setSaleSuccess(null);
-        setShowQuickSale(false);
-      }, 2000);
-
-    } catch (error: any) {
-      console.error("Error creating sale:", error);
-      setSaleError(error.message || "Failed to create sale");
-    } finally {
-      setCreating(false);
-    }
   };
 
   const getNotificationStyles = (type: string) => {
@@ -899,6 +1043,8 @@ export default function AdminDashboard() {
                     setSaleError(null);
                     setSaleSuccess(null);
                     setStockError(null);
+                    setOptimisticSale(null);
+                    setOptimisticProducts([]);
                   }}
                   type="button"
                   className="text-white hover:bg-white/20 p-2 rounded-lg transition-colors"
@@ -909,6 +1055,13 @@ export default function AdminDashboard() {
             </div>
 
             <div className="p-6 space-y-6">
+              {optimisticSale && (
+                <div className="bg-yellow-50 border-2 border-yellow-300 text-yellow-800 px-4 py-3 rounded-lg flex items-center gap-2">
+                  <Info className="w-5 h-5 flex-shrink-0" />
+                  <span>Creating sale... This may take a moment.</span>
+                </div>
+              )}
+
               {saleError && (
                 <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg flex items-start gap-2">
                   <AlertTriangle className="w-5 h-5 flex-shrink-0 mt-0.5" />
@@ -928,9 +1081,20 @@ export default function AdminDashboard() {
                 </div>
               )}
 
-              {/* Customer Selection */}
+              {/* Customer Selection with Add Customer Option */}
               <div className="relative" ref={customerDropdownRef}>
-                <label className="block text-sm font-semibold text-black mb-2">Customer *</label>
+                <div className="flex items-center justify-between mb-2">
+                  <label className="block text-sm font-semibold text-black">Customer *</label>
+                  <button
+                    type="button"
+                    onClick={() => setShowAddCustomer(true)}
+                    className="text-sm text-blue-600 hover:text-blue-800 font-medium flex items-center gap-1"
+                  >
+                    <UserPlus className="w-4 h-4" />
+                    Add Customer
+                  </button>
+                </div>
+                
                 <div className="relative">
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-black" />
                   <input
@@ -980,6 +1144,87 @@ export default function AdminDashboard() {
                 )}
               </div>
 
+              {/* Add Customer Modal/Form */}
+              {showAddCustomer && (
+                <div className="bg-blue-50 border-2 border-blue-200 rounded-lg p-4 space-y-4">
+                  <div className="flex items-center justify-between">
+                    <h4 className="font-semibold text-blue-900">Add New Customer</h4>
+                    <button
+                      onClick={() => setShowAddCustomer(false)}
+                      type="button"
+                      className="text-blue-600 hover:text-blue-800"
+                    >
+                      <X className="w-5 h-5" />
+                    </button>
+                  </div>
+                  
+                  <div className="space-y-3">
+                    <div>
+                      <label className="block text-xs font-medium text-black mb-1">Name *</label>
+                      <input
+                        type="text"
+                        value={newCustomer.name}
+                        onChange={(e) => setNewCustomer({...newCustomer, name: e.target.value})}
+                        className="w-full px-3 py-2 border border-blue-300 rounded-lg focus:border-blue-500 text-black"
+                        placeholder="Enter customer name"
+                      />
+                    </div>
+                    
+                    <div>
+                      <label className="block text-xs font-medium text-black mb-1">Phone</label>
+                      <input
+                        type="tel"
+                        value={newCustomer.phone}
+                        onChange={(e) => setNewCustomer({...newCustomer, phone: e.target.value})}
+                        className="w-full px-3 py-2 border border-blue-300 rounded-lg focus:border-blue-500 text-black"
+                        placeholder="Phone number"
+                      />
+                    </div>
+                    
+                    <div>
+                      <label className="block text-xs font-medium text-black mb-1">Email</label>
+                      <input
+                        type="email"
+                        value={newCustomer.email}
+                        onChange={(e) => setNewCustomer({...newCustomer, email: e.target.value})}
+                        className="w-full px-3 py-2 border border-blue-300 rounded-lg focus:border-blue-500 text-black"
+                        placeholder="Email address"
+                      />
+                    </div>
+                  </div>
+                  
+                  <div className="flex items-center gap-2 pt-2">
+                    <button
+                      onClick={handleImportFromContacts}
+                      type="button"
+                      className="flex-1 flex items-center justify-center gap-2 px-3 py-2 bg-white border border-blue-300 text-blue-700 rounded-lg hover:bg-blue-50 text-sm"
+                    >
+                      <Phone className="w-4 h-4" />
+                      Import Contact
+                    </button>
+                    
+                    <button
+                      onClick={handleCreateCustomer}
+                      disabled={addingCustomer || !newCustomer.name.trim()}
+                      type="button"
+                      className="flex-1 flex items-center justify-center gap-2 px-3 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 text-sm"
+                    >
+                      {addingCustomer ? (
+                        <>
+                          <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
+                          Adding...
+                        </>
+                      ) : (
+                        <>
+                          <UserPlus className="w-4 h-4" />
+                          Add Customer
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </div>
+              )}
+
               {/* Product Selection */}
               <div>
                 <label className="block text-sm font-semibold text-black mb-2">Add Products</label>
@@ -1019,6 +1264,10 @@ export default function AdminDashboard() {
                                 setProductSearch("");
                                 setShowProductDropdown(false);
                                 setStockError(null);
+                                // Focus on quantity input
+                                setTimeout(() => {
+                                  document.getElementById('quantity-input')?.focus();
+                                }, 100);
                               }}
                               className="w-full text-left px-4 py-3 hover:bg-blue-50 border-b last:border-b-0 transition-colors"
                             >
@@ -1039,7 +1288,7 @@ export default function AdminDashboard() {
 
                   {currentProduct && (
                     <div className="bg-blue-50 border-2 border-blue-200 rounded-lg p-4">
-                      {/* Stock Info and Restock Button - Always Visible */}
+                      {/* Stock Info and Restock Button */}
                       <div className={`mb-4 p-3 rounded-lg border-2 ${
                         isOutOfStock(currentProduct) 
                           ? 'bg-red-50 border-red-300' 
@@ -1109,7 +1358,7 @@ export default function AdminDashboard() {
                           onClick={() => {
                             setCurrentProduct(null);
                             setCurrentPrice("");
-                            setCurrentQuantity(1);
+                            setCurrentQuantity(0);
                             setProductSearch("");
                           }}
                           type="button"
@@ -1122,14 +1371,20 @@ export default function AdminDashboard() {
                         <div>
                           <label className="block text-xs font-semibold text-black mb-1">Quantity *</label>
                           <input
+                            id="quantity-input"
                             type="number"
                             min="0"
                             value={currentQuantity}
                             onChange={(e) => {
                               const val = parseInt(e.target.value);
-                              setCurrentQuantity(isNaN(val) || val < 1 ? 1 : val);
+                              setCurrentQuantity(isNaN(val) ? 0 : Math.max(0, val));
                             }}
                             className="w-full px-3 py-2 border-2 border-slate-200 rounded-lg focus:border-blue-500 text-black placeholder-black"
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter' && currentQuantity > 0) {
+                                addItemToSale();
+                              }
+                            }}
                           />
                         </div>
                         <div>
@@ -1220,182 +1475,150 @@ export default function AdminDashboard() {
                 </div>
               )}
 
-              {/* Payment Details */}
+              {/* NEW PAYMENT OPTIONS OVERHAUL */}
               {saleItems.length > 0 && (
                 <div className="space-y-4">
                   <h3 className="font-semibold text-black flex items-center gap-2">
                     <DollarSign className="w-5 h-5 text-blue-600" />
-                    Payment Details
+                    Payment Options
                   </h3>
                   
-                  <div className="bg-gray-50 p-4 rounded-lg space-y-3">
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                      <div>
-                        <label className="block text-sm font-medium text-black mb-1">Payment Method *</label>
-                        <select
-                          value={currentPayment.method}
-                          onChange={(e) => setCurrentPayment({
-                            ...currentPayment,
-                            method: e.target.value as any,
-                            amount: e.target.value === "CREDIT" ? "0" : currentPayment.amount,
-                          })}
-                          className="w-full px-3 py-2 border-2 border-slate-200 rounded-lg focus:border-blue-500 text-black"
-                        >
-                          {paymentMethods.map(method => (
-                            <option key={method.value} value={method.value}>{method.label}</option>
-                          ))}
-                        </select>
-                      </div>
-
-                      {currentPayment.method !== "CREDIT" && (
-                        <div>
-                          <label className="block text-sm font-medium text-black mb-1">Amount (KSh) *</label>
-                          <input
-                            type="number"
-                            min="0"
-                            step="0.01"
-                            max={getRemainingAmount()}
-                            value={currentPayment.amount}
-                            onChange={(e) => setCurrentPayment({...currentPayment, amount: e.target.value})}
-                            placeholder={getRemainingAmount().toFixed(2)}
-                            className="w-full px-3 py-2 border-2 border-slate-200 rounded-lg focus:border-blue-500 text-black placeholder-black"
-                          />
-                          <div className="text-xs text-black mt-1">
-                            Max: KSh {getRemainingAmount().toLocaleString()}
-                          </div>
-                        </div>
-                      )}
-
-                      {["MPESA", "BANK", "CARD"].includes(currentPayment.method) && (
-                        <div>
-                          <label className="block text-sm font-medium text-black mb-1">
-                            Transaction Reference <span className="text-gray-500">(Optional)</span>
-                          </label>
-                          <input
-                            type="text"
-                            value={currentPayment.referenceId}
-                            onChange={(e) => setCurrentPayment({...currentPayment, referenceId: e.target.value})}
-                            placeholder={
-                              currentPayment.method === "MPESA" ? "e.g., QC12ABC345" :
-                              currentPayment.method === "BANK" ? "e.g., TXN123456789" :
-                              "e.g., AUTH987654"
-                            }
-                            className="w-full px-3 py-2 border-2 border-slate-200 rounded-lg focus:border-blue-500 text-black placeholder-black"
-                          />
-                        </div>
-                      )}
-
-                      {currentPayment.method === "CHECK" && (
-                        <div>
-                          <label className="block text-sm font-medium text-black mb-1">
-                            Check Deposit Date * <span className="text-red-600">(Required)</span>
-                          </label>
-                          <input
-                            type="date"
-                            value={currentPayment.checkDepositDate}
-                            onChange={(e) => setCurrentPayment({...currentPayment, checkDepositDate: e.target.value})}
-                            min={new Date().toISOString().split('T')[0]}
-                            className="w-full px-3 py-2 border-2 border-slate-200 rounded-lg focus:border-blue-500 text-black"
-                          />
-                        </div>
-                      )}
-
-                      {(currentPayment.method === "CREDIT" || 
-                        (currentPayment.amount && parseFloat(currentPayment.amount) < getRemainingAmount())) && (
-                        <div>
-                          <label className="block text-sm font-medium text-black mb-1">
-                            Due Date * <span className="text-red-600">(Required)</span>
-                          </label>
-                          <input
-                            type="date"
-                            value={currentPayment.dueDate}
-                            onChange={(e) => setCurrentPayment({...currentPayment, dueDate: e.target.value})}
-                            min={new Date().toISOString().split('T')[0]}
-                            className="w-full px-3 py-2 border-2 border-slate-200 rounded-lg focus:border-blue-500 text-black"
-                          />
-                        </div>
-                      )}
-                    </div>
-
+                  <div className="grid grid-cols-3 gap-3">
+                    {/* Cash Option */}
                     <button
-                      onClick={handleAddPayment}
                       type="button"
-                      className="w-full bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 font-medium flex items-center justify-center gap-2 transition-all"
+                      onClick={() => {
+                        setPaymentOption('cash');
+                        setAmountPaid(calculateTotalAmount().toFixed(2));
+                      }}
+                      className={`p-4 rounded-lg border-2 flex flex-col items-center justify-center gap-2 transition-all ${
+                        paymentOption === 'cash'
+                          ? 'border-blue-500 bg-blue-50'
+                          : 'border-gray-200 hover:border-blue-300 hover:bg-blue-25'
+                      }`}
                     >
-                      <Plus className="w-5 h-5" />
-                      Add Payment
+                      <div className={`p-3 rounded-full ${
+                        paymentOption === 'cash' ? 'bg-blue-100' : 'bg-gray-100'
+                      }`}>
+                        <Coins className={`w-6 h-6 ${
+                          paymentOption === 'cash' ? 'text-blue-600' : 'text-gray-400'
+                        }`} />
+                      </div>
+                      <span className={`font-medium ${
+                        paymentOption === 'cash' ? 'text-blue-700' : 'text-gray-700'
+                      }`}>Cash</span>
+                      <span className="text-sm text-gray-500">Full payment</span>
+                    </button>
+
+                    {/* Partial Option */}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setPaymentOption('partial');
+                        setAmountPaid("");
+                      }}
+                      className={`p-4 rounded-lg border-2 flex flex-col items-center justify-center gap-2 transition-all ${
+                        paymentOption === 'partial'
+                          ? 'border-green-500 bg-green-50'
+                          : 'border-gray-200 hover:border-green-300 hover:bg-green-25'
+                      }`}
+                    >
+                      <div className={`p-3 rounded-full ${
+                        paymentOption === 'partial' ? 'bg-green-100' : 'bg-gray-100'
+                      }`}>
+                        <Wallet className={`w-6 h-6 ${
+                          paymentOption === 'partial' ? 'text-green-600' : 'text-gray-400'
+                        }`} />
+                      </div>
+                      <span className={`font-medium ${
+                        paymentOption === 'partial' ? 'text-green-700' : 'text-gray-700'
+                      }`}>Partial</span>
+                      <span className="text-sm text-gray-500">Pay some now</span>
+                    </button>
+
+                    {/* Credit Option */}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setPaymentOption('credit');
+                        setAmountPaid("0");
+                      }}
+                      className={`p-4 rounded-lg border-2 flex flex-col items-center justify-center gap-2 transition-all ${
+                        paymentOption === 'credit'
+                          ? 'border-yellow-500 bg-yellow-50'
+                          : 'border-gray-200 hover:border-yellow-300 hover:bg-yellow-25'
+                      }`}
+                    >
+                      <div className={`p-3 rounded-full ${
+                        paymentOption === 'credit' ? 'bg-yellow-100' : 'bg-gray-100'
+                      }`}>
+                        <CreditCard className={`w-6 h-6 ${
+                          paymentOption === 'credit' ? 'text-yellow-600' : 'text-gray-400'
+                        }`} />
+                      </div>
+                      <span className={`font-medium ${
+                        paymentOption === 'credit' ? 'text-yellow-700' : 'text-gray-700'
+                      }`}>Credit</span>
+                      <span className="text-sm text-gray-500">Pay later</span>
                     </button>
                   </div>
 
-                  {/* Payment List */}
-                  {payments.length > 0 && (
-                    <div className="border-2 border-slate-200 rounded-lg p-4 bg-white">
-                      <h4 className="font-semibold text-black mb-3">Payments Added:</h4>
-                      <div className="space-y-2 mb-3">
-                        {payments.map((payment, index) => (
-                          <div key={index} className="flex items-center justify-between bg-slate-50 p-3 rounded-lg border border-slate-200">
-                            <div className="flex-1">
-                              <div className="flex items-center gap-2 mb-1">
-                                <span className={`px-2 py-1 rounded-full text-xs font-medium ${
-                                  paymentMethods.find(m => m.value === payment.method)?.color
-                                }`}>
-                                  {payment.method}
-                                </span>
-                                {payment.referenceId && (
-                                  <span className="text-xs text-black">Ref: {payment.referenceId}</span>
-                                )}
-                              </div>
-                              <div className="text-sm font-semibold text-black">
-                                KSh {Number(payment.amount || 0).toLocaleString()}
-                              </div>
-                              {payment.dueDate && (
-                                <div className="text-xs text-orange-600">Due: {payment.dueDate}</div>
-                              )}
-                            </div>
-                            <button
-                              onClick={() => removePayment(index)}
-                              type="button"
-                              className="text-red-600 hover:text-red-800 p-2 hover:bg-red-50 rounded transition-colors"
-                            >
-                              <Trash2 className="w-5 h-5" />
-                            </button>
-                          </div>
-                        ))}
+                  {/* Payment Amount Input (for partial only) */}
+                  {paymentOption === 'partial' && (
+                    <div className="bg-green-50 border-2 border-green-200 rounded-lg p-4">
+                      <label className="block text-sm font-medium text-black mb-2">
+                        Amount Paid (KSh) *
+                      </label>
+                      <div className="relative">
+                        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500">KSh</span>
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          max={calculateTotalAmount()}
+                          value={amountPaid}
+                          onChange={(e) => setAmountPaid(e.target.value)}
+                          placeholder="Enter amount paid"
+                          className="w-full pl-12 pr-4 py-3 border-2 border-green-300 rounded-lg focus:border-green-500 focus:ring-2 focus:ring-green-200 text-black placeholder-gray-400"
+                        />
                       </div>
-                      <div className="pt-3 border-t-2 border-slate-200 space-y-2">
-                        <div className="flex justify-between text-sm">
-                          <span className="text-black">Total Amount:</span>
-                          <span className="font-semibold text-black">KSh {calculateTotalAmount().toLocaleString()}</span>
-                        </div>
-                        <div className="flex justify-between text-sm">
-                          <span className="text-black">Total Payments:</span>
-                          <span className="font-semibold text-green-600">KSh {calculateTotalPayments().toLocaleString()}</span>
-                        </div>
-                        <div className="flex justify-between pt-2 border-t">
-                          <span className="font-bold text-black">Remaining Balance:</span>
-                          <span className={`font-bold text-lg ${getRemainingAmount() > 0 ? 'text-red-600' : 'text-green-600'}`}>
-                            KSh {getRemainingAmount().toLocaleString()}
-                          </span>
-                        </div>
+                      <div className="text-sm text-gray-600 mt-2">
+                        Remaining: KSh {Math.max(0, calculateTotalAmount() - (parseFloat(amountPaid) || 0)).toLocaleString()}
                       </div>
                     </div>
                   )}
 
-                  {/* Due Date for Outstanding Balance */}
-                  {getRemainingAmount() > 0 && (
-                    <div className="bg-yellow-50 border-2 border-yellow-200 rounded-lg p-4">
-                      <label className="block text-sm font-semibold text-black mb-2">
-                        Payment Due Date * <span className="text-red-600">(MANDATORY for outstanding balance)</span>
-                      </label>
-                      <input
-                        type="date"
-                        value={dueDate}
-                        onChange={(e) => setDueDate(e.target.value)}
-                        min={new Date().toISOString().split('T')[0]}
-                        className="w-full px-4 py-3 border-2 border-yellow-300 rounded-lg focus:border-yellow-500 focus:ring-2 focus:ring-yellow-200"
-                      />
+                  {/* Payment Summary */}
+                  <div className="bg-gray-50 border-2 border-gray-200 rounded-lg p-4 space-y-3">
+                    <div className="flex justify-between items-center">
+                      <span className="text-black">Total Amount:</span>
+                      <span className="font-bold text-black">KSh {calculateTotalAmount().toLocaleString()}</span>
                     </div>
-                  )}
+                    
+                    <div className="flex justify-between items-center">
+                      <span className="text-black">
+                        {paymentOption === 'cash' ? 'Amount Paid:' :
+                         paymentOption === 'partial' ? 'Amount Paid:' : 'Payment Status:'}
+                      </span>
+                      <span className={`font-bold ${
+                        paymentOption === 'cash' ? 'text-green-600' :
+                        paymentOption === 'partial' ? 'text-green-600' : 'text-yellow-600'
+                      }`}>
+                        {paymentOption === 'cash' ? `KSh ${calculateTotalAmount().toLocaleString()}` :
+                         paymentOption === 'partial' ? `KSh ${(parseFloat(amountPaid) || 0).toLocaleString()}` :
+                         'Credit (Pay Later)'}
+                      </span>
+                    </div>
+                    
+                    {paymentOption === 'partial' && (
+                      <div className="flex justify-between items-center pt-2 border-t border-gray-300">
+                        <span className="font-bold text-black">Remaining Balance:</span>
+                        <span className="font-bold text-red-600">
+                          KSh {Math.max(0, calculateTotalAmount() - (parseFloat(amountPaid) || 0)).toLocaleString()}
+                        </span>
+                      </div>
+                    )}
+                  </div>
                 </div>
               )}
 
@@ -1407,20 +1630,24 @@ export default function AdminDashboard() {
                     setSaleError(null);
                     setSaleSuccess(null);
                     setStockError(null);
+                    setOptimisticSale(null);
+                    setOptimisticProducts([]);
                   }}
                   type="button"
-                  disabled={creating}
+                  disabled={isCreating}
                   className="flex-1 px-6 py-3 border-2 border-slate-300 text-black rounded-lg hover:bg-slate-50 font-medium transition-colors disabled:opacity-50"
                 >
                   Cancel
                 </button>
                 <button
-                  onClick={handleCreateSale}
+                  ref={createSaleButtonRef}
+                  onClick={handleCreateSaleOptimistic}
                   type="button"
-                  disabled={creating || !selectedCustomer || saleItems.length === 0}
+                  disabled={isCreating || !selectedCustomer || saleItems.length === 0 || 
+                    (paymentOption === 'partial' && (!amountPaid || parseFloat(amountPaid) <= 0))}
                   className="flex-1 px-6 py-3 bg-gradient-to-r from-blue-600 to-blue-700 text-white rounded-lg hover:from-blue-700 hover:to-blue-800 font-medium transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 shadow-lg"
                 >
-                  {creating ? (
+                  {isCreating ? (
                     <>
                       <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
                       Creating Sale...
