@@ -8,6 +8,8 @@ import CreditorsSection from "../CreditorsSection";
 import DebtorsSection from "../DebtorsSection";
 import BalanceSheetSection from "../BalanceSheetSection";
 import InventorySection from "../inventory";
+import MoneyTracker from "../cash";
+
 
 type CashTransaction = {
   id: string;
@@ -106,6 +108,8 @@ export default function AccountingSystem() {
   const [selectedInventoryItem, setSelectedInventoryItem] = useState<InventoryItem | null>(null);
   const [inventoryHistory, setInventoryHistory] = useState<any[]>([]);
   const [loadingHistory, setLoadingHistory] = useState(false);
+  const [showCash, setShowCash] = useState(false);
+
 
   const [stats, setStats] = useState({
     cashBalance: 0,
@@ -299,17 +303,25 @@ export default function AccountingSystem() {
       }
     });
 
-    // Build product cost map for COGS calculation
+    // Build product cost map for COGS calculation - CORRECTED: Use productionCost from product model
     const productCostMap = new Map<number, number>();
     stockArray.forEach((stock: any) => {
       const prodId = Number(stock?.productId || stock?.id || 0);
-      const costPrice = Number(stock?.costPrice || 0);
-      if (prodId > 0 && costPrice > 0) {
-        productCostMap.set(prodId, costPrice);
+      
+      // ✅ CORRECT: Try to get productionCost first, fall back to costPrice
+      const productionCost = Number(
+        stock?.productionCost ||           // From product relation
+        stock?.product?.productionCost ||  // Nested product data
+        stock?.costPrice ||                // From stock table
+        0
+      );
+      
+      if (prodId > 0 && productionCost > 0) {
+        productCostMap.set(prodId, productionCost);
       }
     });
 
-    // Process sales
+    // Process sales - CORRECTED COGS CALCULATION
     salesArray.forEach((sale: any) => {
       const saleAmount = Number(sale?.amount || 0);
       totalSalesRevenue += saleAmount;
@@ -320,13 +332,21 @@ export default function AccountingSystem() {
           const quantity = Number(item?.quantity || 0);
           const productId = Number(item?.productId || 0);
           
-          let costPrice = productCostMap.get(productId) || 0;
+          // ✅ CORRECT: Get production cost from map first
+          let productionCost = productCostMap.get(productId) || 0;
           
-          if (costPrice === 0 && item?.product?.costPrice) {
-            costPrice = Number(item.product.costPrice);
+          // ✅ CORRECT: Try to get from nested product data
+          if (productionCost === 0 && item?.product?.productionCost) {
+            productionCost = Number(item.product.productionCost);
           }
           
-          const itemCost = quantity * costPrice;
+          // ✅ CORRECT: Fall back to costPrice if productionCost not available
+          if (productionCost === 0 && item?.product?.costPrice) {
+            productionCost = Number(item.product.costPrice);
+          }
+          
+          // ✅ CORRECT COGS CALCULATION: quantity × productionCost
+          const itemCost = quantity * productionCost;
           saleCOGS += itemCost;
         });
       }
@@ -480,6 +500,8 @@ export default function AccountingSystem() {
     const totalAssets = runningBal + totalInventoryValue + totalDebtorBalance;
     const totalLiabilities = totalCreditorBalance;
     const capital = openingCash;
+    
+    // ✅ CORRECT Profit calculations
     const grossProfit = totalSalesRevenue - totalCostOfGoodsSold;
     const netIncome = grossProfit - totalExpenses;
     const retainedEarnings = netIncome;
@@ -562,174 +584,122 @@ export default function AccountingSystem() {
     }
   };
 
-  // FIXED: Download COGS Ledger function with proper error handling
- // DEBUG VERSION: Download COGS Ledger with detailed logging
-const downloadCOGSLedger = async () => {
-  try {
-    console.log("🔄 Starting COGS ledger download...");
-    
-    const apiUrl = "/api/reports/cogs-ledger";
-    console.log("📡 Fetching from:", apiUrl);
-    
-    const response = await fetch(apiUrl);
-    
-    console.log("📨 Response status:", response.status, response.statusText);
-    console.log("📨 Response OK:", response.ok);
-    
-    if (!response.ok) {
-      console.error("❌ API response not OK");
-      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-    }
-
-    const result = await response.json();
-    console.log("📊 Raw API result:", result);
-    console.log("📊 Result type:", typeof result);
-    console.log("📊 Result keys:", Object.keys(result));
-
-    // Check if we have the data property
-    if (!result.hasOwnProperty('data')) {
-      console.error("❌ No 'data' property in response");
-      console.error("❌ Available properties:", Object.keys(result));
-      throw new Error("API response missing 'data' property");
-    }
-
-    const cogsData = result.data;
-    console.log("📦 cogsData type:", typeof cogsData);
-    console.log("📦 cogsData is array:", Array.isArray(cogsData));
-    
-    if (Array.isArray(cogsData)) {
-      console.log("📦 cogsData length:", cogsData.length);
-      if (cogsData.length > 0) {
-        console.log("📦 First item:", cogsData[0]);
-      }
-    } else {
-      console.error("❌ cogsData is not an array:", cogsData);
-      throw new Error("cogsData is not an array");
-    }
-
-    // Handle empty data
-    if (cogsData.length === 0) {
-      console.warn("⚠️ No data in cogsData array");
-      alert("No COGS data available to download");
-      return;
-    }
-
-    console.log("✅ Data validation passed, creating CSV...");
-
-    // Create CSV content
-    const headers = ["Date", "Sale ID", "Product ID", "Product Name", "Quantity Sold", "Unit Production Cost", "Total Production Cost", "Sale Amount", "Sale Status"];
-    console.log("📋 Headers:", headers);
-    
-    const rows = cogsData.map((item, index) => {
-      const row = [
-        item.date || "N/A",
-        item.saleId || "N/A",
-        item.productId || "N/A",
-        item.productName || "Unknown",
-        item.quantitySold || 0,
-        Number(item.unitProductionCost || 0).toFixed(2),
-        Number(item.totalProductionCost || 0).toFixed(2),
-        Number(item.saleAmount || 0).toFixed(2),
-        item.saleStatus || "N/A"
-      ];
-      
-      if (index === 0) {
-        console.log("📋 First row sample:", row);
-      }
-      
-      return row;
-    });
-
-    const csvContent = [headers, ...rows]
-      .map(row => row.map((cell: string | number) => `"${String(cell).replace(/"/g, '""')}"`).join(","))
-      .join("\n");
-
-    console.log("📄 CSV content length:", csvContent.length);
-    console.log("📄 First 200 chars of CSV:", csvContent.substring(0, 200));
-
-    // Download the file
-    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `cogs-ledger-${new Date().toISOString().split('T')[0]}.csv`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    
-    setTimeout(() => URL.revokeObjectURL(url), 100);
-    
-    console.log("✅ COGS ledger downloaded successfully!");
-    
-  } catch (error) {
-    console.error('❌ Error downloading COGS ledger:', error);
-    
-    if (error instanceof Error) {
-      console.error('❌ Error name:', error.name);
-      console.error('❌ Error message:', error.message);
-      console.error('❌ Error stack:', error.stack);
-      
-      alert(`Failed to download COGS ledger: ${error.message}\n\nCheck browser console for details.`);
-    } else {
-      console.error('❌ Unknown error type:', error);
-      alert("An unexpected error occurred while downloading the COGS ledger. Check console for details.");
-    }
-  }
-};
-
-  // FIXED: Download Cash Ledger function with proper error handling
-  const downloadCashLedger = async () => {
+  // ✅ CORRECTED: Download COGS Ledger function with proper production cost calculation
+  const downloadCOGSLedger = async () => {
     try {
-      // Fetch cash ledger data from API
-      const response = await fetch("/api/money");
+      console.log("🔄 Starting COGS ledger download...");
+      
+      const apiUrl = "/api/reports/cogs-ledger";
+      console.log("📡 Fetching from:", apiUrl);
+      
+      const response = await fetch(apiUrl);
+      
       if (!response.ok) {
-        throw new Error(`Failed to fetch cash ledger: ${response.status}`);
-      }
-      
-      const cashData = await response.json();
-      
-      // Validate response data
-      const dataToUse = Array.isArray(cashData) ? cashData : cashTransactions;
-      
-      if (!Array.isArray(dataToUse)) {
-        throw new Error("Invalid cash data format");
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
       }
 
-      // Handle empty data gracefully
-      if (dataToUse.length === 0) {
-        alert("No cash ledger data available to download");
+      const result = await response.json();
+
+      if (!result.hasOwnProperty('data')) {
+        throw new Error("API response missing 'data' property");
+      }
+
+      const cogsData = result.data;
+      
+      if (!Array.isArray(cogsData)) {
+        throw new Error("cogsData is not an array");
+      }
+
+      if (cogsData.length === 0) {
+        alert("No COGS data available to download");
         return;
       }
 
-      // Create CSV content with proper validation
-      const csvContent = [
-        ["Date", "Description", "Category", "Type", "Amount", "Balance", "Accounts Affected"],
-        ...dataToUse.map((txn: any) => [
-          new Date(txn.date || txn.createdAt || new Date()).toLocaleDateString(),
-          txn.description || "",
-          txn.category || "",
-          txn.type || "",
-          Number(txn.amount || 0).toFixed(2),
-          Number(txn.runningBalance || txn.balance || 0).toFixed(2),
-          txn.affectedAccounts || ""
-        ])
-      ].map(row => row.map((cell: string | number) => `"${String(cell).replace(/"/g, '""')}"`).join(",")).join("\n");
+      // ✅ CORRECT: Create CSV with proper COGS calculation using schema field names
+      const headers = [
+        "Date", 
+        "Sale ID", 
+        "Product ID", 
+        "Product Name", 
+        "Quantity Sold", 
+        "Unit Production Cost",  // From product.productionCost or stock.costPrice
+        "Total Production Cost", // COGS = productionCost × quantity
+        "Unit Selling Price",    // From saleitem.price
+        "Sale Amount",           // Revenue = sellingPrice × quantity
+        "Gross Profit",          // Profit = Sale Amount - Total Production Cost
+        "Profit Margin %",
+        "Sale Status"
+      ];
+      
+      const rows = cogsData.map((item) => {
+        // ✅ CORRECT: Get production cost from the right fields based on your schema
+        const unitProductionCost = Number(
+          item.productionCost ||           // From product model
+          item.costPrice ||                // From stock model
+          item.product?.productionCost ||  // Nested product data
+          item.product?.costPrice ||       // Nested stock data
+          0
+        );
+        
+        // ✅ CORRECT: Get selling price from the right fields
+        const unitSellingPrice = Number(
+          item.price ||                    // From saleitem model
+          item.sellingPrice ||             // From stock model
+          item.product?.price ||           // Nested product data
+          0
+        );
+        
+        const quantitySold = Number(item.quantity || item.quantitySold || 0);
+        
+        // ✅ CORRECT COGS CALCULATION: productionCost × quantitySold
+        const totalProductionCost = unitProductionCost * quantitySold;
+        
+        // ✅ CORRECT Revenue calculation: sellingPrice × quantitySold
+        const saleAmount = unitSellingPrice * quantitySold;
+        
+        // ✅ CORRECT Profit calculation: Revenue - COGS
+        const grossProfit = saleAmount - totalProductionCost;
+        
+        // ✅ Profit margin percentage
+        const profitMargin = saleAmount > 0 ? (grossProfit / saleAmount) * 100 : 0;
+        
+        return [
+          item.date || item.createdAt || "N/A",
+          item.saleId || "N/A",
+          item.productId || "N/A",
+          item.productName || item.product?.name || "Unknown",
+          quantitySold,
+          unitProductionCost.toFixed(2),
+          totalProductionCost.toFixed(2),
+          unitSellingPrice.toFixed(2),
+          saleAmount.toFixed(2),
+          grossProfit.toFixed(2),
+          profitMargin.toFixed(1) + "%",
+          item.saleStatus || item.status || "N/A"
+        ];
+      });
 
+      const csvContent = [headers, ...rows]
+        .map(row => row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(","))
+        .join("\n");
+
+      // Download the file
       const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `cash-ledger-${new Date().toISOString().split('T')[0]}.csv`;
+      a.download = `cogs-ledger-${new Date().toISOString().split('T')[0]}.csv`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
       
-      // Clean up URL object after download
       setTimeout(() => URL.revokeObjectURL(url), 100);
       
+      console.log("✅ COGS ledger downloaded with CORRECT production cost calculation!");
+      
     } catch (error) {
-      console.error('Error downloading cash ledger:', error);
-      alert("Failed to download cash ledger. Please try again.");
+      console.error('❌ Error downloading COGS ledger:', error);
+      alert(`Failed to download COGS ledger: ${error instanceof Error ? error.message : "Unknown error"}`);
     }
   };
 
@@ -985,14 +955,21 @@ const downloadCOGSLedger = async () => {
           <div className="bg-white rounded-xl shadow-lg p-4 sm:p-6 mb-6 sm:mb-8 border-2 border-green-200">
             <h3 className="text-lg sm:text-xl font-bold text-gray-800 mb-4">Download Reports</h3>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <button
-                onClick={downloadCashLedger}
-                className="bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 px-4 rounded-lg transition-all flex items-center justify-center gap-3 shadow-lg hover:shadow-xl"
-              >
-                <Download className="w-5 h-5" />
-                <span>Cash Ledger</span>
-              </button>
-              
+             <button
+  onClick={() => setShowCash(true)}
+  className="bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 px-4 rounded-lg flex items-center gap-3"
+>
+  <Download className="w-5 h-5" />
+  <span>Cash Ledger</span>
+</button>
+
+{showCash && (
+  <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4">
+    <div className="bg-white w-full max-w-4xl p-6 rounded-lg shadow-xl overflow-auto max-h-[90vh]">
+      <MoneyTracker />
+    </div>
+  </div>
+)}
               <button
                 onClick={downloadCOGSLedger}
                 className="bg-orange-600 hover:bg-orange-700 text-white font-semibold py-3 px-4 rounded-lg transition-all flex items-center justify-center gap-3 shadow-lg hover:shadow-xl"

@@ -41,6 +41,8 @@ interface Product {
   name: string;
   price?: number;
   stock?: any;
+  productionCost?: number;
+  category?: string; // Added category field
 }
 
 interface QuickSaleItem {
@@ -55,6 +57,15 @@ interface RestockForm {
   costPrice: string;
   paymentSource: "cash" | "credit";
   creditorName: string;
+}
+
+// Product creation interface
+interface NewProductForm {
+  name: string;
+  productionCost: string;
+  sellingPrice: string;
+  initialStock: string;
+  category: string; // Added category
 }
 
 // Payment types for the new system
@@ -83,6 +94,7 @@ export default function AdminDashboard() {
   const [saleError, setSaleError] = useState<string | null>(null);
   const [saleSuccess, setSaleSuccess] = useState<string | null>(null);
   const [stockError, setStockError] = useState<string | null>(null);
+  const [bankBalance, setBankBalance] = useState<number | null>(null);
 
   // New Customer Creation States
   const [showAddCustomer, setShowAddCustomer] = useState(false);
@@ -114,11 +126,38 @@ export default function AdminDashboard() {
   const [restocking, setRestocking] = useState(false);
   const [restockError, setRestockError] = useState<string | null>(null);
 
+  // NEW: Product Creation States
+  const [showAddProduct, setShowAddProduct] = useState(false);
+  const [newProduct, setNewProduct] = useState<NewProductForm>({
+    name: "",
+    productionCost: "",
+    sellingPrice: "",
+    initialStock: "0",
+    category: "" // Added category
+  });
+  const [addingProduct, setAddingProduct] = useState(false);
+  const [productError, setProductError] = useState<string | null>(null);
+  const [productSuccess, setProductSuccess] = useState<string | null>(null);
+
+  // Categories for products
+  const [categories, setCategories] = useState<string[]>([
+    "Metals",
+    "Hardware",
+    "Tools",
+    "Construction",
+    "Electrical",
+    "Plumbing",
+    "Fasteners",
+    "Raw Materials",
+    "Finished Goods",
+    "Other"
+  ]);
+
   // Refs for dropdown management and debouncing
   const customerDropdownRef = useRef<HTMLDivElement>(null);
   const productDropdownRef = useRef<HTMLDivElement>(null);
   const createSaleButtonRef = useRef<HTMLButtonElement>(null);
- const createSaleTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const createSaleTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   const adminSections = [
     {
@@ -200,6 +239,23 @@ export default function AdminDashboard() {
       setProducts(Array.isArray(productsData) ? productsData : []);
       setCustomers(Array.isArray(customersData) ? customersData : (customersData?.customers || customersData?.data || []));
 
+      // Extract unique categories from products
+      if (Array.isArray(productsData)) {
+        const uniqueCategories = Array.from(
+          new Set(productsData
+            .filter(p => p.category && typeof p.category === 'string')
+            .map(p => p.category.trim())
+            .filter(Boolean)
+          )
+        );
+        if (uniqueCategories.length > 0) {
+          setCategories(prev => {
+            const combined = [...new Set([...prev, ...uniqueCategories])];
+            return combined;
+          });
+        }
+      }
+
       const today = new Date();
       today.setHours(0, 0, 0, 0);
 
@@ -274,6 +330,86 @@ export default function AdminDashboard() {
       }
 
       newNotifications.sort((a, b) => a.priority - b.priority);
+      
+      // FIXED: Fetch bank balance with better error handling
+      let bankBalanceValue = 0;
+      try {
+        const moneyRes = await fetch("/api/money");
+        if (moneyRes.ok) {
+          const moneyData = await moneyRes.json();
+          
+          // Handle different API response structures
+          let ledgerData: any[] = [];
+          
+          if (Array.isArray(moneyData)) {
+            // If API returns an array directly
+            ledgerData = moneyData;
+          } else if (moneyData && typeof moneyData === 'object') {
+            // If API returns an object with ledger property
+            if (Array.isArray(moneyData.ledger)) {
+              ledgerData = moneyData.ledger;
+            } else if (Array.isArray(moneyData.data)) {
+              ledgerData = moneyData.data;
+            } else if (typeof moneyData.balance === 'number') {
+              // If API returns a direct balance
+              bankBalanceValue = moneyData.balance;
+              setBankBalance(bankBalanceValue);
+              // Continue with the rest of the function
+              setNotifications(newNotifications);
+              setQuickStats([
+                {
+                  title: "Today's Revenue",
+                  value: `KSh ${todayRevenue.toLocaleString()}`,
+                  change: "+0%",
+                  icon: DollarSign,
+                  positive: true,
+                },
+                {
+                  title: "Active Orders",
+                  value: activeOrders.toString(),
+                  change: `${activeOrders} pending`,
+                  icon: ShoppingCart,
+                  positive: true,
+                },
+                {
+                  title: "Low Stock Items",
+                  value: lowStockItems.length.toString(),
+                  change: criticalStockItems.length > 0 ? `${criticalStockItems.length} critical` : "Good",
+                  icon: Package,
+                  positive: lowStockItems.length === 0,
+                },
+                {
+                  title: "Bank Balance",
+                  value: bankBalanceValue !== null ? `KSh ${bankBalanceValue.toLocaleString()}` : "Loading...",
+                  change: "View Details",
+                  icon: Activity,
+                  positive: bankBalanceValue !== null && bankBalanceValue > 0,
+                },
+              ]);
+              return;
+            }
+          }
+
+          // Calculate balance from ledger if we have ledger data
+          if (Array.isArray(ledgerData)) {
+            bankBalanceValue = ledgerData.reduce((acc: number, entry: any) => {
+              if (!entry.amount) return acc;
+              const amount = Number(entry.amount);
+              if (isNaN(amount)) return acc;
+              return entry.type === "INFLOW" || entry.type === "income" || entry.type === "credit"
+                ? acc + amount
+                : acc - amount;
+            }, 0);
+          }
+
+          setBankBalance(bankBalanceValue);
+        }
+      } catch (err) {
+        console.error("Error fetching bank balance:", err);
+        // Set a default value or keep existing
+        setBankBalance(prev => prev !== null ? prev : 0);
+      }
+
       setNotifications(newNotifications);
 
       setQuickStats([
@@ -299,11 +435,11 @@ export default function AdminDashboard() {
           positive: lowStockItems.length === 0,
         },
         {
-          title: "System Health",
-          value: "99.8%",
-          change: "Excellent",
+          title: "Bank Balance",
+          value: bankBalanceValue !== null ? `KSh ${bankBalanceValue.toLocaleString()}` : "Loading...",
+          change: "View Details",
           icon: Activity,
-          positive: true,
+          positive: bankBalanceValue !== null && bankBalanceValue > 0,
         },
       ]);
     } catch (error) {
@@ -363,7 +499,8 @@ export default function AdminDashboard() {
   const filteredProducts = useMemo(() => {
     if (!productSearch.trim()) return products.slice(0, 10);
     return products.filter(p => 
-      p.name.toLowerCase().includes(productSearch.toLowerCase())
+      p.name.toLowerCase().includes(productSearch.toLowerCase()) ||
+      (p.category && p.category.toLowerCase().includes(productSearch.toLowerCase()))
     ).slice(0, 10);
   }, [products, productSearch]);
 
@@ -531,6 +668,146 @@ export default function AdminDashboard() {
   }
 };
 
+  // ================ NEW PRODUCT CREATION WITH CATEGORY ================
+ const handleCreateProduct = async () => {
+  // Validation
+  if (!newProduct.name.trim()) {
+    setProductError("Product name is required");
+    setTimeout(() => setProductError(null), 3000);
+    return;
+  }
+
+  const productionCost = parseFloat(newProduct.productionCost);
+  const sellingPrice = parseFloat(newProduct.sellingPrice);
+  
+  // Parse stock - handle empty string case
+  const stockStr = newProduct.initialStock.trim();
+  const initialStock = stockStr === "" ? 0 : parseInt(stockStr, 10);
+
+  if (isNaN(productionCost) || productionCost <= 0) {
+    setProductError("Please enter a valid production cost greater than 0");
+    setTimeout(() => setProductError(null), 3000);
+    return;
+  }
+
+  if (isNaN(sellingPrice) || sellingPrice <= 0) {
+    setProductError("Please enter a valid selling price greater than 0");
+    setTimeout(() => setProductError(null), 3000);
+    return;
+  }
+
+  if (sellingPrice <= productionCost) {
+    setProductError("Selling price must be greater than production cost");
+    setTimeout(() => setProductError(null), 3000);
+    return;
+  }
+
+  if (isNaN(initialStock) || initialStock < 0) {
+    setProductError("Please enter a valid initial stock (0 or greater)");
+    setTimeout(() => setProductError(null), 3000);
+    return;
+  }
+
+  if (!newProduct.category.trim()) {
+    setProductError("Please select a category for the product");
+    setTimeout(() => setProductError(null), 3000);
+    return;
+  }
+
+  setAddingProduct(true);
+  setProductError(null);
+
+  try {
+    // CORRECTED: Match API expected field names
+    const requestBody = {
+      name: newProduct.name.trim(),
+      productionCost: productionCost,
+      price: sellingPrice, // API expects 'price' not 'sellingPrice'
+      stockQuantity: initialStock, // API expects 'stockQuantity' not 'stock'
+      category: newProduct.category.trim(),
+      // description is optional, can be added if needed
+      description: "" // Add description field if you want
+    };
+
+    console.log("Sending to API:", requestBody);
+
+    const response = await fetch("/api/products", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Accept": "application/json"
+      },
+      body: JSON.stringify(requestBody)
+    });
+
+    const rawBody = await response.text();
+    let data: any = null;
+    
+    try {
+      data = JSON.parse(rawBody);
+    } catch {
+      if (response.ok) {
+        data = {
+          id: Date.now(),
+          name: newProduct.name.trim(),
+          productionCost,
+          price: sellingPrice,
+          stockQuantity: initialStock,
+          category: newProduct.category.trim()
+        };
+      }
+    }
+
+    if (!response.ok) {
+      const errorMessage = data?.error || data?.message || rawBody || "Failed to create product";
+      throw new Error(errorMessage);
+    }
+
+    // Add the new product to the local state
+    const createdProduct = {
+      id: data.id || Date.now(),
+      name: newProduct.name.trim(),
+      productionCost,
+      price: sellingPrice,
+      stock: initialStock, // Make sure this is a number
+      category: newProduct.category.trim()
+    };
+
+    console.log("Product created successfully:", createdProduct);
+
+    setProducts(prev => [...prev, createdProduct]);
+    
+    // Add category to categories list if it's new
+    if (newProduct.category.trim() && !categories.includes(newProduct.category.trim())) {
+      setCategories(prev => [...prev, newProduct.category.trim()]);
+    }
+    
+    // Reset form
+    setNewProduct({
+      name: "",
+      productionCost: "",
+      sellingPrice: "",
+      initialStock: "0",
+      category: ""
+    });
+    
+    setShowAddProduct(false);
+    setProductSuccess(`✅ Product "${createdProduct.name}" created successfully with ${initialStock} units in stock!`);
+    setTimeout(() => setProductSuccess(null), 3000);
+
+    // Refresh dashboard data
+    setTimeout(() => {
+      fetchDashboardData().catch(console.error);
+    }, 1000);
+
+  } catch (error: any) {
+    console.error("Error creating product:", error);
+    setProductError(error.message || "Failed to create product");
+    setTimeout(() => setProductError(null), 5000);
+  } finally {
+    setAddingProduct(false);
+  }
+};
   // ================ OPTIMIZED SALE CREATION ================
 
   const createSaleMutation = async (saleData: any) => {
@@ -1225,15 +1502,25 @@ export default function AdminDashboard() {
                 </div>
               )}
 
-              {/* Product Selection */}
+              {/* Product Selection - UPDATED WITH ADD PRODUCT BUTTON */}
               <div>
-                <label className="block text-sm font-semibold text-black mb-2">Add Products</label>
+                <div className="flex items-center justify-between mb-2">
+                  <label className="block text-sm font-semibold text-black">Add Products</label>
+                  <button
+                    type="button"
+                    onClick={() => setShowAddProduct(true)}
+                    className="text-sm text-blue-600 hover:text-blue-800 font-medium flex items-center gap-1"
+                  >
+                    <Plus className="w-4 h-4" />
+                    Add New Product
+                  </button>
+                </div>
                 <div className="space-y-3">
                   <div className="relative" ref={productDropdownRef}>
                     <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-black pointer-events-none z-10" />
                     <input
                       type="text"
-                      placeholder="Search product..."
+                      placeholder="Search product by name or category..."
                       value={currentProduct ? "" : productSearch}
                       onChange={(e) => {
                         setProductSearch(e.target.value);
@@ -1271,10 +1558,15 @@ export default function AdminDashboard() {
                               }}
                               className="w-full text-left px-4 py-3 hover:bg-blue-50 border-b last:border-b-0 transition-colors"
                             >
-                              <div className="flex justify-between items-center">
+                              <div className="flex justify-between items-start">
                                 <div>
                                   <div className="font-medium text-black">{product.name}</div>
                                   <div className="text-sm text-black">
+                                    {product.category && (
+                                      <span className="inline-block px-2 py-0.5 bg-purple-100 text-purple-700 rounded text-xs mr-2">
+                                        {product.category}
+                                      </span>
+                                    )}
                                     Stock: {stock} | KSh {product.price?.toLocaleString() || 0}
                                   </div>
                                 </div>
@@ -1327,6 +1619,11 @@ export default function AdminDashboard() {
                                   : 'text-green-700'
                               }`}>
                                 Available: {getProductStock(currentProduct)} units
+                                {currentProduct.category && (
+                                  <span className="ml-2 text-blue-700">
+                                    • Category: {currentProduct.category}
+                                  </span>
+                                )}
                               </p>
                             </div>
                           </div>
@@ -1352,6 +1649,9 @@ export default function AdminDashboard() {
                           <div className="font-semibold text-blue-900">{currentProduct.name}</div>
                           <div className="text-sm text-blue-700">
                             Available: {getProductStock(currentProduct)} | Price: KSh {currentProduct.price?.toLocaleString() || 0}
+                            {currentProduct.category && (
+                              <span className="ml-2 text-purple-700">• {currentProduct.category}</span>
+                            )}
                           </div>
                         </div>
                         <button 
@@ -1665,6 +1965,258 @@ export default function AdminDashboard() {
         </div>
       )}
 
+      {/* NEW ADD PRODUCT MODAL WITH CATEGORY */}
+      {showAddProduct && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50 overflow-y-auto">
+          <div className="bg-white rounded-2xl max-w-md w-full shadow-2xl">
+            <div className="sticky top-0 bg-gradient-to-r from-purple-600 to-purple-700 text-white p-6 rounded-t-2xl z-10">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <Package className="w-8 h-8" />
+                  <div>
+                    <h2 className="text-2xl font-bold">Add New Product</h2>
+                    <p className="text-purple-100 text-sm">Create a new product in your inventory</p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => {
+                    setShowAddProduct(false);
+                    setProductError(null);
+                    setProductSuccess(null);
+                  }}
+                  type="button"
+                  className="text-white hover:bg-white/20 p-2 rounded-lg transition-colors"
+                >
+                  <X className="w-6 h-6" />
+                </button>
+              </div>
+            </div>
+
+            <div className="p-6 space-y-4">
+              {productError && (
+                <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg flex items-start gap-2">
+                  <AlertTriangle className="w-5 h-5 flex-shrink-0 mt-0.5" />
+                  <div className="flex-1">
+                    <span>{productError}</span>
+                  </div>
+                  <button onClick={() => setProductError(null)} type="button" className="text-red-700 hover:text-red-900">
+                    <X size={16} />
+                  </button>
+                </div>
+              )}
+
+              {productSuccess && (
+                <div className="bg-emerald-50 border border-emerald-200 text-emerald-700 px-4 py-3 rounded-lg flex items-start gap-2">
+                  <CheckCircle className="w-5 h-5 flex-shrink-0 mt-0.5" />
+                  <span>{productSuccess}</span>
+                </div>
+              )}
+
+              <div className="space-y-4">
+                {/* Product Name */}
+                <div>
+                  <label className="block text-sm font-semibold text-black mb-2">
+                    Product Name *
+                  </label>
+                  <input
+                    type="text"
+                    value={newProduct.name}
+                    onChange={(e) => setNewProduct({...newProduct, name: e.target.value})}
+                    placeholder="Enter product name"
+                    className="w-full px-4 py-3 border-2 border-slate-200 rounded-lg focus:border-purple-500 focus:ring-2 focus:ring-purple-200 transition-all text-black placeholder-gray-400"
+                    disabled={addingProduct}
+                  />
+                </div>
+
+                {/* Category */}
+                <div>
+                  <label className="block text-sm font-semibold text-black mb-2">
+                    Category *
+                  </label>
+                  <div className="flex gap-2">
+                    <select
+                      value={newProduct.category}
+                      onChange={(e) => setNewProduct({...newProduct, category: e.target.value})}
+                      className="flex-1 px-4 py-3 border-2 border-slate-200 rounded-lg focus:border-purple-500 focus:ring-2 focus:ring-purple-200 text-black"
+                      disabled={addingProduct}
+                    >
+                      <option value="">Select a category</option>
+                      {categories.map((category) => (
+                        <option key={category} value={category}>
+                          {category}
+                        </option>
+                      ))}
+                    </select>
+                    <input
+                      type="text"
+                      value={newProduct.category}
+                      onChange={(e) => setNewProduct({...newProduct, category: e.target.value})}
+                      placeholder="Or type new category"
+                      className="flex-1 px-4 py-3 border-2 border-slate-200 rounded-lg focus:border-purple-500 focus:ring-2 focus:ring-purple-200 text-black placeholder-gray-400"
+                      disabled={addingProduct}
+                    />
+                  </div>
+                </div>
+
+                {/* Production Cost */}
+                <div>
+                  <label className="block text-sm font-semibold text-black mb-2">
+                    Production Cost (KSh) *
+                  </label>
+                  <div className="relative">
+                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500">KSh</span>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={newProduct.productionCost}
+                      onChange={(e) => setNewProduct({...newProduct, productionCost: e.target.value})}
+                      placeholder="Enter production cost"
+                      className="w-full pl-12 pr-4 py-3 border-2 border-slate-200 rounded-lg focus:border-purple-500 focus:ring-2 focus:ring-purple-200 text-black placeholder-gray-400"
+                      disabled={addingProduct}
+                    />
+                  </div>
+                </div>
+
+                {/* Selling Price */}
+                <div>
+                  <label className="block text-sm font-semibold text-black mb-2">
+                    Selling Price (KSh) *
+                  </label>
+                  <div className="relative">
+                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500">KSh</span>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={newProduct.sellingPrice}
+                      onChange={(e) => setNewProduct({...newProduct, sellingPrice: e.target.value})}
+                      placeholder="Enter selling price"
+                      className="w-full pl-12 pr-4 py-3 border-2 border-slate-200 rounded-lg focus:border-purple-500 focus:ring-2 focus:ring-purple-200 text-black placeholder-gray-400"
+                      disabled={addingProduct}
+                    />
+                  </div>
+                  {/* Profit calculation - FIXED VERSION */}
+                  {newProduct.productionCost && newProduct.sellingPrice && (
+                    (() => {
+                      const productionCost = parseFloat(newProduct.productionCost);
+                      const sellingPrice = parseFloat(newProduct.sellingPrice);
+                      if (!isNaN(productionCost) && !isNaN(sellingPrice) && productionCost > 0) {
+                        const profit = sellingPrice - productionCost;
+                        const profitMargin = (profit / productionCost) * 100;
+                        return (
+                          <div className={`mt-1 text-sm ${profit > 0 ? 'text-green-600' : 'text-red-600'}`}>
+                            Profit: KSh {profit.toLocaleString()} ({profitMargin.toFixed(1)}% margin)
+                          </div>
+                        );
+                      }
+                      return null;
+                    })()
+                  )}
+                </div>
+
+                {/* Initial Stock */}
+                <div>
+                  <label className="block text-sm font-semibold text-black mb-2">
+                    Initial Stock *
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    value={newProduct.initialStock}
+                    onChange={(e) => setNewProduct({...newProduct, initialStock: e.target.value})}
+                    placeholder="Enter initial stock quantity"
+                    className="w-full px-4 py-3 border-2 border-slate-200 rounded-lg focus:border-purple-500 focus:ring-2 focus:ring-purple-200 text-black placeholder-gray-400"
+                    disabled={addingProduct}
+                  />
+                </div>
+
+                {/* Summary - FIXED VERSION */}
+                {newProduct.name && newProduct.category && newProduct.productionCost && newProduct.sellingPrice && newProduct.initialStock && (
+                  <div className="bg-purple-50 border-2 border-purple-200 rounded-lg p-4">
+                    <h4 className="font-semibold text-purple-900 mb-2">Product Summary</h4>
+                    <div className="space-y-2 text-sm">
+                      <div className="flex justify-between">
+                        <span className="text-black">Product:</span>
+                        <span className="font-medium">{newProduct.name}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-black">Category:</span>
+                        <span className="font-medium text-purple-700">{newProduct.category}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-black">Cost:</span>
+                        <span className="font-medium">KSh {parseFloat(newProduct.productionCost).toLocaleString()}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-black">Price:</span>
+                        <span className="font-medium text-green-600">KSh {parseFloat(newProduct.sellingPrice).toLocaleString()}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-black">Stock:</span>
+                        <span className="font-medium">{newProduct.initialStock} units</span>
+                      </div>
+                      {/* Total Potential Profit - FIXED VERSION */}
+                      {(() => {
+                        const productionCost = parseFloat(newProduct.productionCost);
+                        const sellingPrice = parseFloat(newProduct.sellingPrice);
+                        const initialStock = parseInt(newProduct.initialStock || "0");
+                        
+                        if (!isNaN(productionCost) && !isNaN(sellingPrice) && !isNaN(initialStock)) {
+                          const profit = sellingPrice - productionCost;
+                          const totalProfit = profit * initialStock;
+                          return (
+                            <div className="flex justify-between pt-2 border-t border-purple-300">
+                              <span className="font-bold text-black">Total Potential Profit:</span>
+                              <span className="font-bold text-green-700">KSh {totalProfit.toLocaleString()}</span>
+                            </div>
+                          );
+                        }
+                        return null;
+                      })()}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Action Buttons */}
+              <div className="flex gap-3 pt-4">
+                <button
+                  onClick={() => {
+                    setShowAddProduct(false);
+                    setProductError(null);
+                    setProductSuccess(null);
+                  }}
+                  type="button"
+                  disabled={addingProduct}
+                  className="flex-1 px-6 py-3 border-2 border-slate-300 text-black rounded-lg hover:bg-slate-50 font-medium transition-colors disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleCreateProduct}
+                  type="button"
+                  disabled={addingProduct || !newProduct.name.trim() || !newProduct.category.trim() || !newProduct.productionCost || !newProduct.sellingPrice}
+                  className="flex-1 px-6 py-3 bg-gradient-to-r from-purple-600 to-purple-700 text-white rounded-lg hover:from-purple-700 hover:to-purple-800 font-medium transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 shadow-lg"
+                >
+                  {addingProduct ? (
+                    <>
+                      <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
+                      Creating...
+                    </>
+                  ) : (
+                    <>
+                      <CheckCircle className="w-5 h-5" />
+                      Add Product
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Restock Modal */}
       {showRestockModal && restockingProduct && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-[60]">
@@ -1708,6 +2260,9 @@ export default function AdminDashboard() {
                   <div>
                     <p className="text-sm text-orange-700 font-medium">Current Stock</p>
                     <p className="text-2xl font-bold text-orange-900">{getProductStock(restockingProduct)} units</p>
+                    {restockingProduct.category && (
+                      <p className="text-sm text-orange-600 mt-1">Category: {restockingProduct.category}</p>
+                    )}
                   </div>
                   <Package className="w-12 h-12 text-orange-300" />
                 </div>

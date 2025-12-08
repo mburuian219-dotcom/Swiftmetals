@@ -1,6 +1,6 @@
 "use client";
 import React, { useEffect, useState, useCallback, useMemo } from "react";
-import { Download, MessageSquare, Send, Clock, CreditCard, AlertTriangle, CheckCircle, Plus, X, Edit, Trash2, Calculator, Save, Menu, ChevronDown, ChevronUp } from "lucide-react";
+import { Download, MessageSquare, Send, Clock, CreditCard, AlertTriangle, CheckCircle, Plus, X, Edit, Trash2, Calculator, Save, Menu, ChevronDown, ChevronUp, Filter, Calendar, Search, XCircle } from "lucide-react";
 import { auth } from "@/lib/firebase";
 import { onAuthStateChanged } from "firebase/auth";
 
@@ -114,6 +114,13 @@ const EnhancedSalesPage = () => {
   const [selectedSales, setSelectedSales] = useState<number[]>([]);
   const [messagingLoading, setMessagingLoading] = useState(false);
   const [selectedMessageType, setSelectedMessageType] = useState("delivery");
+
+  // ADD: Filter state variables
+  const [customerFilter, setCustomerFilter] = useState("");
+  const [dateFilter, setDateFilter] = useState<"all" | "today" | "week" | "month" | "custom">("all");
+  const [customStartDate, setCustomStartDate] = useState("");
+  const [customEndDate, setCustomEndDate] = useState("");
+  const [showDateFilter, setShowDateFilter] = useState(false);
 
   const formatPhoneNumber = (phone: string) => {
     if (!phone) return phone;
@@ -301,6 +308,9 @@ const EnhancedSalesPage = () => {
       }
       if (!target.closest('.product-dropdown-container')) {
         setShowProductDropdown(false);
+      }
+      if (!target.closest('.date-filter-container')) {
+        setShowDateFilter(false);
       }
     };
 
@@ -630,6 +640,19 @@ const EnhancedSalesPage = () => {
     setStockError(null);
   };
 
+  // ADD: Clear all filters
+  const clearFilters = () => {
+    setCustomerFilter("");
+    setDateFilter("all");
+    setCustomStartDate("");
+    setCustomEndDate("");
+  };
+
+  // ADD: Check if any filter is active
+  const isFilterActive = useMemo(() => {
+    return customerFilter.trim() !== "" || dateFilter !== "all";
+  }, [customerFilter, dateFilter]);
+
   const stats = useMemo(() => ({
     totalSales: sales.reduce((acc, s) => acc + Number(s.amount), 0),
     paidSales: sales.filter(s => s.status === "PAID").reduce((acc, s) => acc + Number(s.amount), 0),
@@ -654,6 +677,62 @@ const EnhancedSalesPage = () => {
         return sales;
     }
   }, [sales, activeTab]);
+
+  // ADD: Fully filtered sales with all filters applied
+  const fullyFilteredSales = useMemo(() => {
+    let filtered = filteredSales; // Start with existing status-filtered sales
+
+    // Apply customer filter
+    if (customerFilter.trim()) {
+      const searchTerm = customerFilter.toLowerCase().trim();
+      filtered = filtered.filter(sale => {
+        const customerName = sale.customer?.name?.toLowerCase() || "";
+        const customerPhone = sale.customer?.phone?.toLowerCase() || "";
+        return customerName.includes(searchTerm) || customerPhone.includes(searchTerm);
+      });
+    }
+
+    // Apply date filter
+    if (dateFilter !== "all") {
+      const now = new Date();
+      const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      
+      filtered = filtered.filter(sale => {
+        const saleDate = new Date(sale.date);
+        
+        switch (dateFilter) {
+          case "today":
+            return saleDate.toDateString() === today.toDateString();
+          
+          case "week": {
+            const weekAgo = new Date(today);
+            weekAgo.setDate(weekAgo.getDate() - 7);
+            return saleDate >= weekAgo;
+          }
+          
+          case "month": {
+            const monthAgo = new Date(today);
+            monthAgo.setMonth(monthAgo.getMonth() - 1);
+            return saleDate >= monthAgo;
+          }
+          
+          case "custom":
+            if (customStartDate && customEndDate) {
+              const start = new Date(customStartDate);
+              const end = new Date(customEndDate);
+              end.setHours(23, 59, 59, 999); // Include entire end day
+              return saleDate >= start && saleDate <= end;
+            }
+            return true;
+          
+          default:
+            return true;
+        }
+      });
+    }
+
+    return filtered;
+  }, [filteredSales, customerFilter, dateFilter, customStartDate, customEndDate]);
 
   const filteredCustomers = useMemo(() => {
     if (!customerSearch.trim()) return customers;
@@ -1327,8 +1406,159 @@ const EnhancedSalesPage = () => {
 
         {activeTab !== "messaging" && (
           <div className="p-4 md:p-6">
+            {/* ADD: Filter controls */}
+            <div className="mb-4 p-4 bg-white rounded-lg border shadow-sm">
+              <div className="flex flex-col md:flex-row gap-4">
+                {/* Customer Search */}
+                <div className="flex-1">
+                  <div className="relative">
+                    <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" size={18} />
+                    <input
+                      type="text"
+                      placeholder="Search by customer name or phone..."
+                      value={customerFilter}
+                      onChange={(e) => setCustomerFilter(e.target.value)}
+                      className="w-full pl-10 pr-10 py-2 border border-gray-300 rounded-lg text-black focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    />
+                    {customerFilter && (
+                      <button
+                        onClick={() => setCustomerFilter("")}
+                        className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                      >
+                        <XCircle size={18} />
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {/* Date Filter */}
+                <div className="relative date-filter-container">
+                  <button
+                    onClick={() => setShowDateFilter(!showDateFilter)}
+                    className={`flex items-center gap-2 px-4 py-2 border rounded-lg text-black hover:bg-gray-50 ${
+                      dateFilter !== "all" ? "bg-blue-50 border-blue-200" : ""
+                    }`}
+                  >
+                    <Calendar size={18} />
+                    <span className="text-sm">
+                      {dateFilter === "today" ? "Today" :
+                       dateFilter === "week" ? "This Week" :
+                       dateFilter === "month" ? "This Month" :
+                       dateFilter === "custom" ? "Custom Range" : "Date Filter"}
+                    </span>
+                    <ChevronDown size={16} className={`transition-transform ${showDateFilter ? "rotate-180" : ""}`} />
+                  </button>
+
+                  {showDateFilter && (
+                    <div className="absolute z-20 mt-2 w-64 bg-white border border-gray-300 rounded-lg shadow-lg">
+                      <div className="p-3 space-y-2">
+                        <button
+                          onClick={() => { setDateFilter("all"); setShowDateFilter(false); }}
+                          className={`w-full text-left px-3 py-2 rounded text-sm ${dateFilter === "all" ? "bg-blue-100 text-blue-700" : "hover:bg-gray-100 text-black"}`}
+                        >
+                          All Dates
+                        </button>
+                        <button
+                          onClick={() => { setDateFilter("today"); setShowDateFilter(false); }}
+                          className={`w-full text-left px-3 py-2 rounded text-sm ${dateFilter === "today" ? "bg-blue-100 text-blue-700" : "hover:bg-gray-100 text-black"}`}
+                        >
+                          Today
+                        </button>
+                        <button
+                          onClick={() => { setDateFilter("week"); setShowDateFilter(false); }}
+                          className={`w-full text-left px-3 py-2 rounded text-sm ${dateFilter === "week" ? "bg-blue-100 text-blue-700" : "hover:bg-gray-100 text-black"}`}
+                        >
+                          This Week
+                        </button>
+                        <button
+                          onClick={() => { setDateFilter("month"); setShowDateFilter(false); }}
+                          className={`w-full text-left px-3 py-2 rounded text-sm ${dateFilter === "month" ? "bg-blue-100 text-blue-700" : "hover:bg-gray-100 text-black"}`}
+                        >
+                          This Month
+                        </button>
+                        <div className="pt-2 border-t">
+                          <div className="px-3 py-2 text-xs font-medium text-gray-500">Custom Range</div>
+                          <div className="px-3 pb-2 space-y-2">
+                            <div>
+                              <input
+                                type="date"
+                                value={customStartDate}
+                                onChange={(e) => {
+                                  setCustomStartDate(e.target.value);
+                                  setDateFilter("custom");
+                                }}
+                                className="w-full p-2 text-sm border rounded text-black"
+                                max={customEndDate || new Date().toISOString().split('T')[0]}
+                              />
+                            </div>
+                            <div>
+                              <input
+                                type="date"
+                                value={customEndDate}
+                                onChange={(e) => {
+                                  setCustomEndDate(e.target.value);
+                                  setDateFilter("custom");
+                                }}
+                                className="w-full p-2 text-sm border rounded text-black"
+                                min={customStartDate}
+                                max={new Date().toISOString().split('T')[0]}
+                              />
+                            </div>
+                            <button
+                              onClick={() => setShowDateFilter(false)}
+                              className="w-full text-sm px-3 py-2 bg-blue-500 text-white rounded hover:bg-blue-600"
+                            >
+                              Apply Custom Range
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Clear Filters Button */}
+                {isFilterActive && (
+                  <button
+                    onClick={clearFilters}
+                    className="flex items-center gap-2 px-4 py-2 text-sm text-red-600 hover:text-red-800 hover:bg-red-50 rounded-lg border border-red-200"
+                  >
+                    <XCircle size={16} />
+                    Clear Filters
+                  </button>
+                )}
+              </div>
+
+              {/* Active Filters Display */}
+              {isFilterActive && (
+                <div className="mt-3 pt-3 border-t">
+                  <div className="flex flex-wrap gap-2 items-center">
+                    <span className="text-sm text-gray-600">Active filters:</span>
+                    {customerFilter && (
+                      <span className="inline-flex items-center gap-1 px-3 py-1 bg-blue-100 text-blue-800 rounded-full text-sm">
+                        Customer: {customerFilter}
+                        <button onClick={() => setCustomerFilter("")} className="text-blue-600 hover:text-blue-800">
+                          <X size={14} />
+                        </button>
+                      </span>
+                    )}
+                    {dateFilter !== "all" && (
+                      <span className="inline-flex items-center gap-1 px-3 py-1 bg-green-100 text-green-800 rounded-full text-sm">
+                        {dateFilter === "today" ? "Today" :
+                         dateFilter === "week" ? "This Week" :
+                         dateFilter === "month" ? "This Month" : "Custom Date Range"}
+                        <button onClick={() => setDateFilter("all")} className="text-green-600 hover:text-green-800">
+                          <X size={14} />
+                        </button>
+                      </span>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+
             <div className="block lg:hidden space-y-4">
-              {filteredSales.map((sale) => (
+              {fullyFilteredSales.map((sale) => (
                 <div key={sale.id} className="bg-white border rounded-lg p-4 shadow-sm">
                   <div className="flex justify-between items-start mb-3">
                     <div>
@@ -1463,9 +1693,9 @@ const EnhancedSalesPage = () => {
                   </div>
                 </div>
               ))}
-              {filteredSales.length === 0 && (
+              {fullyFilteredSales.length === 0 && (
                 <div className="text-center py-8 text-black">
-                  No sales found for this category
+                  {isFilterActive ? "No sales match your filters" : "No sales found for this category"}
                 </div>
               )}
             </div>
@@ -1484,7 +1714,7 @@ const EnhancedSalesPage = () => {
                   </tr>
                 </thead>
                 <tbody>
-                  {filteredSales.map((sale) => (
+                  {fullyFilteredSales.map((sale) => (
                     <tr key={sale.id} className="border-b hover:bg-gray-50">
                       <td className="p-3">
                         <div className="max-w-xs">
@@ -1616,10 +1846,10 @@ const EnhancedSalesPage = () => {
                       </td>
                     </tr>
                   ))}
-                  {filteredSales.length === 0 && (
+                  {fullyFilteredSales.length === 0 && (
                     <tr>
                       <td colSpan={7} className="p-8 text-center text-black">
-                        No sales found for this category
+                        {isFilterActive ? "No sales match your filters" : "No sales found for this category"}
                       </td>
                     </tr>
                   )}
