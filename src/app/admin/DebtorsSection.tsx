@@ -165,26 +165,58 @@ export default function DebtorsSection() {
     window.open(receiptUrl, '_blank');
   };
 
-  const generateReminderMessage = (debtor: Debtor): string => {
-    const dueDateDays = 7; // Set your due date logic here
-    const dueDate = new Date(Date.now() + dueDateDays * 24 * 60 * 60 * 1000);
+  // Generate receipt download link
+  const generateReceiptLink = (saleId: number): string => {
+    // Assuming your receipt API endpoint
+    return `${window.location.origin}/api/receipt/${saleId}`;
+  };
+
+  // Generate receipt download link for PDF
+  const generateReceiptDownloadLink = (saleId: number): string => {
+    // For PDF download
+    return `${window.location.origin}/api/receipt/${saleId}?download=true`;
+  };
+
+  // Generate individual sale reminder message with receipt link
+  const generateSaleReminderMessage = (debtor: Debtor, sale: Sale): string => {
+    const receiptLink = generateReceiptLink(sale.id);
+    
+    return `Hello ${debtor.name},
+
+This is a friendly reminder regarding your pending payment for sale #${sale.id} dated ${formatDate(sale.date)}.
+
+Sale Details:
+- Invoice #: ${sale.id}
+- Date: ${formatDate(sale.date)}
+- Amount Due: KES ${formatCurrency(sale.amount)}
+- Items: ${sale.items}
+
+Outstanding Balance: KES ${formatCurrency(debtor.balance)}
+
+We kindly request that you settle this outstanding balance at your earliest convenience.
+
+Attached is the receipt.  ${receiptLink}
+
+Best regards,
+Swiftmetals`;
+  };
+
+  // Generate overall account reminder message (for all outstanding sales)
+  const generateAccountReminderMessage = (debtor: Debtor): string => {
+    // Generate links for all outstanding sales
+    const receiptLinks = debtor.sales.map(sale => 
+      `Sale #${sale.id} (${formatDate(sale.date)}): ${generateReceiptLink(sale.id)}`
+    ).join('\n');
 
     return `Hello ${debtor.name},
 
-We hope this message finds you well. As a valued customer, we appreciate your continued business.
 
-This is to inform you that your outstanding account balance with us is:
-
-*KES ${Number(debtor.balance || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}*
-
-We kindly request that you settle this outstanding balance at your earliest convenience to maintain smooth business relations. The payment is expected by *${dueDate.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}*.
-
-Should you have any questions regarding this invoice or require payment arrangements, please don't hesitate to contact us.
-
-Thank you for your prompt attention to this matter.
-
+Kind reminder of your Balance: KES ${formatCurrency(debtor.balance)}
+We kindly request that you settle your outstanding balance at your earliest convenience.
+Attached is the receipt. 
+${receiptLinks}
 Best regards,
-Safe to Metals`;
+Swiftmetals`;
   };
 
   const formatPhoneToKenyaCode = (phone: string): string => {
@@ -223,6 +255,14 @@ Safe to Metals`;
     const encodedMessage = encodeURIComponent(message);
     const smsUrl = `sms:${formattedPhone}?body=${encodedMessage}`;
     window.location.href = smsUrl;
+  };
+
+  // Send email with receipt links
+  const sendEmailMessage = (debtor: Debtor) => {
+    const subject = encodeURIComponent(`Payment Reminder - ${debtor.name} - Swiftmetals`);
+    const body = encodeURIComponent(generateAccountReminderMessage(debtor));
+    const emailUrl = `mailto:${debtor.email}?subject=${subject}&body=${body}`;
+    window.location.href = emailUrl;
   };
 
   const formatCurrency = (amount: number) =>
@@ -469,21 +509,44 @@ Safe to Metals`;
 
                         {/* Action Buttons */}
                         {debtor.balance > 0 && (
-                          <div className="flex gap-2 pt-2 border-t border-gray-200">
-                            <button
-                              onClick={() => sendWhatsAppMessage(debtor.phone, generateReminderMessage(debtor))}
-                              className="flex-1 bg-gradient-to-r from-green-500 to-emerald-500 hover:from-green-600 hover:to-emerald-600 text-white font-medium py-2 px-3 rounded-lg transition-all flex items-center justify-center gap-1.5 text-xs"
-                            >
-                              <MessageCircle className="w-3.5 h-3.5" />
-                              WhatsApp
-                            </button>
-                            <button
-                              onClick={() => sendSMSMessage(debtor.phone, generateReminderMessage(debtor))}
-                              className="flex-1 bg-gradient-to-r from-blue-500 to-indigo-500 hover:from-blue-600 hover:to-indigo-600 text-white font-medium py-2 px-3 rounded-lg transition-all flex items-center justify-center gap-1.5 text-xs"
-                            >
-                              <Mail className="w-3.5 h-3.5" />
-                              SMS
-                            </button>
+                          <div className="pt-2 border-t border-gray-200 space-y-2">
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                              <button
+                                onClick={() => sendWhatsAppMessage(debtor.phone, generateAccountReminderMessage(debtor))}
+                                className="flex-1 bg-gradient-to-r from-green-500 to-emerald-500 hover:from-green-600 hover:to-emerald-600 text-white font-medium py-2 px-3 rounded-lg transition-all flex items-center justify-center gap-1.5 text-xs"
+                              >
+                                <MessageCircle className="w-3.5 h-3.5" />
+                                WhatsApp (Summary)
+                              </button>
+                              <button
+                                onClick={() => sendSMSMessage(debtor.phone, generateAccountReminderMessage(debtor))}
+                                className="flex-1 bg-gradient-to-r from-blue-500 to-indigo-500 hover:from-blue-600 hover:to-indigo-600 text-white font-medium py-2 px-3 rounded-lg transition-all flex items-center justify-center gap-1.5 text-xs"
+                              >
+                                <Mail className="w-3.5 h-3.5" />
+                                SMS (Summary)
+                              </button>
+                            </div>
+                            
+                            {debtor.email && (
+                              <button
+                                onClick={() => sendEmailMessage(debtor)}
+                                className="w-full bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 text-white font-medium py-2 px-3 rounded-lg transition-all flex items-center justify-center gap-1.5 text-xs"
+                              >
+                                <Send className="w-3.5 h-3.5" />
+                                Email with Receipt Links
+                              </button>
+                            )}
+                            
+                            <div className="text-xs text-gray-500 mt-2">
+                              <p className="font-medium mb-1">Message Options:</p>
+                              <ul className="list-disc pl-4 space-y-0.5">
+                                <li><strong>WhatsApp/SMS (Summary)</strong>: Sends a summary of all outstanding invoices with receipt download links</li>
+                                {debtor.email && (
+                                  <li><strong>Email</strong>: Sends detailed email with all receipt download links</li>
+                                )}
+                              </ul>
+                              <p className="mt-1 text-amber-600 font-medium">All messages include receipt download links!</p>
+                            </div>
                           </div>
                         )}
                       </div>
@@ -524,6 +587,11 @@ Safe to Metals`;
               <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
                 <p className="text-sm text-blue-800">
                   <strong>To remove a debtor:</strong> Delete all their associated sales or mark them as fully paid.
+                </p>
+              </div>
+              <div className="bg-green-50 border border-green-200 rounded-lg p-4">
+                <p className="text-sm text-green-800">
+                  <strong>Message Features:</strong> Reminder messages now include receipt download links and no specific due dates.
                 </p>
               </div>
             </div>
