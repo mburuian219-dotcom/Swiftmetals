@@ -27,7 +27,7 @@ function processSale(sale: any) {
 }
 
 // ================== GET ALL SALES ==================
-export async function GET() {
+export async function GET(req: NextRequest) {
   try {
     const sales = await prisma.sale.findMany({
       include: {
@@ -46,9 +46,12 @@ export async function GET() {
 }
 
 // ================== CREATE SALE ==================
-export async function POST(req: Request) {
+export async function POST(req: NextRequest) {
   try {
     const data = await req.json();
+    
+    // ✅ Standardize user extraction
+    const userId = data.user || data.updatedBy || data.createdBy || "SYSTEM";
 
     const customerId = Number(data.customerId);
     const amount = Number(data.amount);
@@ -89,9 +92,12 @@ export async function POST(req: Request) {
         customerId,
         amount,
         date: data.date ? new Date(data.date) : new Date(),
+        dueDate: data.dueDate ? new Date(data.dueDate) : null,
         paymentMethod: data.paymentMethod || "CASH",
         status: "UNPAID",
-        createdBy: data.user || "SYSTEM", // ✅ store createdBy
+        // ✅ Set both createdBy AND updatedBy on creation
+        createdBy: userId,
+        updatedBy: userId,
         payment: { create: payments },
         saleitem: {
           create: data.saleItems.map((item: any) => ({
@@ -131,10 +137,13 @@ export async function POST(req: Request) {
 }
 
 // ================== UPDATE SALE ==================
-export async function PUT(req: Request) {
+export async function PUT(req: NextRequest) {
   try {
     const data = await req.json();
     const id = Number(data.id);
+    
+    // ✅ Standardize user extraction
+    const userId = data.user || data.updatedBy || "SYSTEM";
 
     if (!id) {
       return NextResponse.json({ error: "Sale ID is required" }, { status: 400 });
@@ -159,8 +168,12 @@ export async function PUT(req: Request) {
         customerId: data.customerId ?? existingSale.customerId,
         amount: recalculatedAmount,
         date: data.date ? new Date(data.date) : existingSale.date,
+        dueDate: data.dueDate ? new Date(data.dueDate) : existingSale.dueDate,
         paymentMethod: data.paymentMethod ?? existingSale.paymentMethod,
-        updatedBy: data.user || "SYSTEM", // ✅ store updatedBy
+        // ✅ Always update updatedBy field
+        updatedBy: userId,
+        // ✅ Preserve createdBy from original sale
+        createdBy: existingSale.createdBy,
       },
     });
 
@@ -210,7 +223,7 @@ export async function PUT(req: Request) {
 }
 
 // ================== DELETE SALE ==================
-export async function DELETE(req: Request) {
+export async function DELETE(req: NextRequest) {
   try {
     const data = await req.json();
     const id = Number(data.id);

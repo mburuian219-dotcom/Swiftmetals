@@ -1,6 +1,6 @@
 "use client";
 import React, { useEffect, useState, useCallback, useMemo } from "react";
-import { Download, MessageSquare, Send, Clock, CreditCard, AlertTriangle, CheckCircle, Plus, X, Edit, Trash2, Calculator, Save, Menu, ChevronDown, ChevronUp, Filter, Calendar, Search, XCircle } from "lucide-react";
+import { Download, MessageSquare, Send, Clock, CreditCard, AlertTriangle, CheckCircle, Plus, X, Edit, Trash2, Calculator, Save, Menu, ChevronDown, ChevronUp, Filter, Calendar, Search, XCircle, User } from "lucide-react";
 import { auth } from "@/lib/firebase";
 import { onAuthStateChanged } from "firebase/auth";
 
@@ -75,6 +75,13 @@ interface NewSaleItem {
   originalPrice?: number;
 }
 
+interface UserDetail {
+  email: string;
+  name: string;
+  displayName?: string;
+  photoURL?: string;
+}
+
 const EnhancedSalesPage = () => {
   const [sales, setSales] = useState<Sale[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
@@ -121,6 +128,13 @@ const EnhancedSalesPage = () => {
   const [customStartDate, setCustomStartDate] = useState("");
   const [customEndDate, setCustomEndDate] = useState("");
   const [showDateFilter, setShowDateFilter] = useState(false);
+  
+  // ADD: Restock confirmation state
+  const [showRestockConfirm, setShowRestockConfirm] = useState<number | null>(null);
+  
+  // ADD: User details state
+  const [userDetails, setUserDetails] = useState<Map<string, UserDetail>>(new Map());
+  const [loadingUsers, setLoadingUsers] = useState(false);
 
   const formatPhoneNumber = (phone: string) => {
     if (!phone) return phone;
@@ -130,30 +144,25 @@ const EnhancedSalesPage = () => {
     return cleanPhone;
   };
 
+  // UPDATED: Clearer message templates
   const messageTypes = [
     { 
       value: "delivery", 
       label: "Delivery Confirmation",
       getTemplate: (sale: Sale) => 
-        `Hello ${sale.customer.name}, we truly appreciate your trust in us. Your purchase of ${
-          sale.saleitems?.map(item => `${item.product?.name || "Product"} (×${item.quantity})`).join(", ") || "our products"
-        } has been confirmed for delivery. Thank you for choosing us!`
+        `Hello ${sale.customer.name}, your order has been confirmed for delivery. Thank you for choosing Swift Metals.`
     },
     { 
       value: "payment", 
       label: "Payment Reminder",
       getTemplate: (sale: Sale) => 
-        `Dear ${sale.customer.name}, thank you for being our valued customer. We'd like to remind you of your outstanding balance of Ksh ${sale.remainingAmount.toFixed(2)} for ${
-          sale.saleitems?.map(item => item.product?.name || "your order").join(", ") || "your recent purchase"
-        }. ${sale.dueDate && sale.status !== "PAID" ? `Kindly note, payment is due on ${new Date(sale.dueDate).toLocaleDateString()}. ` : ""}We truly appreciate your prompt attention to this matter.`
+        `Hello ${sale.customer.name}, this is a kind reminder of your outstanding balance of Ksh ${sale.remainingAmount.toFixed(2)}. We kindly request that you settle at your earliest convenience. Best regards, Swift Metals.`
     },
     { 
       value: "check", 
       label: "Check Deposit Reminder",
       getTemplate: (sale: Sale) => 
-        `Hello ${sale.customer.name}, we value your continued partnership. This is a friendly reminder that your check payment for ${
-          sale.saleitems?.map(item => item.product?.name || "Product").join(", ") || "your recent order"
-        } is scheduled for deposit soon. Please ensure sufficient funds are available. Thank you for your cooperation.`
+        `Hello ${sale.customer.name}, this is a reminder that your check payment is scheduled for deposit soon. Please ensure sufficient funds are available. Best regards, Swift Metals.`
     }
   ];
 
@@ -182,6 +191,130 @@ const EnhancedSalesPage = () => {
 
     return { ...sale, remainingAmount, status, payments: sale.payments || [] };
   }, []);
+
+  // Fetch user details for createdBy/updatedBy fields
+  const fetchUserDetails = useCallback(async (userEmails: string[]) => {
+    if (userEmails.length === 0) return;
+    
+    try {
+      setLoadingUsers(true);
+      console.log("🔍 Fetching user details for emails:", userEmails);
+      
+      // Remove duplicates and filter out empty/null values
+      const uniqueEmails = [...new Set(userEmails.filter(email => 
+        email && 
+        typeof email === 'string' && 
+        email.trim() && 
+        email.includes('@') &&
+        email !== "Unknown" && 
+        email !== "unknown"
+      ))];
+      
+      if (uniqueEmails.length === 0) {
+        setLoadingUsers(false);
+        return;
+      }
+      
+      console.log(`📧 Fetching ${uniqueEmails.length} unique user emails`);
+      
+      // Fetch user details from API
+      const response = await fetch(`/api/users/details?emails=${encodeURIComponent(JSON.stringify(uniqueEmails))}`);
+      
+      if (!response.ok) {
+        throw new Error(`Failed to fetch user details: ${response.status}`);
+      }
+      
+      const users: UserDetail[] = await response.json();
+      const userMap = new Map<string, UserDetail>();
+      
+      users.forEach((user) => {
+        if (user.email) {
+          userMap.set(user.email, user);
+        }
+      });
+      
+      setUserDetails(userMap);
+      console.log("✅ User details loaded:", userMap.size, "users");
+      
+    } catch (error) {
+      console.error("❌ Error fetching user details:", error);
+    } finally {
+      setLoadingUsers(false);
+    }
+  }, []);
+
+  // Extract all unique user emails from sales
+  useEffect(() => {
+    if (sales.length === 0) return;
+    
+    const userEmails: string[] = [];
+    
+    sales.forEach(sale => {
+      if (sale.createdBy && sale.createdBy.trim()) {
+        userEmails.push(sale.createdBy);
+      }
+      if (sale.updatedBy && sale.updatedBy.trim() && sale.updatedBy !== sale.createdBy) {
+        userEmails.push(sale.updatedBy);
+      }
+    });
+    
+    if (userEmails.length > 0) {
+      fetchUserDetails(userEmails);
+    }
+  }, [sales, fetchUserDetails]);
+
+  // Helper function to get user display name
+  const getUserDisplayName = (email: string | null | undefined): { name: string, email: string } => {
+    if (!email) return { name: "Unknown", email: "Unknown" };
+    
+    const user = userDetails.get(email);
+    if (user) {
+      return {
+        name: user.displayName || user.name || email.split('@')[0],
+        email: user.email
+      };
+    }
+    
+    // Fallback: extract name from email
+    const nameFromEmail = email.split('@')[0]
+      .split(/[._-]/)
+      .map(part => part.charAt(0).toUpperCase() + part.slice(1))
+      .join(' ');
+    
+    return {
+      name: nameFromEmail,
+      email: email
+    };
+  };
+
+  // Format date helper
+  const formatDate = (dateString: string | null | undefined): string => {
+    if (!dateString) return "";
+    try {
+      const date = new Date(dateString);
+      return date.toLocaleDateString('en-US', {
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric'
+      });
+    } catch {
+      return "";
+    }
+  };
+
+  // Format time helper
+  const formatTime = (dateString: string | null | undefined): string => {
+    if (!dateString) return "";
+    try {
+      const date = new Date(dateString);
+      return date.toLocaleTimeString('en-US', {
+        hour: '2-digit',
+        minute: '2-digit'
+      });
+    } catch {
+      return "";
+    }
+  };
 
   useEffect(() => {
     const fetchData = async () => {
@@ -505,23 +638,31 @@ const EnhancedSalesPage = () => {
     }
   };
 
-  const handleDeletePayment = async (paymentId: number, saleId: number) => {
-    try {
-      setDeletingPaymentId(paymentId);
+ const handleDeletePayment = async (paymentId: number, saleId: number) => {
+  try {
+    // Store references before starting async operation
+    const currentEditingSale = editingSale;
+    const currentSales = sales;
+    
+    setDeletingPaymentId(paymentId);
 
-      const response = await fetch(`/api/payment/${paymentId}?saleId=${saleId}`, {
-        method: "DELETE",
-      });
+    const response = await fetch(`/api/payment/${paymentId}?saleId=${saleId}`, {
+      method: "DELETE",
+    });
 
-      if (!response.ok) {
-        const err = await response.json();
-        throw new Error(err.error || "Failed to delete payment");
-      }
+    if (!response.ok) {
+      const err = await response.json();
+      throw new Error(err.error || "Failed to delete payment");
+    }
 
-      const updatedSale = await response.json();
-      const processedSale = calculateSaleStatus(updatedSale);
+    const updatedSale = await response.json();
+    const processedSale = calculateSaleStatus(updatedSale);
 
-      setSales(sales.map(s => s.id === processedSale.id ? processedSale : s));
+    // Batch state updates to minimize re-renders
+    setSales(currentSales.map(s => s.id === processedSale.id ? processedSale : s));
+    
+    // Only update edit states if editing the same sale
+    if (currentEditingSale?.id === saleId) {
       setEditingSale(processedSale);
       setEditPayments(
         processedSale.payments.map((p: Payment) => ({
@@ -532,23 +673,21 @@ const EnhancedSalesPage = () => {
           checkDepositDate: p.checkDepositDate || ""
         }))
       );
-
-      setSuccess("Payment deleted successfully!");
-      setTimeout(() => setSuccess(null), 3000);
-
-    } catch (error: any) {
-      console.error("Error deleting payment:", error);
-      setError(error.message || "Failed to delete payment");
-    } finally {
-      setDeletingPaymentId(null);
-    }
-  };
-
-  const handleDeleteSale = async (saleId: number) => {
-    if (!confirm("Are you sure you want to delete this sale? This action cannot be undone.")) {
-      return;
     }
 
+    setSuccess("Payment deleted successfully!");
+    setTimeout(() => setSuccess(null), 3000);
+
+  } catch (error: any) {
+    console.error("Error deleting payment:", error);
+    setError(error.message || "Failed to delete payment");
+  } finally {
+    setDeletingPaymentId(null);
+  }
+};
+
+  // UPDATED: Handle delete sale with restock confirmation
+  const handleDeleteSale = async (saleId: number, restockItems: boolean = false) => {
     setLoading(true);
     setError(null);
     setSuccess("Deleting sale, please wait...");
@@ -556,6 +695,8 @@ const EnhancedSalesPage = () => {
     try {
       const response = await fetch(`/api/sales/${saleId}`, {
         method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ restockItems })
       });
 
       if (!response.ok) {
@@ -564,8 +705,9 @@ const EnhancedSalesPage = () => {
       }
 
       setSales(prevSales => prevSales.filter(s => s.id !== saleId));
+      setShowRestockConfirm(null);
       
-      setSuccess("Sale deleted successfully!");
+      setSuccess(`Sale deleted successfully${restockItems ? ' with items restocked' : ''}!`);
       setTimeout(() => setSuccess(null), 3000);
     } catch (error: any) {
       console.error("Error deleting sale:", error);
@@ -573,6 +715,11 @@ const EnhancedSalesPage = () => {
     } finally {
       setLoading(false);
     }
+  };
+
+  // NEW: Function to show restock confirmation
+  const showDeleteConfirmation = (saleId: number) => {
+    setShowRestockConfirm(saleId);
   };
 
   const addEditPayment = () => {
@@ -783,7 +930,51 @@ const EnhancedSalesPage = () => {
   }
 
   return (
-    <div className="p-4 md:p-8 bg-gray-50 min-h-screen">
+    <div className="p-3 md:p-6 lg:p-8 bg-gray-50 min-h-screen">
+      {/* Restock Confirmation Modal */}
+      {showRestockConfirm && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-[60]">
+          <div className="bg-white rounded-xl max-w-md w-full p-6">
+            <div className="flex items-center gap-3 mb-4">
+              <AlertTriangle className="text-yellow-500" size={24} />
+              <h3 className="text-xl font-bold text-black">Confirm Sale Deletion</h3>
+            </div>
+            
+            <p className="text-gray-600 mb-6">
+              Would you like to restock the items from this sale back to inventory?
+            </p>
+            
+            <div className="space-y-3">
+              <button
+                onClick={() => handleDeleteSale(showRestockConfirm, true)}
+                disabled={loading}
+                className="w-full bg-green-600 text-white px-4 py-3 rounded-lg hover:bg-green-700 disabled:opacity-50 flex items-center justify-center gap-2"
+              >
+                <CheckCircle size={18} />
+                Yes, delete and restock items
+              </button>
+              
+              <button
+                onClick={() => handleDeleteSale(showRestockConfirm, false)}
+                disabled={loading}
+                className="w-full bg-red-600 text-white px-4 py-3 rounded-lg hover:bg-red-700 disabled:opacity-50 flex items-center justify-center gap-2"
+              >
+                <Trash2 size={18} />
+                No, just delete sale
+              </button>
+              
+              <button
+                onClick={() => setShowRestockConfirm(null)}
+                disabled={loading}
+                className="w-full bg-gray-500 text-white px-4 py-3 rounded-lg hover:bg-gray-600 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-6">
         <h1 className="text-2xl md:text-3xl font-bold text-black">Sales Management Dashboard</h1>
         <div className="flex gap-2 w-full md:w-auto">
@@ -826,10 +1017,11 @@ const EnhancedSalesPage = () => {
               link.click();
               document.body.removeChild(link);
             }}
-            className="flex-1 md:flex-none bg-green-600 text-white px-6 py-3 rounded-xl hover:bg-green-700 flex items-center justify-center gap-2 shadow-lg transition-all"
+            className="flex-1 md:flex-none bg-green-600 text-white px-4 md:px-6 py-3 rounded-xl hover:bg-green-700 flex items-center justify-center gap-2 shadow-lg transition-all text-sm md:text-base"
           >
-            <Download size={20} />
-            Export CSV
+            <Download size={18} />
+            <span className="hidden sm:inline">Export CSV</span>
+            <span className="sm:hidden">Export</span>
           </button>
         </div>
       </div>
@@ -838,7 +1030,7 @@ const EnhancedSalesPage = () => {
         <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-4 flex justify-between items-start">
           <div className="flex items-start gap-2">
             <AlertTriangle size={20} className="flex-shrink-0 mt-0.5" />
-            <span>{error}</span>
+            <span className="text-sm">{error}</span>
           </div>
           <button onClick={clearMessages} className="font-bold text-red-700 text-xl leading-none hover:text-red-900">×</button>
         </div>
@@ -848,37 +1040,37 @@ const EnhancedSalesPage = () => {
         <div className="bg-green-100 border border-green-400 text-green-700 px-4 py-3 rounded mb-4 flex justify-between items-start">
           <div className="flex items-start gap-2">
             <CheckCircle size={20} className="flex-shrink-0 mt-0.5" />
-            <span>{success}</span>
+            <span className="text-sm">{success}</span>
           </div>
           <button onClick={clearMessages} className="font-bold text-green-700 text-xl leading-none hover:text-green-900">×</button>
         </div>
       )}
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4 md:gap-6 mb-6 md:mb-8">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 md:gap-6 mb-6 md:mb-8">
         <div className="bg-white p-4 md:p-6 rounded-xl shadow-lg border-l-4 border-emerald-500">
           <div className="text-slate-500 text-xs md:text-sm font-medium">Total Sales</div>
-          <div className="text-xl md:text-2xl font-bold text-emerald-600">Ksh {stats.totalSales.toFixed(2)}</div>
-          <div className="text-xs md:text-sm text-black">{sales.length} orders</div>
+          <div className="text-lg md:text-2xl font-bold text-emerald-600">Ksh {stats.totalSales.toFixed(2)}</div>
+          <div className="text-xs text-black">{sales.length} orders</div>
         </div>
         <div className="bg-white p-4 md:p-6 rounded-xl shadow-lg border-l-4 border-blue-500">
           <div className="text-slate-500 text-xs md:text-sm font-medium">Fully Paid</div>
-          <div className="text-xl md:text-2xl font-bold text-blue-600">Ksh {stats.paidSales.toFixed(2)}</div>
-          <div className="text-xs md:text-sm text-black">{stats.paidCount} orders</div>
+          <div className="text-lg md:text-2xl font-bold text-blue-600">Ksh {stats.paidSales.toFixed(2)}</div>
+          <div className="text-xs text-black">{stats.paidCount} orders</div>
         </div>
         <div className="bg-white p-4 md:p-6 rounded-xl shadow-lg border-l-4 border-orange-500">
           <div className="text-slate-500 text-xs md:text-sm font-medium">Partially Paid</div>
-          <div className="text-xl md:text-2xl font-bold text-orange-600">Ksh {stats.partialSales.toFixed(2)}</div>
-          <div className="text-xs md:text-sm text-black">{stats.partialCount} orders</div>
+          <div className="text-lg md:text-2xl font-bold text-orange-600">Ksh {stats.partialSales.toFixed(2)}</div>
+          <div className="text-xs text-black">{stats.partialCount} orders</div>
         </div>
         <div className="bg-white p-4 md:p-6 rounded-xl shadow-lg border-l-4 border-red-500">
           <div className="text-slate-500 text-xs md:text-sm font-medium">Unpaid</div>
-          <div className="text-xl md:text-2xl font-bold text-red-600">Ksh {stats.unpaidSales.toFixed(2)}</div>
-          <div className="text-xs md:text-sm text-black">{stats.unpaidCount} orders</div>
+          <div className="text-lg md:text-2xl font-bold text-red-600">Ksh {stats.unpaidSales.toFixed(2)}</div>
+          <div className="text-xs text-black">{stats.unpaidCount} orders</div>
         </div>
         <div className="bg-white p-4 md:p-6 rounded-xl shadow-lg border-l-4 border-purple-500">
           <div className="text-slate-500 text-xs md:text-sm font-medium">Outstanding Amount</div>
-          <div className="text-xl md:text-2xl font-bold text-purple-600">Ksh {stats.totalOutstanding.toFixed(2)}</div>
-          <div className="text-xs md:text-sm text-black">Total remaining</div>
+          <div className="text-lg md:text-2xl font-bold text-purple-600">Ksh {stats.totalOutstanding.toFixed(2)}</div>
+          <div className="text-xs text-black">Total remaining</div>
         </div>
       </div>
 
@@ -925,23 +1117,50 @@ const EnhancedSalesPage = () => {
                   </div>
                 </div>
                 
+                {/* Updated Accountability Section */}
                 {(editingSale.createdBy || editingSale.updatedBy) && (
                   <div className="mt-4 pt-4 border-t border-gray-200">
                     <h4 className="text-xs font-semibold text-gray-700 mb-2">Accountability</h4>
                     {editingSale.createdBy && (
-                      <div className="text-xs text-gray-600 mb-1">
-                        <span className="font-medium">Created by:</span> {editingSale.createdBy}
-                        {editingSale.createdAt && (
-                          <span className="ml-2">on {new Date(editingSale.createdAt).toLocaleString()}</span>
-                        )}
+                      <div className="text-xs text-gray-600 mb-2">
+                        <div className="flex items-center gap-1 mb-1">
+                          <User size={10} className="text-blue-500" />
+                          <span className="font-medium">Created by:</span>
+                        </div>
+                        <div className="ml-4">
+                          <div className="text-blue-600 font-medium">
+                            {getUserDisplayName(editingSale.createdBy).name}
+                          </div>
+                          <div className="text-gray-500">
+                            {getUserDisplayName(editingSale.createdBy).email}
+                          </div>
+                          {editingSale.createdAt && (
+                            <div className="text-gray-400">
+                              {new Date(editingSale.createdAt).toLocaleString()}
+                            </div>
+                          )}
+                        </div>
                       </div>
                     )}
                     {editingSale.updatedBy && (
                       <div className="text-xs text-gray-600">
-                        <span className="font-medium">Last updated by:</span> {editingSale.updatedBy}
-                        {editingSale.updatedAt && (
-                          <span className="ml-2">on {new Date(editingSale.updatedAt).toLocaleString()}</span>
-                        )}
+                        <div className="flex items-center gap-1 mb-1">
+                          <User size={10} className="text-green-500" />
+                          <span className="font-medium">Last updated by:</span>
+                        </div>
+                        <div className="ml-4">
+                          <div className="text-green-600 font-medium">
+                            {getUserDisplayName(editingSale.updatedBy).name}
+                          </div>
+                          <div className="text-gray-500">
+                            {getUserDisplayName(editingSale.updatedBy).email}
+                          </div>
+                          {editingSale.updatedAt && (
+                            <div className="text-gray-400">
+                              {new Date(editingSale.updatedAt).toLocaleString()}
+                            </div>
+                          )}
+                        </div>
                       </div>
                     )}
                   </div>
@@ -1368,8 +1587,8 @@ const EnhancedSalesPage = () => {
         </div>
       )}
 
-      <div className="bg-white rounded-xl shadow mb-6">
-        <div className="flex overflow-x-auto">
+      <div className="bg-white rounded-xl shadow mb-6 overflow-hidden">
+        <div className="flex overflow-x-auto scrollbar-thin">
           {[
             { key: "messaging", label: "SMS", icon: <MessageSquare size={16} />, count: 0 },
             { key: "overview", label: "All", count: sales.length },
@@ -1380,16 +1599,16 @@ const EnhancedSalesPage = () => {
             <button
               key={tab.key}
               onClick={() => setActiveTab(tab.key as any)}
-              className={`flex-shrink-0 px-3 md:px-4 py-3 text-center transition-colors whitespace-nowrap ${
+              className={`flex-shrink-0 px-3 md:px-4 py-3 text-center transition-colors whitespace-nowrap min-w-[80px] ${
                 activeTab === tab.key
                   ? "border-b-2 border-blue-500 text-blue-600 font-semibold"
                   : "text-black hover:text-gray-800"
               }`}
             >
-              <div className="flex items-center justify-center gap-2">
+              <div className="flex items-center justify-center gap-1 md:gap-2">
                 {tab.icon}
-                <span className="text-sm md:text-base">{tab.label}</span>
-                <span className="text-xs md:text-sm">({tab.count})</span>
+                <span className="text-xs md:text-sm">{tab.label}</span>
+                <span className="text-xs">({tab.count})</span>
               </div>
             </button>
           ))}
@@ -1405,27 +1624,27 @@ const EnhancedSalesPage = () => {
         )}
 
         {activeTab !== "messaging" && (
-          <div className="p-4 md:p-6">
-            {/* ADD: Filter controls */}
-            <div className="mb-4 p-4 bg-white rounded-lg border shadow-sm">
-              <div className="flex flex-col md:flex-row gap-4">
+          <div className="p-3 md:p-6">
+            {/* Filter controls */}
+            <div className="mb-4 p-3 md:p-4 bg-white rounded-lg border shadow-sm">
+              <div className="flex flex-col md:flex-row gap-3">
                 {/* Customer Search */}
                 <div className="flex-1">
                   <div className="relative">
-                    <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" size={18} />
+                    <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" size={16} />
                     <input
                       type="text"
-                      placeholder="Search by customer name or phone..."
+                      placeholder="Search customer..."
                       value={customerFilter}
                       onChange={(e) => setCustomerFilter(e.target.value)}
-                      className="w-full pl-10 pr-10 py-2 border border-gray-300 rounded-lg text-black focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      className="w-full pl-9 pr-8 py-2 text-sm border border-gray-300 rounded-lg text-black focus:outline-none focus:ring-2 focus:ring-blue-500"
                     />
                     {customerFilter && (
                       <button
                         onClick={() => setCustomerFilter("")}
                         className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-gray-600"
                       >
-                        <XCircle size={18} />
+                        <XCircle size={16} />
                       </button>
                     )}
                   </div>
@@ -1435,22 +1654,22 @@ const EnhancedSalesPage = () => {
                 <div className="relative date-filter-container">
                   <button
                     onClick={() => setShowDateFilter(!showDateFilter)}
-                    className={`flex items-center gap-2 px-4 py-2 border rounded-lg text-black hover:bg-gray-50 ${
+                    className={`flex items-center gap-2 px-3 md:px-4 py-2 border rounded-lg text-black hover:bg-gray-50 text-sm ${
                       dateFilter !== "all" ? "bg-blue-50 border-blue-200" : ""
                     }`}
                   >
-                    <Calendar size={18} />
-                    <span className="text-sm">
+                    <Calendar size={16} />
+                    <span>
                       {dateFilter === "today" ? "Today" :
-                       dateFilter === "week" ? "This Week" :
-                       dateFilter === "month" ? "This Month" :
-                       dateFilter === "custom" ? "Custom Range" : "Date Filter"}
+                       dateFilter === "week" ? "Week" :
+                       dateFilter === "month" ? "Month" :
+                       dateFilter === "custom" ? "Custom" : "Date"}
                     </span>
-                    <ChevronDown size={16} className={`transition-transform ${showDateFilter ? "rotate-180" : ""}`} />
+                    <ChevronDown size={14} className={`transition-transform ${showDateFilter ? "rotate-180" : ""}`} />
                   </button>
 
                   {showDateFilter && (
-                    <div className="absolute z-20 mt-2 w-64 bg-white border border-gray-300 rounded-lg shadow-lg">
+                    <div className="absolute z-20 mt-2 w-64 bg-white border border-gray-300 rounded-lg shadow-lg right-0">
                       <div className="p-3 space-y-2">
                         <button
                           onClick={() => { setDateFilter("all"); setShowDateFilter(false); }}
@@ -1487,7 +1706,7 @@ const EnhancedSalesPage = () => {
                                   setCustomStartDate(e.target.value);
                                   setDateFilter("custom");
                                 }}
-                                className="w-full p-2 text-sm border rounded text-black"
+                                className="w-full p-2 text-xs border rounded text-black"
                                 max={customEndDate || new Date().toISOString().split('T')[0]}
                               />
                             </div>
@@ -1499,7 +1718,7 @@ const EnhancedSalesPage = () => {
                                   setCustomEndDate(e.target.value);
                                   setDateFilter("custom");
                                 }}
-                                className="w-full p-2 text-sm border rounded text-black"
+                                className="w-full p-2 text-xs border rounded text-black"
                                 min={customStartDate}
                                 max={new Date().toISOString().split('T')[0]}
                               />
@@ -1508,7 +1727,7 @@ const EnhancedSalesPage = () => {
                               onClick={() => setShowDateFilter(false)}
                               className="w-full text-sm px-3 py-2 bg-blue-500 text-white rounded hover:bg-blue-600"
                             >
-                              Apply Custom Range
+                              Apply Range
                             </button>
                           </div>
                         </div>
@@ -1521,10 +1740,10 @@ const EnhancedSalesPage = () => {
                 {isFilterActive && (
                   <button
                     onClick={clearFilters}
-                    className="flex items-center gap-2 px-4 py-2 text-sm text-red-600 hover:text-red-800 hover:bg-red-50 rounded-lg border border-red-200"
+                    className="flex items-center gap-2 px-3 md:px-4 py-2 text-xs md:text-sm text-red-600 hover:text-red-800 hover:bg-red-50 rounded-lg border border-red-200"
                   >
-                    <XCircle size={16} />
-                    Clear Filters
+                    <XCircle size={14} />
+                    Clear
                   </button>
                 )}
               </div>
@@ -1533,22 +1752,22 @@ const EnhancedSalesPage = () => {
               {isFilterActive && (
                 <div className="mt-3 pt-3 border-t">
                   <div className="flex flex-wrap gap-2 items-center">
-                    <span className="text-sm text-gray-600">Active filters:</span>
+                    <span className="text-xs text-gray-600">Active filters:</span>
                     {customerFilter && (
-                      <span className="inline-flex items-center gap-1 px-3 py-1 bg-blue-100 text-blue-800 rounded-full text-sm">
-                        Customer: {customerFilter}
+                      <span className="inline-flex items-center gap-1 px-2 py-1 bg-blue-100 text-blue-800 rounded-full text-xs">
+                        {customerFilter.length > 15 ? customerFilter.substring(0, 15) + '...' : customerFilter}
                         <button onClick={() => setCustomerFilter("")} className="text-blue-600 hover:text-blue-800">
-                          <X size={14} />
+                          <X size={12} />
                         </button>
                       </span>
                     )}
                     {dateFilter !== "all" && (
-                      <span className="inline-flex items-center gap-1 px-3 py-1 bg-green-100 text-green-800 rounded-full text-sm">
+                      <span className="inline-flex items-center gap-1 px-2 py-1 bg-green-100 text-green-800 rounded-full text-xs">
                         {dateFilter === "today" ? "Today" :
-                         dateFilter === "week" ? "This Week" :
-                         dateFilter === "month" ? "This Month" : "Custom Date Range"}
+                         dateFilter === "week" ? "Week" :
+                         dateFilter === "month" ? "Month" : "Custom"}
                         <button onClick={() => setDateFilter("all")} className="text-green-600 hover:text-green-800">
-                          <X size={14} />
+                          <X size={12} />
                         </button>
                       </span>
                     )}
@@ -1557,12 +1776,13 @@ const EnhancedSalesPage = () => {
               )}
             </div>
 
+            {/* Mobile View - Improved Layout */}
             <div className="block lg:hidden space-y-4">
               {fullyFilteredSales.map((sale) => (
                 <div key={sale.id} className="bg-white border rounded-lg p-4 shadow-sm">
                   <div className="flex justify-between items-start mb-3">
                     <div>
-                      <h3 className="font-semibold text-black">{sale.customer?.name || "-"}</h3>
+                      <h3 className="font-semibold text-black text-sm">{sale.customer?.name || "-"}</h3>
                       {sale.customer?.phone && (
                         <p className="text-xs text-gray-500">{sale.customer.phone}</p>
                       )}
@@ -1578,18 +1798,23 @@ const EnhancedSalesPage = () => {
 
                   <div className="space-y-2 mb-3">
                     {sale.saleitems && sale.saleitems.length > 0 && (
-                      <div className="text-sm">
-                        {sale.saleitems.map((item, idx) => (
+                      <div className="text-xs">
+                        {sale.saleitems.slice(0, 2).map((item, idx) => (
                           <div key={idx} className="text-black">
                             <span className="font-medium">{item.product.name}</span>
                             <span> (×{item.quantity})</span>
                           </div>
                         ))}
+                        {sale.saleitems.length > 2 && (
+                          <div className="text-gray-500 mt-1">
+                            +{sale.saleitems.length - 2} more items
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>
 
-                  <div className="grid grid-cols-2 gap-2 text-sm mb-3">
+                  <div className="grid grid-cols-2 gap-2 text-xs mb-3">
                     <div>
                       <span className="text-gray-600">Amount:</span>
                       <span className="font-semibold text-emerald-600 ml-1">Ksh {sale.amount.toFixed(2)}</span>
@@ -1600,106 +1825,142 @@ const EnhancedSalesPage = () => {
                     </div>
                     <div>
                       <span className="text-gray-600">Date:</span>
-                      <span className="ml-1 text-black">{new Date(sale.date).toLocaleDateString()}</span>
+                      <span className="ml-1 text-black">{formatDate(sale.date)}</span>
                     </div>
                     {sale.dueDate && (
                       <div>
                         <span className="text-gray-600">Due:</span>
-                        <span className="ml-1 text-black">{new Date(sale.dueDate).toLocaleDateString()}</span>
+                        <span className="ml-1 text-black">{formatDate(sale.dueDate)}</span>
                       </div>
                     )}
                   </div>
 
+                  {/* Updated User Accountability Section for Mobile */}
                   {(sale.createdBy || sale.updatedBy) && (
                     <div className="text-xs text-gray-500 mb-3 p-2 bg-gray-50 rounded">
-                      {sale.createdBy && <div>Created: {sale.createdBy}</div>}
-                      {sale.updatedBy && <div>Updated: {sale.updatedBy}</div>}
+                      {sale.createdBy && (
+                        <div className="flex flex-col gap-1">
+                          <div className="flex items-center gap-1">
+                            <User size={10} className="text-blue-500" />
+                            <span className="font-medium">Created by:</span>
+                          </div>
+                          <div className="ml-4">
+                            <div className="text-blue-600 font-medium">
+                              {getUserDisplayName(sale.createdBy).name}
+                            </div>
+                            <div className="text-gray-400 text-xs">
+                              {formatDate(sale.createdAt)} at {formatTime(sale.createdAt)}
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                      {sale.updatedBy && sale.updatedBy !== sale.createdBy && (
+                        <div className="flex flex-col gap-1 mt-2 pt-2 border-t border-gray-200">
+                          <div className="flex items-center gap-1">
+                            <User size={10} className="text-green-500" />
+                            <span className="font-medium">Updated by:</span>
+                          </div>
+                          <div className="ml-4">
+                            <div className="text-green-600 font-medium">
+                              {getUserDisplayName(sale.updatedBy).name}
+                            </div>
+                            <div className="text-gray-400 text-xs">
+                              {formatDate(sale.updatedAt)} at {formatTime(sale.updatedAt)}
+                            </div>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   )}
 
-                  <div className="flex flex-wrap gap-2">
-                    <select
-                      value={selectedMessageType}
-                      onChange={(e) => setSelectedMessageType(e.target.value)}
-                      className="w-full px-2 py-1 text-xs border border-gray-300 rounded text-black mb-2"
-                    >
-                      {messageTypes.map(type => (
-                        <option key={type.value} value={type.value}>
-                          {type.label}
-                        </option>
-                      ))}
-                    </select>
+                  <div className="space-y-2">
+                    <div className="flex items-center gap-2">
+                      <select
+                        value={selectedMessageType}
+                        onChange={(e) => setSelectedMessageType(e.target.value)}
+                        className="flex-1 px-2 py-1 text-xs border border-gray-300 rounded text-black"
+                      >
+                        {messageTypes.map(type => (
+                          <option key={type.value} value={type.value}>
+                            {type.label}
+                          </option>
+                        ))}
+                      </select>
+                      
+                      <button
+                        onClick={() => window.open(`/api/receipt/${sale.id}`, "_blank")}
+                        className="px-2 py-1 text-xs bg-purple-500 text-white rounded hover:bg-purple-600 flex items-center gap-1"
+                        title="Download receipt"
+                      >
+                        <Download size={12} />
+                      </button>
+                    </div>
 
-                    <button
-                      onClick={() => {
-                        if (!sale.customer?.phone) {
-                          setError("Customer phone number required");
-                          setTimeout(() => setError(null), 3000);
-                          return;
-                        }
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        onClick={() => {
+                          if (!sale.customer?.phone) {
+                            setError("Customer phone required");
+                            setTimeout(() => setError(null), 3000);
+                            return;
+                          }
 
-                        const phone = formatPhoneNumber(sale.customer.phone);
-                        const selectedTemplate = messageTypes.find(t => t.value === selectedMessageType);
-                        const message = encodeURIComponent(selectedTemplate?.getTemplate(sale) || "Thank you for your business!");
+                          const phone = formatPhoneNumber(sale.customer.phone);
+                          const selectedTemplate = messageTypes.find(t => t.value === selectedMessageType);
+                          const message = encodeURIComponent(selectedTemplate?.getTemplate(sale) || "Thank you for your business!");
 
-                        const useWhatsApp = confirm("Send via WhatsApp? (Click Cancel for SMS)");
+                          const useWhatsApp = confirm("Send via WhatsApp? (Click Cancel for SMS)");
 
-                        if (useWhatsApp) {
-                          window.open(`https://wa.me/${phone}?text=${message}`, "_blank");
-                        } else {
-                          window.open(`sms:${phone}?body=${message}`, "_blank");
-                        }
-                      }}
-                      disabled={!sale.customer?.phone}
-                      className="flex-1 px-3 py-2 text-xs bg-blue-500 text-white rounded hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-1"
-                    >
-                      <MessageSquare size={12} />
-                      Manual
-                    </button>
-                    
-                    <button
-                      onClick={() => sendDeliveryConfirmation(sale.id)}
-                      disabled={messagingLoading || !sale.customer?.phone}
-                      className="flex-1 px-3 py-2 text-xs bg-green-500 text-white rounded hover:bg-green-600 disabled:opacity-50 flex items-center justify-center gap-1"
-                    >
-                      <MessageSquare size={12} />
-                      SMS
-                    </button>
-                    
-                    <button
-                      onClick={() => window.open(`/api/receipt/${sale.id}`, "_blank")}
-                      className="flex-1 px-3 py-2 text-xs bg-purple-500 text-white rounded hover:bg-purple-600 flex items-center justify-center gap-1"
-                    >
-                      <Download size={12} />
-                      Receipt
-                    </button>
-                    
-                    <button
-                      onClick={() => handleEditSale(sale)}
-                      className="flex-1 px-3 py-2 text-xs bg-blue-500 text-white rounded hover:bg-blue-600 flex items-center justify-center gap-1"
-                    >
-                      <Edit size={12} />
-                      Edit
-                    </button>
-                    
-                    <button
-                      onClick={() => handleDeleteSale(sale.id)}
-                      disabled={loading}
-                      className="flex-1 px-3 py-2 text-xs bg-red-500 text-white rounded hover:bg-red-600 disabled:opacity-50 flex items-center justify-center gap-1"
-                    >
-                      <Trash2 size={12} />
-                      Delete
-                    </button>
+                          if (useWhatsApp) {
+                            window.open(`https://wa.me/${phone}?text=${message}`, "_blank");
+                          } else {
+                            window.open(`sms:${phone}?body=${message}`, "_blank");
+                          }
+                        }}
+                        disabled={!sale.customer?.phone}
+                        className="px-2 py-2 text-xs bg-blue-500 text-white rounded hover:bg-blue-600 disabled:opacity-50 flex items-center justify-center gap-1"
+                      >
+                        <MessageSquare size={12} />
+                        <span className="hidden xs:inline">Message</span>
+                      </button>
+                      
+                      <button
+                        onClick={() => handleEditSale(sale)}
+                        className="px-2 py-2 text-xs bg-blue-600 text-white rounded hover:bg-blue-700 flex items-center justify-center gap-1"
+                      >
+                        <Edit size={12} />
+                        <span className="hidden xs:inline">Edit</span>
+                      </button>
+                      
+                      <button
+                        onClick={() => showDeleteConfirmation(sale.id)}
+                        disabled={loading}
+                        className="px-2 py-2 text-xs bg-red-500 text-white rounded hover:bg-red-600 disabled:opacity-50 flex items-center justify-center gap-1"
+                      >
+                        <Trash2 size={12} />
+                        <span className="hidden xs:inline">Delete</span>
+                      </button>
+                      
+                      <button
+                        onClick={() => sendDeliveryConfirmation(sale.id)}
+                        disabled={messagingLoading || !sale.customer?.phone}
+                        className="px-2 py-2 text-xs bg-green-500 text-white rounded hover:bg-green-600 disabled:opacity-50 flex items-center justify-center gap-1"
+                      >
+                        <MessageSquare size={12} />
+                        <span className="hidden xs:inline">SMS</span>
+                      </button>
+                    </div>
                   </div>
                 </div>
               ))}
               {fullyFilteredSales.length === 0 && (
-                <div className="text-center py-8 text-black">
+                <div className="text-center py-8 text-black text-sm">
                   {isFilterActive ? "No sales match your filters" : "No sales found for this category"}
                 </div>
               )}
             </div>
 
+            {/* Desktop View */}
             <div className="hidden lg:block overflow-x-auto">
               <table className="min-w-full border-collapse">
                 <thead>
@@ -1734,9 +1995,37 @@ const EnhancedSalesPage = () => {
                           {sale.customer?.phone && (
                             <div className="text-xs text-gray-500">{sale.customer.phone}</div>
                           )}
+                          {/* Updated User Accountability for Desktop */}
                           {(sale.createdBy || sale.updatedBy) && (
-                            <div className="text-xs text-gray-400 mt-1">
-                              {sale.updatedBy ? `Updated: ${sale.updatedBy.split('@')[0]}` : sale.createdBy ? `Created: ${sale.createdBy.split('@')[0]}` : ''}
+                            <div className="text-xs text-gray-400 mt-1 space-y-1">
+                              {sale.createdBy && (
+                                <div className="flex items-center gap-1">
+                                  <User size={10} className="text-blue-500 flex-shrink-0" />
+                                  <span className="text-blue-600 font-medium truncate max-w-[100px]">
+                                    {getUserDisplayName(sale.createdBy).name}
+                                  </span>
+                                  <span className="text-gray-500">created</span>
+                                  {sale.createdAt && (
+                                    <span className="text-gray-400 text-xs">
+                                      {formatDate(sale.createdAt)}
+                                    </span>
+                                  )}
+                                </div>
+                              )}
+                              {sale.updatedBy && sale.updatedBy !== sale.createdBy && (
+                                <div className="flex items-center gap-1">
+                                  <User size={10} className="text-green-500 flex-shrink-0" />
+                                  <span className="text-green-600 font-medium truncate max-w-[100px]">
+                                    {getUserDisplayName(sale.updatedBy).name}
+                                  </span>
+                                  <span className="text-gray-500">updated</span>
+                                  {sale.updatedAt && (
+                                    <span className="text-gray-400 text-xs">
+                                      {formatDate(sale.updatedAt)}
+                                    </span>
+                                  )}
+                                </div>
+                              )}
                             </div>
                           )}
                         </div>
@@ -1762,7 +2051,7 @@ const EnhancedSalesPage = () => {
                           <span className="text-green-600 font-medium">Paid in full</span>
                         )}
                       </td>
-                      <td className="p-3 text-black">{new Date(sale.date).toLocaleDateString()}</td>
+                      <td className="p-3 text-black text-sm">{formatDate(sale.date)}</td>
                       <td className="p-3">
                         <div className="flex flex-wrap gap-2">
                           <select
@@ -1802,7 +2091,7 @@ const EnhancedSalesPage = () => {
                             title={!sale.customer?.phone ? "Customer phone number required" : "Open WhatsApp or SMS to send manually"}
                           >
                             <MessageSquare size={14} />
-                            Manual
+                            Message
                           </button>
                           
                           <button
@@ -1826,7 +2115,7 @@ const EnhancedSalesPage = () => {
                           
                           <button
                             onClick={() => handleEditSale(sale)}
-                            className="px-3 py-1 text-sm bg-blue-500 text-white rounded hover:bg-blue-600 flex items-center gap-1"
+                            className="px-3 py-1 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 flex items-center gap-1"
                             title="Edit sale"
                           >
                             <Edit size={14} />
@@ -1834,7 +2123,7 @@ const EnhancedSalesPage = () => {
                           </button>
                           
                           <button
-                            onClick={() => handleDeleteSale(sale.id)}
+                            onClick={() => showDeleteConfirmation(sale.id)}
                             disabled={loading}
                             className="px-3 py-1 text-sm bg-red-500 text-white rounded hover:bg-red-600 disabled:opacity-50 flex items-center gap-1"
                             title="Delete sale"

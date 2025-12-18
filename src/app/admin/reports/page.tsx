@@ -959,8 +959,8 @@ export default function AccountingSystem() {
   onClick={() => setShowCash(true)}
   className="bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 px-4 rounded-lg flex items-center gap-3"
 >
-  <Download className="w-5 h-5" />
-  <span>Cash Ledger</span>
+  
+  <span>Cash Ledger details</span>
 </button>
 
 {showCash && (

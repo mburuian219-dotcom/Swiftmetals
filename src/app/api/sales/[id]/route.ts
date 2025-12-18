@@ -232,29 +232,72 @@ export async function DELETE(
 ) {
   try {
     const { id } = await params;
+    const body = await req.json();
+    const { restockItems = false } = body; // Default to false if not provided
 
-    // Use transaction to ensure all related records are deleted
+    // First, get the sale with its items to know what products to restock
+    const sale = await prisma.sale.findUnique({
+      where: { id: Number(id) },
+      include: {
+        saleitem: { 
+          include: { 
+            product: {
+              include: {
+                stock: true // Include stock records for the product
+              }
+            } 
+          } 
+        },
+      },
+    });
+
+    if (!sale) {
+      return NextResponse.json({ error: "Sale not found" }, { status: 404 });
+    }
+
+    // Separate the restocking logic from the deletion logic
+    if (restockItems) {
+      await handleRestockItems(sale);
+    }
+
+    // Use transaction only for deletion operations (reduced workload)
     const result = await prisma.$transaction(async (tx) => {
-      // Delete related records first
-      await tx.saleitem.deleteMany({
-        where: { saleId: Number(id) }
-      });
-
-      await tx.payment.deleteMany({
-        where: { saleId: Number(id) }
-      });
+      // Batch delete related records
+      await Promise.all([
+        tx.saleitem.deleteMany({
+          where: { saleId: Number(id) }
+        }),
+        tx.payment.deleteMany({
+          where: { saleId: Number(id) }
+        }),
+        tx.paymentschedule.deleteMany({
+          where: { saleId: Number(id) }
+        }),
+        tx.smsreminder.deleteMany({
+          where: { saleId: Number(id) }
+        }),
+        tx.invoice.deleteMany({
+          where: { saleId: Number(id) }
+        }),
+        tx.cashledger.deleteMany({
+          where: { saleId: Number(id) }
+        })
+      ]);
 
       // Then delete the sale
-      const sale = await tx.sale.delete({
+      const deletedSale = await tx.sale.delete({
         where: { id: Number(id) },
       });
 
-      return sale;
+      return deletedSale;
+    }, {
+      timeout: 10000, // Increase transaction timeout to 10 seconds
     });
 
     return NextResponse.json({ 
-      message: "Sale deleted successfully", 
-      sale: result 
+      message: `Sale deleted successfully${restockItems ? ' with items restocked' : ''}`, 
+      sale: result,
+      restockedItems: restockItems ? sale.saleitem.length : 0
     });
   } catch (error: any) {
     console.error("❌ Delete Sale Error:", error);
@@ -262,5 +305,87 @@ export async function DELETE(
       { error: error.message || "Failed to delete sale" },
       { status: 500 }
     );
+  }
+}
+
+// Helper function to handle restocking items (outside transaction)
+async function handleRestockItems(sale: any) {
+  try {
+    const productUpdates: { productId: number, quantity: number }[] = [];
+    
+    // First, collect all product updates
+    for (const saleItem of sale.saleitem) {
+      const product = saleItem.product;
+      
+      if (product) {
+        productUpdates.push({
+          productId: product.id,
+          quantity: saleItem.quantity
+        });
+      }
+    }
+    
+    // Process stock updates in batches
+    for (const update of productUpdates) {
+      const existingStock = await prisma.stock.findFirst({
+        where: { productId: update.productId }
+      });
+      
+      if (existingStock) {
+        // Update existing stock
+        await prisma.stock.update({
+          where: { id: existingStock.id },
+          data: { 
+            quantity: existingStock.quantity + update.quantity,
+            updatedAt: new Date()
+          },
+        });
+        
+        // Update product inStock status if needed
+        if (existingStock.quantity + update.quantity > 0) {
+          await prisma.product.update({
+            where: { id: update.productId },
+            data: { 
+              inStock: true,
+              updatedAt: new Date()
+            }
+          });
+        }
+      } else {
+        // Create new stock record
+        const product = await prisma.product.findUnique({
+          where: { id: update.productId }
+        });
+        
+        if (product) {
+          await prisma.stock.create({
+            data: {
+              name: product.name,
+              quantity: update.quantity,
+              costPrice: product.productionCost || product.price * 0.7,
+              sellingPrice: product.price,
+              productId: update.productId,
+              notes: `Restocked from deleted sale #${sale.id}`,
+              createdAt: new Date(),
+              updatedAt: new Date()
+            },
+          });
+          
+          // Update product inStock status
+          if (update.quantity > 0) {
+            await prisma.product.update({
+              where: { id: update.productId },
+              data: { 
+                inStock: true,
+                updatedAt: new Date()
+              }
+            });
+          }
+        }
+      }
+    }
+  } catch (error) {
+    console.error("❌ Error during restocking:", error);
+    // Don't throw here, just log the error and continue with deletion
   }
 }

@@ -252,27 +252,32 @@ model sale {
   dueDate          DateTime?
   status           String            @default("UNPAID")
   updatedAt        DateTime          @updatedAt
+
   checkDepositDate DateTime?
   isCheckDeposited Boolean           @default(false)
+
   lastReminderDate DateTime?
   paymentMethod    String            @default("CASH")
   remindersSent    Int               @default(0)
+
   invoice          invoice[]
   payment          payment[]
   paymentschedule  paymentschedule[]
-  customer         customer          @relation(fields: [customerId], references: [id], map: "Sale_customerId_fkey")
   saleitem         saleitem[]
   smsreminder      smsreminder[]
-  updatedBy       String?    // Optional, store the user email/id
-  createdBy       String?   // ✅ who created the sale
+  cashledger       cashledger[]
+
+  customer         customer @relation(fields: [customerId], references: [id], map: "Sale_customerId_fkey")
+
+  // Audit fields (kept)
+  updatedBy        String?
+  createdBy        String?
 
   @@index([checkDepositDate], map: "Sale_checkDepositDate_idx")
   @@index([customerId], map: "Sale_customerId_fkey")
   @@index([dueDate], map: "Sale_dueDate_idx")
   @@index([paymentMethod], map: "Sale_paymentMethod_idx")
   @@index([status], map: "Sale_status_idx")
-  cashledger cashledger[]
-
 }
 
 model saleitem {
