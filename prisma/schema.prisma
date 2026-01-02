@@ -43,12 +43,11 @@ model expense {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   cashledger cashledger[]
-
 }
 
 model invoice {
   id            Int      @id @default(autoincrement())
-  invoiceNumber String   @unique(map: "Invoice_invoiceNumber_key")
+  invoiceNumber String   @unique
   createdAt     DateTime @default(now())
   updatedAt     DateTime
   saleId        Int
@@ -57,9 +56,9 @@ model invoice {
   balance       Float
   generatedBy   Int
   status        String   @default("UNPAID")
-  sale          sale     @relation(fields: [saleId], references: [id], map: "Invoice_saleId_fkey")
+  sale          sale     @relation(fields: [saleId], references: [id])
 
-  @@index([saleId], map: "Invoice_saleId_fkey")
+  @@index([saleId])
 }
 
 model manualmessagetask {
@@ -71,10 +70,10 @@ model manualmessagetask {
   status        String    @default("PENDING")
   createdAt     DateTime  @default(now())
   sentAt        DateTime?
-  customer      customer  @relation(fields: [customerId], references: [id], onDelete: Cascade, map: "ManualMessageTask_customerId_fkey")
+  customer      customer  @relation(fields: [customerId], references: [id], onDelete: Cascade)
 
-  @@index([customerId], map: "ManualMessageTask_customerId_idx")
-  @@index([status], map: "ManualMessageTask_status_idx")
+  @@index([customerId])
+  @@index([status])
 }
 
 model order {
@@ -85,11 +84,11 @@ model order {
   createdAt  DateTime @default(now())
   customerId Int
   productId  Int
-  customer   customer @relation(fields: [customerId], references: [id], map: "Order_customerId_fkey")
-  product    product  @relation(fields: [productId], references: [id], map: "Order_productId_fkey")
+  customer   customer @relation(fields: [customerId], references: [id])
+  product    product  @relation(fields: [productId], references: [id])
 
-  @@index([customerId], map: "Order_customerId_fkey")
-  @@index([productId], map: "Order_productId_fkey")
+  @@index([customerId])
+  @@index([productId])
 }
 
 model payment {
@@ -107,12 +106,12 @@ model payment {
   verifiedAt       DateTime?
   checkDepositDate DateTime?
   status           payment_status @default(PENDING)
-  sale             sale           @relation(fields: [saleId], references: [id], onDelete: Cascade, map: "Payment_saleId_fkey")
+  sale             sale           @relation(fields: [saleId], references: [id], onDelete: Cascade)
 
-  @@index([isVerified], map: "Payment_isVerified_idx")
-  @@index([method], map: "Payment_method_idx")
-  @@index([saleId], map: "Payment_saleId_idx")
-  @@index([status], map: "Payment_status_idx")
+  @@index([isVerified])
+  @@index([method])
+  @@index([saleId])
+  @@index([status])
 }
 
 model paymentschedule {
@@ -125,42 +124,41 @@ model paymentschedule {
   paidAmount        Float     @default(0)
   paidAt            DateTime?
   createdAt         DateTime  @default(now())
-  sale              sale      @relation(fields: [saleId], references: [id], onDelete: Cascade, map: "PaymentSchedule_saleId_fkey")
+  sale              sale      @relation(fields: [saleId], references: [id], onDelete: Cascade)
 
-  @@index([dueDate], map: "PaymentSchedule_dueDate_idx")
-  @@index([isPaid], map: "PaymentSchedule_isPaid_idx")
-  @@index([saleId], map: "PaymentSchedule_saleId_idx")
+  @@index([dueDate])
+  @@index([isPaid])
+  @@index([saleId])
 }
 
-/// --- new model: openingbalance ---
 model openingbalance {
-  id         Int      @id @default(autoincrement())
-  amount     Float
-  date       DateTime @default(now())  // the effective date of this opening balance
-  description String?                  // optional note (e.g., "Opening balance for FY 2025")
-  recordedBy String?                   // optional (user id or username who recorded it)
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  id          Int      @id @default(autoincrement())
+  amount      Float
+  date        DateTime @default(now())
+  description String?
+  recordedBy  String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 }
 
 model product {
-  id          Int        @id @default(autoincrement())
-  name        String
-  description String?
-  price       Float
-  category    String?
-  productionCost Float?   // 👈 add this
-  createdAt   DateTime   @default(now())
-  updatedAt   DateTime   @updatedAt
-  isPublic    Boolean    @default(false)
-  image       String?
-  inStock     Boolean    @default(true)
-  order       order[]
-  saleitem    saleitem[]
-  stock       stock[]
-  restock       restock[]   // 👈 added relation to restock
+  id               Int               @id @default(autoincrement())
+  name             String
+  description      String?
+  price            Float
+  category         String?
+  productionCost   Float?
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+  isPublic         Boolean           @default(false)
+  image            String?
+  inStock          Boolean           @default(true)
+  order            order[]
+  saleitem         saleitem[]
+  stock            stock[]
+  restock          restock[]
+  staffInventories staffInventory[]
 }
-
 
 model stock {
   id           Int      @id @default(autoincrement())
@@ -173,56 +171,55 @@ model stock {
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
   productId    Int
-  product      product  @relation(fields: [productId], references: [id], map: "Stock_productId_fkey")
+  product      product  @relation(fields: [productId], references: [id])
 
-  @@index([productId], map: "Stock_productId_idx")
+  @@index([productId])
 }
+
 model restock {
-  id              Int          @id @default(autoincrement())
+  id              Int       @id @default(autoincrement())
   productId       Int
   quantity        Int
   costPrice       Float
   totalCost       Float
-  paymentSource   String       // "cash", "credit", etc.
+  paymentSource   String
   creditorId      Int?
-  creditor        creditor?    @relation(fields: [creditorId], references: [id])
-  createdAt       DateTime     @default(now())
-  updatedAt       DateTime     @updatedAt
-  product         product      @relation(fields: [productId], references: [id], map: "Restock_productId_fkey")
+  creditor        creditor? @relation(fields: [creditorId], references: [id])
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  product         product   @relation(fields: [productId], references: [id])
 
-  cashledger      cashledger[] @relation("RestockToLedger") // ✅ add relation name
+  cashledger      cashledger[] @relation("RestockToLedger")
 
   @@index([productId])
   @@index([creditorId])
 }
+
 model cashledger {
-  id                   Int                    @id @default(autoincrement())
-  date                 DateTime               @default(now())
+  id                   Int       @id @default(autoincrement())
+  date                 DateTime  @default(now())
   description          String
   type                 String
   category             String
   amount               Float
-  runningBalance       Float?                 // make nullable for now
+  runningBalance       Float?
   relatedTo            String?
   affectedAccounts     String?
   referenceId          Int?
   referenceType        String?
-  createdAt            DateTime               @default(now())
-  updatedAt            DateTime               @updatedAt
-  email                String?                // make nullable
-  token                String?                // make nullable
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+  email                String?
+  token                String?
 
   saleId     Int?
   sale       sale?       @relation(fields: [saleId], references: [id])
-
   expenseId  Int?
   expense    expense?    @relation(fields: [expenseId], references: [id])
-
   restockId  Int?
   restock    restock?    @relation("RestockToLedger", fields: [restockId], references: [id])
-
   dailyOpeningBalanceId Int?
-  dailyOpeningBalance   dailyopeningbalance?  @relation(fields: [dailyOpeningBalanceId], references: [id])
+  dailyOpeningBalance   dailyopeningbalance? @relation(fields: [dailyOpeningBalanceId], references: [id])
 
   @@index([date])
   @@index([type])
@@ -231,34 +228,32 @@ model cashledger {
 }
 
 model dailyopeningbalance {
-  id          Int           @id @default(autoincrement())
-  date        DateTime      @default(now())
+  id          Int       @id @default(autoincrement())
+  date        DateTime  @default(now())
   amount      Float
   description String?
   recordedBy  String?
-  cashledgers cashledger[]  // 👈 add opposite relation
-  createdAt   DateTime      @default(now())
-  updatedAt   DateTime      @updatedAt
+  cashledgers cashledger[]
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
 }
 
-
-
 model sale {
-  id               Int               @id @default(autoincrement())
+  id               Int       @id @default(autoincrement())
   customerId       Int
   amount           Float
-  date             DateTime          @default(now())
-  createdAt        DateTime          @default(now())
+  date             DateTime  @default(now())
+  createdAt        DateTime  @default(now())
   dueDate          DateTime?
-  status           String            @default("UNPAID")
-  updatedAt        DateTime          @updatedAt
+  status           String    @default("UNPAID")
+  updatedAt        DateTime  @updatedAt
 
   checkDepositDate DateTime?
-  isCheckDeposited Boolean           @default(false)
+  isCheckDeposited Boolean   @default(false)
 
   lastReminderDate DateTime?
-  paymentMethod    String            @default("CASH")
-  remindersSent    Int               @default(0)
+  paymentMethod    String    @default("CASH")
+  remindersSent    Int       @default(0)
 
   invoice          invoice[]
   payment          payment[]
@@ -267,43 +262,78 @@ model sale {
   smsreminder      smsreminder[]
   cashledger       cashledger[]
 
-  customer         customer @relation(fields: [customerId], references: [id], map: "Sale_customerId_fkey")
+  customer         customer @relation(fields: [customerId], references: [id])
 
-  // Audit fields (kept)
+  // Audit fields
   updatedBy        String?
   createdBy        String?
 
-  @@index([checkDepositDate], map: "Sale_checkDepositDate_idx")
-  @@index([customerId], map: "Sale_customerId_fkey")
-  @@index([dueDate], map: "Sale_dueDate_idx")
-  @@index([paymentMethod], map: "Sale_paymentMethod_idx")
-  @@index([status], map: "Sale_status_idx")
+  // Relation to staff
+  createdById      Int?
+  staff            staff? @relation("StaffSales", fields: [createdById], references: [id])
+
+  @@index([checkDepositDate])
+  @@index([customerId])
+  @@index([dueDate])
+  @@index([paymentMethod])
+  @@index([status])
 }
 
 model saleitem {
-  id        Int     @id @default(autoincrement())
-  quantity  Int
-  productId Int
-  saleId    Int
-  price     Float
-  total     Float
-  product   product @relation(fields: [productId], references: [id], map: "SaleItem_productId_fkey")
-  sale      sale    @relation(fields: [saleId], references: [id], onDelete: Cascade, map: "SaleItem_saleId_fkey")
+  id               Int            @id @default(autoincrement())
+  quantity         Int
+  productId        Int
+  saleId           Int
+  price            Float
+  total            Float
+  staffInventoryId Int?
+  product          product        @relation(fields: [productId], references: [id])
+  sale             sale           @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  staffInventory   staffInventory? @relation(fields: [staffInventoryId], references: [id])
 
-  @@index([productId], map: "SaleItem_productId_fkey")
-  @@index([saleId], map: "SaleItem_saleId_idx")
+  @@index([staffInventoryId])
+  @@index([productId])
+  @@index([saleId])
 }
+
 model creditor {
-  id          Int        @id @default(autoincrement())
-  name        String   @unique
+  id          Int       @id @default(autoincrement())
+  name        String    @unique
   phone       String?
   email       String?
-  totalOwed   Float       @default(0)
-  restocks    restock[]   // 👈 linked to purchases/restocks
-  createdAt   DateTime    @default(now())
-  updatedAt   DateTime    @updatedAt
+  totalOwed   Float     @default(0)
+  restocks    restock[]
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
 }
 
+model staff {
+  id               Int               @id @default(autoincrement())
+  name             String
+  email            String?
+  phone            String?
+  staffInventories staffInventory[]
+  sales            sale[]            @relation("StaffSales")
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+}
+
+model staffInventory {
+  id              Int       @id @default(autoincrement())
+  staffId         Int
+  productId       Int
+  quantityGiven   Int
+  quantitySold    Int       @default(0)
+  quantityReturned Int      @default(0)
+  staff           staff     @relation(fields: [staffId], references: [id])
+  product         product   @relation(fields: [productId], references: [id])
+  saleItems       saleitem[]
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@index([staffId])
+  @@index([productId])
+}
 
 model smsreminder {
   id          Int       @id @default(autoincrement())
@@ -315,23 +345,23 @@ model smsreminder {
   status      String    @default("SENT")
   sentAt      DateTime  @default(now())
   deliveredAt DateTime?
-  customer    customer  @relation(fields: [customerId], references: [id], map: "SmsReminder_customerId_fkey")
-  sale        sale      @relation(fields: [saleId], references: [id], onDelete: Cascade, map: "SmsReminder_saleId_fkey")
+  customer    customer  @relation(fields: [customerId], references: [id])
+  sale        sale      @relation(fields: [saleId], references: [id], onDelete: Cascade)
 
-  @@index([customerId], map: "SmsReminder_customerId_idx")
-  @@index([saleId], map: "SmsReminder_saleId_idx")
-  @@index([status], map: "SmsReminder_status_idx")
-  @@index([type], map: "SmsReminder_type_idx")
+  @@index([customerId])
+  @@index([saleId])
+  @@index([status])
+  @@index([type])
 }
 
 model systemsetting {
   id          Int      @id @default(autoincrement())
-  key         String   @unique(map: "SystemSetting_key_key")
+  key         String   @unique
   value       String
   description String?
   updatedAt   DateTime
 
-  @@index([key], map: "SystemSetting_key_idx")
+  @@index([key])
 }
 
 enum payment_status {

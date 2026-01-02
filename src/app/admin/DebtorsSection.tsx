@@ -1,5 +1,5 @@
-import { Users, Mail, Phone, Send, FileText, Plus, Trash2, Edit2, ChevronDown, ChevronUp, X, Loader, MessageCircle } from "lucide-react";
-import { useState, useEffect } from "react";
+import { Users, Mail, Phone, Send, FileText, Plus, Trash2, Edit2, ChevronDown, ChevronUp, X, Loader, MessageCircle, Download, Search } from "lucide-react";
+import { useState, useEffect, useMemo } from "react";
 
 type Sale = {
   id: number;
@@ -35,12 +35,19 @@ type FormData = {
 
 export default function DebtorsSection() {
   const [debtors, setDebtors] = useState<Debtor[]>([]);
+  const [filteredDebtors, setFilteredDebtors] = useState<Debtor[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<number | null>(null);
   const [showModal, setShowModal] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [sortConfig, setSortConfig] = useState<{
+    key: keyof Debtor;
+    direction: 'asc' | 'desc';
+  } | null>({ key: 'balance', direction: 'desc' });
+  
   const [formData, setFormData] = useState<FormData>({
     name: "",
     email: "",
@@ -51,6 +58,44 @@ export default function DebtorsSection() {
   useEffect(() => {
     fetchDebtors();
   }, []);
+
+  // Filter and sort debtors when search query or sort config changes
+  useEffect(() => {
+    let result = [...debtors];
+    
+    // Apply search filter
+    if (searchQuery.trim()) {
+      const query = searchQuery.toLowerCase().trim();
+      result = result.filter(debtor => 
+        debtor.name.toLowerCase().includes(query) ||
+        debtor.email.toLowerCase().includes(query) ||
+        debtor.phone.includes(query) ||
+        debtor.sales.some(sale => 
+          sale.items.toLowerCase().includes(query)
+        ) ||
+        debtor.balance.toString().includes(query) ||
+        debtor.totalSales.toString().includes(query)
+      );
+    }
+    
+    // Apply sorting
+    if (sortConfig) {
+      result.sort((a, b) => {
+        const aValue = a[sortConfig.key];
+        const bValue = b[sortConfig.key];
+        
+        if (aValue < bValue) {
+          return sortConfig.direction === 'asc' ? -1 : 1;
+        }
+        if (aValue > bValue) {
+          return sortConfig.direction === 'asc' ? 1 : -1;
+        }
+        return 0;
+      });
+    }
+    
+    setFilteredDebtors(result);
+  }, [debtors, searchQuery, sortConfig]);
 
   const fetchDebtors = async () => {
     try {
@@ -121,7 +166,9 @@ export default function DebtorsSection() {
         }
       });
 
-      setDebtors(Array.from(debtorMap.values()));
+      const debtorArray = Array.from(debtorMap.values());
+      setDebtors(debtorArray);
+      setFilteredDebtors(debtorArray);
     } catch (err) {
       if (err instanceof Error && err.name === 'AbortError') {
         setError("Request timed out. Please try again.");
@@ -132,6 +179,35 @@ export default function DebtorsSection() {
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleSearch = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setSearchQuery(e.target.value);
+  };
+
+  const clearSearch = () => {
+    setSearchQuery("");
+  };
+
+  const handleSort = (key: keyof Debtor) => {
+    setSortConfig(current => {
+      if (current && current.key === key) {
+        return {
+          key,
+          direction: current.direction === 'asc' ? 'desc' : 'asc'
+        };
+      }
+      return { key, direction: 'desc' };
+    });
+  };
+
+  const SortIcon = ({ sortKey }: { sortKey: keyof Debtor }) => {
+    if (!sortConfig || sortConfig.key !== sortKey) {
+      return <ChevronDown className="w-3 h-3 opacity-0 group-hover:opacity-50 transition-opacity" />;
+    }
+    return sortConfig.direction === 'asc' ? 
+      <ChevronUp className="w-3 h-3 text-amber-600" /> : 
+      <ChevronDown className="w-3 h-3 text-amber-600" />;
   };
 
   const openModal = (debtor?: Debtor) => {
@@ -159,27 +235,33 @@ export default function DebtorsSection() {
     alert("To remove a debtor, delete all their associated sales from the Sales section.");
   };
 
-  const handleViewReceipt = (debtor: Debtor, sale: Sale) => {
-    // Open receipt in new tab/window
-    const receiptUrl = `/api/receipt/${sale.id}`;
+  // Single Receipt Download
+  const handleDownloadReceipt = (saleId: number) => {
+    // Open single receipt in new tab
+    const receiptUrl = `/api/receipt/${saleId}`;
     window.open(receiptUrl, '_blank');
   };
 
-  // Generate receipt download link
-  const generateReceiptLink = (saleId: number): string => {
-    // Assuming your receipt API endpoint
+  // Full Statement Download
+  const handleDownloadStatement = (debtor: Debtor) => {
+    // Open customer statement in new tab
+    const statementUrl = `/api/customer-receipt/${debtor.id}`;
+    window.open(statementUrl, '_blank');
+  };
+
+  // Generate receipt download link for PDF (for single receipt)
+  const generateReceiptDownloadLink = (saleId: number): string => {
     return `${window.location.origin}/api/receipt/${saleId}`;
   };
 
-  // Generate receipt download link for PDF
-  const generateReceiptDownloadLink = (saleId: number): string => {
-    // For PDF download
-    return `${window.location.origin}/api/receipt/${saleId}?download=true`;
+  // Generate statement download link (for full statement)
+  const generateStatementLink = (customerId: number): string => {
+    return `${window.location.origin}/api/customer-receipt/${customerId}`;
   };
 
   // Generate individual sale reminder message with receipt link
   const generateSaleReminderMessage = (debtor: Debtor, sale: Sale): string => {
-    const receiptLink = generateReceiptLink(sale.id);
+    const receiptLink = generateReceiptDownloadLink(sale.id);
     
     return `Hello ${debtor.name},
 
@@ -203,18 +285,26 @@ Swiftmetals`;
 
   // Generate overall account reminder message (for all outstanding sales)
   const generateAccountReminderMessage = (debtor: Debtor): string => {
-    // Generate links for all outstanding sales
+    // Generate links for all outstanding sales (single receipts)
     const receiptLinks = debtor.sales.map(sale => 
-      `Sale #${sale.id} (${formatDate(sale.date)}): ${generateReceiptLink(sale.id)}`
+      `Sale #${sale.id} (${formatDate(sale.date)}): ${generateReceiptDownloadLink(sale.id)}`
     ).join('\n');
 
     return `Hello ${debtor.name},
 
+Account Statement Summary:
+Total Purchases: KES ${formatCurrency(debtor.totalSales)}
+Total Paid: KES ${formatCurrency(debtor.paid)}
+Outstanding Balance: KES ${formatCurrency(debtor.balance)}
 
-Kind reminder of your Balance: KES ${formatCurrency(debtor.balance)}
 We kindly request that you settle your outstanding balance at your earliest convenience.
-Attached is the receipt. 
+
+Individual Receipts:
 ${receiptLinks}
+
+Full Account Statement:
+${generateStatementLink(debtor.id)}
+
 Best regards,
 Swiftmetals`;
   };
@@ -290,13 +380,61 @@ Swiftmetals`;
             </h1>
             <p className="text-gray-600 text-xs md:text-sm lg:text-base mt-1 md:mt-2">Manage customers and debtors</p>
           </div>
-          <button
-            onClick={() => openModal()}
-            className="bg-amber-600 hover:bg-amber-700 text-white px-4 md:px-6 py-2 md:py-3 rounded-lg font-medium transition flex items-center gap-2 shadow-lg hover:shadow-xl text-sm md:text-base w-full md:w-auto justify-center"
-          >
-            <Plus className="w-4 h-4 md:w-5 md:h-5" /> Add Debtor
-          </button>
+          <div className="flex flex-col sm:flex-row gap-3 w-full md:w-auto">
+            {/* Search Bar */}
+            <div className="relative flex-1 md:flex-none md:w-64 lg:w-80">
+              <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                <Search className="h-4 w-4 text-gray-400" />
+              </div>
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={handleSearch}
+                placeholder="Search by name, phone, email, items..."
+                className="pl-10 pr-10 py-2.5 border border-gray-300 rounded-lg w-full focus:ring-2 focus:ring-amber-500 focus:border-transparent focus:outline-none text-sm"
+              />
+              {searchQuery && (
+                <button
+                  onClick={clearSearch}
+                  className="absolute inset-y-0 right-0 pr-3 flex items-center"
+                >
+                  <X className="h-4 w-4 text-gray-400 hover:text-gray-600" />
+                </button>
+              )}
+            </div>
+            
+            <button
+              onClick={() => openModal()}
+              className="bg-amber-600 hover:bg-amber-700 text-white px-4 md:px-6 py-2.5 rounded-lg font-medium transition flex items-center gap-2 shadow-lg hover:shadow-xl text-sm md:text-base w-full sm:w-auto justify-center"
+            >
+              <Plus className="w-4 h-4 md:w-5 md:h-5" /> Add Debtor
+            </button>
+          </div>
         </div>
+
+        {/* Search Results Info */}
+        {searchQuery && (
+          <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg">
+            <div className="flex items-center justify-between">
+              <p className="text-sm text-blue-800">
+                Showing {filteredDebtors.length} of {debtors.length} debtors
+                {searchQuery && (
+                  <span className="ml-2">
+                    for "<span className="font-semibold">{searchQuery}</span>"
+                  </span>
+                )}
+              </p>
+              {searchQuery && (
+                <button
+                  onClick={clearSearch}
+                  className="text-sm text-blue-600 hover:text-blue-800 flex items-center gap-1"
+                >
+                  <X className="w-3 h-3" /> Clear search
+                </button>
+              )}
+            </div>
+          </div>
+        )}
 
         {/* Error Message */}
         {error && (
@@ -317,32 +455,90 @@ Swiftmetals`;
               <div className="grid grid-cols-2 md:grid-cols-3 gap-2 md:gap-4 mb-6 md:mb-8">
                 <div className="bg-white rounded-lg p-3 md:p-6 shadow-md border-l-4 border-amber-600">
                   <p className="text-gray-600 text-xs md:text-sm font-medium mb-1 md:mb-2">Total Customers</p>
-                  <p className="text-2xl md:text-3xl font-bold text-gray-900">{debtors.length}</p>
+                  <p className="text-2xl md:text-3xl font-bold text-gray-900">{filteredDebtors.length}</p>
                 </div>
                 <div className="bg-white rounded-lg p-3 md:p-6 shadow-md border-l-4 border-orange-500">
                   <p className="text-gray-600 text-xs md:text-sm font-medium mb-1 md:mb-2">Total Sales</p>
                   <p className="text-sm md:text-base font-bold text-orange-600 break-all">
-                    KES {formatCurrency(debtors.reduce((sum, d) => sum + d.totalSales, 0))}
+                    KES {formatCurrency(filteredDebtors.reduce((sum, d) => sum + d.totalSales, 0))}
                   </p>
                 </div>
                 <div className="bg-white rounded-lg p-3 md:p-6 shadow-md border-l-4 border-red-500">
                   <p className="text-gray-600 text-xs md:text-sm font-medium mb-1 md:mb-2">Outstanding</p>
                   <p className="text-sm md:text-base font-bold text-red-600 break-all">
-                    KES {formatCurrency(debtors.reduce((sum, d) => sum + d.balance, 0))}
+                    KES {formatCurrency(filteredDebtors.reduce((sum, d) => sum + d.balance, 0))}
                   </p>
+                </div>
+              </div>
+            )}
+
+            {/* Sortable Header - Desktop */}
+            {debtors.length > 0 && (
+              <div className="hidden lg:grid grid-cols-12 gap-4 mb-3 px-4">
+                <div className="col-span-4">
+                  <button
+                    onClick={() => handleSort('name')}
+                    className="flex items-center gap-1 text-xs font-semibold text-gray-700 hover:text-gray-900 group"
+                  >
+                    Customer Details
+                    <SortIcon sortKey="name" />
+                  </button>
+                </div>
+                <div className="col-span-2">
+                  <button
+                    onClick={() => handleSort('totalSales')}
+                    className="flex items-center justify-center gap-1 text-xs font-semibold text-gray-700 hover:text-gray-900 group"
+                  >
+                    Total Sales
+                    <SortIcon sortKey="totalSales" />
+                  </button>
+                </div>
+                <div className="col-span-2">
+                  <button
+                    onClick={() => handleSort('paid')}
+                    className="flex items-center justify-center gap-1 text-xs font-semibold text-gray-700 hover:text-gray-900 group"
+                  >
+                    Amount Paid
+                    <SortIcon sortKey="paid" />
+                  </button>
+                </div>
+                <div className="col-span-2">
+                  <button
+                    onClick={() => handleSort('balance')}
+                    className="flex items-center justify-center gap-1 text-xs font-semibold text-gray-700 hover:text-gray-900 group"
+                  >
+                    Balance
+                    <SortIcon sortKey="balance" />
+                  </button>
+                </div>
+                <div className="col-span-2 text-right">
+                  <span className="text-xs font-semibold text-gray-700">Actions</span>
                 </div>
               </div>
             )}
 
             {/* Debtors List */}
             <div className="space-y-2">
-              {debtors.length === 0 ? (
+              {filteredDebtors.length === 0 ? (
                 <div className="bg-white rounded-lg p-8 md:p-12 text-center shadow-sm">
                   <Users className="w-12 h-12 md:w-16 md:h-16 mx-auto mb-3 md:mb-4 text-gray-300" />
-                  <p className="text-gray-500 text-sm md:text-lg">No debtors yet. Add one to get started.</p>
+                  <p className="text-gray-500 text-sm md:text-lg">
+                    {searchQuery ? 
+                      `No debtors found for "${searchQuery}". Try a different search term.` : 
+                      "No debtors yet. Add one to get started."
+                    }
+                  </p>
+                  {searchQuery && (
+                    <button
+                      onClick={clearSearch}
+                      className="mt-4 px-4 py-2 bg-amber-600 text-white rounded-lg hover:bg-amber-700 transition text-sm"
+                    >
+                      Clear Search
+                    </button>
+                  )}
                 </div>
               ) : (
-                debtors.map((debtor) => (
+                filteredDebtors.map((debtor) => (
                   <div key={debtor.id} className="bg-white rounded-lg shadow-sm hover:shadow-md overflow-hidden transition-all border border-gray-100">
                     <div
                       onClick={() => setExpandedId(expandedId === debtor.id ? null : debtor.id)}
@@ -399,6 +595,16 @@ Swiftmetals`;
                             <button
                               onClick={(e) => {
                                 e.stopPropagation();
+                                handleDownloadStatement(debtor);
+                              }}
+                              className="p-1.5 text-green-600 hover:bg-green-50 rounded transition"
+                              title="Download Full Statement"
+                            >
+                              <FileText className="w-4 h-4" />
+                            </button>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
                                 openModal(debtor);
                               }}
                               className="p-1.5 text-blue-600 hover:bg-blue-50 rounded transition"
@@ -449,6 +655,17 @@ Swiftmetals`;
                     {/* Expanded Details */}
                     {expandedId === debtor.id && (
                       <div className="px-3 md:px-4 pb-3 md:pb-4 space-y-3 border-t border-gray-200 bg-gray-50">
+                        {/* Download Full Statement Button */}
+                        <div className="flex justify-end">
+                          <button
+                            onClick={() => handleDownloadStatement(debtor)}
+                            className="px-3 py-1.5 bg-gradient-to-r from-green-500 to-emerald-500 hover:from-green-600 hover:to-emerald-600 text-white font-medium rounded-lg transition-all flex items-center gap-1.5 text-xs"
+                          >
+                            <Download className="w-3.5 h-3.5" />
+                            Download Full Statement (PDF)
+                          </button>
+                        </div>
+
                         {/* Sales History */}
                         <div>
                           <h4 className="text-sm font-bold text-gray-900 mb-2 flex items-center gap-2">
@@ -470,11 +687,11 @@ Swiftmetals`;
                                   <div className="flex items-center gap-2 flex-shrink-0">
                                     <p className="font-bold text-gray-900 text-xs whitespace-nowrap">KES {formatCurrency(sale.amount)}</p>
                                     <button
-                                      onClick={() => handleViewReceipt(debtor, sale)}
+                                      onClick={() => handleDownloadReceipt(sale.id)}
                                       className="p-1.5 text-blue-600 hover:bg-blue-50 rounded transition"
-                                      title="View Receipt"
+                                      title="Download Single Receipt"
                                     >
-                                      <FileText className="w-3.5 h-3.5" />
+                                      <Download className="w-3.5 h-3.5" />
                                     </button>
                                   </div>
                                 </div>
@@ -538,14 +755,12 @@ Swiftmetals`;
                             )}
                             
                             <div className="text-xs text-gray-500 mt-2">
-                              <p className="font-medium mb-1">Message Options:</p>
+                              <p className="font-medium mb-1">Document Options:</p>
                               <ul className="list-disc pl-4 space-y-0.5">
-                                <li><strong>WhatsApp/SMS (Summary)</strong>: Sends a summary of all outstanding invoices with receipt download links</li>
-                                {debtor.email && (
-                                  <li><strong>Email</strong>: Sends detailed email with all receipt download links</li>
-                                )}
+                                <li><strong>Single Receipt</strong>: Download individual receipt for each sale (opens receipt API)</li>
+                                <li><strong>Full Statement</strong>: Download complete account statement with all purchases (opens customer statement API)</li>
+                                <li><strong>Messages</strong>: Include both individual receipt links and full statement link</li>
                               </ul>
-                              <p className="mt-1 text-amber-600 font-medium">All messages include receipt download links!</p>
                             </div>
                           </div>
                         )}
@@ -591,7 +806,11 @@ Swiftmetals`;
               </div>
               <div className="bg-green-50 border border-green-200 rounded-lg p-4">
                 <p className="text-sm text-green-800">
-                  <strong>Message Features:</strong> Reminder messages now include receipt download links and no specific due dates.
+                  <strong>Document Download:</strong>
+                  <ul className="mt-1 ml-2">
+                    <li>• Single Receipt: Opens receipt API</li>
+                    <li>• Full Statement: Opens customer statement API</li>
+                  </ul>
                 </p>
               </div>
             </div>

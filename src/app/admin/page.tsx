@@ -1,6 +1,8 @@
 "use client";
 import Link from "next/link";
+import { getAuth } from "firebase/auth";
 import { useEffect, useState, useCallback, useMemo, useRef } from "react";
+
 import {
   TrendingUp,
   Receipt,
@@ -26,7 +28,8 @@ import {
   Copy,
   CreditCard,
   Wallet,
-  Coins
+  Coins,
+  User
 } from "lucide-react";
 
 interface Customer {
@@ -42,7 +45,7 @@ interface Product {
   price?: number;
   stock?: any;
   productionCost?: number;
-  category?: string; // Added category field
+  category?: string;
 }
 
 interface QuickSaleItem {
@@ -59,16 +62,39 @@ interface RestockForm {
   creditorName: string;
 }
 
-// Product creation interface
 interface NewProductForm {
   name: string;
   productionCost: string;
   sellingPrice: string;
   initialStock: string;
-  category: string; // Added category
+  category: string;
 }
 
-// Payment types for the new system
+interface CurrentUser {
+  uid: string;
+  email: string;
+  message?: string;
+}
+
+async function fetchCurrentUser(): Promise<CurrentUser | null> {
+  try {
+    const token = localStorage.getItem("token");
+    if (!token) return null;
+
+    const res = await fetch("/api/auth/session", {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+
+    if (!res.ok) return null;
+
+    const data: CurrentUser = await res.json();
+    return data;
+  } catch (err) {
+    console.error("Error fetching current user:", err);
+    return null;
+  }
+}
+
 type PaymentOption = 'cash' | 'partial' | 'credit';
 
 export default function AdminDashboard() {
@@ -77,7 +103,6 @@ export default function AdminDashboard() {
   const [showNotifications, setShowNotifications] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   
-  // Quick Sale States
   const [showQuickSale, setShowQuickSale] = useState(false);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
@@ -88,15 +113,19 @@ export default function AdminDashboard() {
   const [showProductDropdown, setShowProductDropdown] = useState(false);
   const [saleItems, setSaleItems] = useState<QuickSaleItem[]>([]);
   const [currentProduct, setCurrentProduct] = useState<Product | null>(null);
-  const [currentQuantity, setCurrentQuantity] = useState<number>(0); // Explicitly typed
+  const [currentQuantity, setCurrentQuantity] = useState<number>(0);
   const [currentPrice, setCurrentPrice] = useState<string>("");
   const [creating, setCreating] = useState(false);
   const [saleError, setSaleError] = useState<string | null>(null);
   const [saleSuccess, setSaleSuccess] = useState<string | null>(null);
   const [stockError, setStockError] = useState<string | null>(null);
   const [bankBalance, setBankBalance] = useState<number | null>(null);
+  const [currentUser, setCurrentUser] = useState<{ uid: string; email: string } | null>(null);
 
-  // New Customer Creation States
+  useEffect(() => {
+    fetchCurrentUser().then(user => setCurrentUser(user));
+  }, []);
+
   const [showAddCustomer, setShowAddCustomer] = useState(false);
   const [newCustomer, setNewCustomer] = useState({
     name: "",
@@ -105,16 +134,13 @@ export default function AdminDashboard() {
   });
   const [addingCustomer, setAddingCustomer] = useState(false);
 
-  // New Payment System States
   const [paymentOption, setPaymentOption] = useState<PaymentOption>('cash');
   const [amountPaid, setAmountPaid] = useState<string>("");
   const [isCreating, setIsCreating] = useState(false);
 
-  // Optimistic UI States
   const [optimisticSale, setOptimisticSale] = useState<any>(null);
   const [optimisticProducts, setOptimisticProducts] = useState<Product[]>([]);
 
-  // Restock Modal States
   const [showRestockModal, setShowRestockModal] = useState(false);
   const [restockingProduct, setRestockingProduct] = useState<Product | null>(null);
   const [restockForm, setRestockForm] = useState<RestockForm>({
@@ -126,20 +152,18 @@ export default function AdminDashboard() {
   const [restocking, setRestocking] = useState(false);
   const [restockError, setRestockError] = useState<string | null>(null);
 
-  // NEW: Product Creation States
   const [showAddProduct, setShowAddProduct] = useState(false);
   const [newProduct, setNewProduct] = useState<NewProductForm>({
     name: "",
     productionCost: "",
     sellingPrice: "",
     initialStock: "0",
-    category: "" // Added category
+    category: ""
   });
   const [addingProduct, setAddingProduct] = useState(false);
   const [productError, setProductError] = useState<string | null>(null);
   const [productSuccess, setProductSuccess] = useState<string | null>(null);
 
-  // Categories for products
   const [categories, setCategories] = useState<string[]>([
     "Metals",
     "Hardware",
@@ -153,7 +177,6 @@ export default function AdminDashboard() {
     "Other"
   ]);
 
-  // Refs for dropdown management and debouncing
   const customerDropdownRef = useRef<HTMLDivElement>(null);
   const productDropdownRef = useRef<HTMLDivElement>(null);
   const createSaleButtonRef = useRef<HTMLButtonElement>(null);
@@ -200,6 +223,14 @@ export default function AdminDashboard() {
       color: "bg-gray-600",
       stats: "Last updated 2d ago",
     },
+    {
+      title: "staff",
+      description: "View and manage your staff.",
+      href: "/admin/staff", 
+      icon: Phone,
+      color: "bg-gray-600",
+      stats: "Last updated 2d ago",
+    },
   ];
 
   const fetchDashboardData = useCallback(async () => {
@@ -239,7 +270,6 @@ export default function AdminDashboard() {
       setProducts(Array.isArray(productsData) ? productsData : []);
       setCustomers(Array.isArray(customersData) ? customersData : (customersData?.customers || customersData?.data || []));
 
-      // Extract unique categories from products
       if (Array.isArray(productsData)) {
         const uniqueCategories = Array.from(
           new Set(productsData
@@ -331,198 +361,155 @@ export default function AdminDashboard() {
 
       newNotifications.sort((a, b) => a.priority - b.priority);
       
-      // FIXED: Fetch bank balance with better error handling
- // FIXED: Correct bank balance calculation based on actual sales API response
-let bankBalanceValue = 0;
+      let bankBalanceValue = 0;
 
-try {
-  console.log("Fetching data for bank balance calculation...");
-  
-  // Step 1: Fetch opening balance
-  let openingBalance = 0;
-  try {
-    // Try to get today's opening balance from dailyopeningbalance
-    const openingRes = await fetch("/api/daily-opening-balance");
-    if (openingRes.ok) {
-      const openingData = await openingRes.json();
-      if (Array.isArray(openingData) && openingData.length > 0) {
-        // Get the most recent opening balance
-        const latestOpening = openingData.sort((a: any, b: any) => 
-          new Date(b.date).getTime() - new Date(a.date).getTime()
-        )[0];
-        openingBalance = Number(latestOpening?.amount) || 0;
-      } else if (openingData && typeof openingData === 'object') {
-        openingBalance = Number(openingData.amount) || 0;
-      }
-    } else {
-      // Fallback to general opening balance
-      const generalRes = await fetch("/api/opening-balance");
-      if (generalRes.ok) {
-        const generalData = await generalRes.json();
-        openingBalance = Number(generalData?.amount) || 50000;
-      } else {
-        openingBalance = 50000; // Default fallback
-      }
-    }
-    console.log("Opening balance:", openingBalance);
-  } catch (err) {
-    console.error("Error fetching opening balance:", err);
-    openingBalance = 50000;
-  }
-  
-  // Step 2: Fetch sales data
-  let totalSales = 0;
-  let totalCashReceived = 0;
-  let totalDebtors = 0;
-  
-  try {
-    const salesRes = await fetch("/api/sales");
-    if (!salesRes.ok) {
-      throw new Error(`Sales API failed with status: ${salesRes.status}`);
-    }
-    
-    const salesData = await salesRes.json();
-    console.log("Sales data received, count:", Array.isArray(salesData) ? salesData.length : 0);
-    
-    if (Array.isArray(salesData)) {
-      salesData.forEach((sale: any) => {
-        const saleAmount = Number(sale.amount) || 0;
-        totalSales += saleAmount;
-        
-        // Calculate payments
-        const payments = sale.payment || sale.payments || [];
-        let totalPaidForSale = 0;
-        
-        if (payments.length > 0) {
-          // Sum all CLEARED or COMPLETED payments
-          totalPaidForSale = payments
-            .filter((p: any) => {
-              const status = (p.status || '').toUpperCase();
-              return status === 'CLEARED' || status === 'COMPLETED' || 
-                     (p.isVerified === true && !p.status) || p.status === 'PENDING';
-            })
-            .reduce((sum: number, p: any) => sum + (Number(p.amount) || 0), 0);
-        } else {
-          // If no payments array, check sale status
-          const saleStatus = (sale.status || '').toUpperCase();
-          const paymentMethod = (sale.paymentMethod || '').toUpperCase();
-          
-          // If sale is marked as PAID and payment method is CASH, count as fully paid
-          if (saleStatus === 'PAID' && paymentMethod === 'CASH') {
-            totalPaidForSale = saleAmount;
+      try {
+        let openingBalance = 0;
+        try {
+          const openingRes = await fetch("/api/daily-opening-balance");
+          if (openingRes.ok) {
+            const openingData = await openingRes.json();
+            if (Array.isArray(openingData) && openingData.length > 0) {
+              const latestOpening = openingData.sort((a: any, b: any) => 
+                new Date(b.date).getTime() - new Date(a.date).getTime()
+              )[0];
+              openingBalance = Number(latestOpening?.amount) || 0;
+            } else if (openingData && typeof openingData === 'object') {
+              openingBalance = Number(openingData.amount) || 0;
+            }
+          } else {
+            const generalRes = await fetch("/api/opening-balance");
+            if (generalRes.ok) {
+              const generalData = await generalRes.json();
+              openingBalance = Number(generalData?.amount) || 50000;
+            } else {
+              openingBalance = 50000;
+            }
           }
+        } catch (err) {
+          console.error("Error fetching opening balance:", err);
+          openingBalance = 50000;
         }
         
-        totalCashReceived += totalPaidForSale;
+        let totalSales = 0;
+        let totalCashReceived = 0;
+        let totalDebtors = 0;
         
-        // Calculate debtors (unpaid amount)
-        const saleDebt = saleAmount - totalPaidForSale;
-        if (saleDebt > 0) {
-          totalDebtors += saleDebt;
+        try {
+          const salesRes = await fetch("/api/sales");
+          if (!salesRes.ok) {
+            throw new Error(`Sales API failed with status: ${salesRes.status}`);
+          }
+          
+          const salesData = await salesRes.json();
+          
+          if (Array.isArray(salesData)) {
+            salesData.forEach((sale: any) => {
+              const saleAmount = Number(sale.amount) || 0;
+              totalSales += saleAmount;
+              
+              const payments = sale.payment || sale.payments || [];
+              let totalPaidForSale = 0;
+              
+              if (payments.length > 0) {
+                totalPaidForSale = payments
+                  .filter((p: any) => {
+                    const status = (p.status || '').toUpperCase();
+                    return status === 'CLEARED' || status === 'COMPLETED' || 
+                           (p.isVerified === true && !p.status) || p.status === 'PENDING';
+                  })
+                  .reduce((sum: number, p: any) => sum + (Number(p.amount) || 0), 0);
+              } else {
+                const saleStatus = (sale.status || '').toUpperCase();
+                const paymentMethod = (sale.paymentMethod || '').toUpperCase();
+                
+                if (saleStatus === 'PAID' && paymentMethod === 'CASH') {
+                  totalPaidForSale = saleAmount;
+                }
+              }
+              
+              totalCashReceived += totalPaidForSale;
+              
+              const saleDebt = saleAmount - totalPaidForSale;
+              if (saleDebt > 0) {
+                totalDebtors += saleDebt;
+              }
+            });
+          }
+        } catch (salesError) {
+          console.error("Error processing sales data:", salesError);
         }
         
-        console.log(`Sale ${sale.id}: Amount=${saleAmount}, Paid=${totalPaidForSale}, Debt=${saleDebt}, Status=${sale.status}, Method=${sale.paymentMethod}`);
-      });
-    }
-    
-    console.log("Total Sales:", totalSales);
-    console.log("Total Cash Received:", totalCashReceived);
-    console.log("Total Debtors:", totalDebtors);
-    
-  } catch (salesError) {
-    console.error("Error processing sales data:", salesError);
-  }
-  
-  // Step 3: Fetch expenses
-  let totalExpenses = 0;
-  try {
-    const expensesRes = await fetch("/api/expenses");
-    if (expensesRes.ok) {
-      const expensesData = await expensesRes.json();
-      
-      if (Array.isArray(expensesData)) {
-        totalExpenses = expensesData.reduce((acc: number, expense: any) => {
-          return acc + (Number(expense.amount) || 0);
-        }, 0);
-      } else if (expensesData && typeof expensesData === 'object') {
-        if (Array.isArray(expensesData.expenses)) {
-          totalExpenses = expensesData.expenses.reduce((acc: number, expense: any) => {
-            return acc + (Number(expense.amount) || 0);
-          }, 0);
-        } else if (Array.isArray(expensesData.data)) {
-          totalExpenses = expensesData.data.reduce((acc: number, expense: any) => {
-            return acc + (Number(expense.amount) || 0);
-          }, 0);
-        } else if (expensesData.total !== undefined) {
-          totalExpenses = Number(expensesData.total) || 0;
+        let totalExpenses = 0;
+        try {
+          const expensesRes = await fetch("/api/expenses");
+          if (expensesRes.ok) {
+            const expensesData = await expensesRes.json();
+            
+            if (Array.isArray(expensesData)) {
+              totalExpenses = expensesData.reduce((acc: number, expense: any) => {
+                return acc + (Number(expense.amount) || 0);
+              }, 0);
+            } else if (expensesData && typeof expensesData === 'object') {
+              if (Array.isArray(expensesData.expenses)) {
+                totalExpenses = expensesData.expenses.reduce((acc: number, expense: any) => {
+                  return acc + (Number(expense.amount) || 0);
+                }, 0);
+              } else if (Array.isArray(expensesData.data)) {
+                totalExpenses = expensesData.data.reduce((acc: number, expense: any) => {
+                  return acc + (Number(expense.amount) || 0);
+                }, 0);
+              } else if (expensesData.total !== undefined) {
+                totalExpenses = Number(expensesData.total) || 0;
+              }
+            }
+          }
+        } catch (expenseError) {
+          console.error("Error fetching expenses:", expenseError);
         }
+        
+        bankBalanceValue = openingBalance + totalCashReceived - totalExpenses;
+        
+        setBankBalance(bankBalanceValue);
+        
+      } catch (err) {
+        console.error("Error in bank balance calculation:", err);
+        setBankBalance(prev => prev !== null ? prev : 0);
+        bankBalanceValue = 0;
       }
-    }
-    console.log("Total Expenses:", totalExpenses);
-  } catch (expenseError) {
-    console.error("Error fetching expenses:", expenseError);
-  }
-  
-  // Step 4: Calculate bank balance using your formula:
-  // Bank Balance = Opening Balance + (Total Sales - Debtors) - Expenses
-  // OR equivalently: Bank Balance = Opening Balance + Total Cash Received - Expenses
-  bankBalanceValue = openingBalance + totalCashReceived - totalExpenses;
-  
-  console.log("=== BANK BALANCE CALCULATION ===");
-  console.log(`Opening Balance: ${openingBalance}`);
-  console.log(`+ Total Cash Received: ${totalCashReceived}`);
-  console.log(`- Total Expenses: ${totalExpenses}`);
-  console.log(`= Bank Balance: ${bankBalanceValue}`);
-  
-  console.log("\n=== ALTERNATIVE VIEW ===");
-  console.log(`Opening Balance: ${openingBalance}`);
-  console.log(`+ Total Sales: ${totalSales}`);
-  console.log(`- Total Debtors: ${totalDebtors}`);
-  console.log(`- Total Expenses: ${totalExpenses}`);
-  console.log(`= Bank Balance: ${bankBalanceValue}`);
-  console.log(`(Formula: ${openingBalance} + (${totalSales} - ${totalDebtors}) - ${totalExpenses} = ${bankBalanceValue})`);
-  
-  setBankBalance(bankBalanceValue);
-  
-} catch (err) {
-  console.error("Error in bank balance calculation:", err);
-  setBankBalance(prev => prev !== null ? prev : 0);
-  bankBalanceValue = 0;
-}
 
-// Now bankBalanceValue is accessible here
-setNotifications(newNotifications);
+      setNotifications(newNotifications);
 
-setQuickStats([
-  {
-    title: "Today's Revenue",
-    value: `KSh ${todayRevenue.toLocaleString()}`,
-    change: "+0%",
-    icon: DollarSign,
-    positive: true,
-  },
-  {
-    title: "Active Orders",
-    value: activeOrders.toString(),
-    change: `${activeOrders} pending`,
-    icon: ShoppingCart,
-    positive: true,
-  },
-  {
-    title: "Low Stock Items",
-    value: lowStockItems.length.toString(),
-    change: criticalStockItems.length > 0 ? `${criticalStockItems.length} critical` : "Good",
-    icon: Package,
-    positive: lowStockItems.length === 0,
-  },
-  {
-    title: "Bank Balance",
-    value: `KSh ${bankBalanceValue.toLocaleString()}`,
-    change: "View Details",
-    icon: Activity,
-    positive: bankBalanceValue !== null && bankBalanceValue > 0,
-  },
-]);
+      setQuickStats([
+        {
+          title: "Today's Revenue",
+          value: `KSh ${todayRevenue.toLocaleString()}`,
+          change: "+0%",
+          icon: DollarSign,
+          positive: true,
+        },
+        {
+          title: "Active Orders",
+          value: activeOrders.toString(),
+          change: `${activeOrders} pending`,
+          icon: ShoppingCart,
+          positive: true,
+        },
+        {
+          title: "Low Stock Items",
+          value: lowStockItems.length.toString(),
+          change: criticalStockItems.length > 0 ? `${criticalStockItems.length} critical` : "Good",
+          icon: Package,
+          positive: lowStockItems.length === 0,
+        },
+        {
+          title: "Bank Balance",
+          value: `KSh ${bankBalanceValue.toLocaleString()}`,
+          change: "View Details",
+          icon: Activity,
+          positive: bankBalanceValue !== null && bankBalanceValue > 0,
+        },
+      ]);
     } catch (error) {
       console.error("Failed to fetch dashboard stats:", error);
     } finally {
@@ -534,7 +521,6 @@ setQuickStats([
     fetchDashboardData();
   }, [fetchDashboardData]);
 
-  // Handle click outside for dropdowns
   useEffect(() => {
     if (!showQuickSale) return;
     
@@ -554,7 +540,6 @@ setQuickStats([
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [showQuickSale]);
 
-  // Reset payment option when total changes
   useEffect(() => {
     const total = calculateTotalAmount();
     if (paymentOption === 'cash') {
@@ -562,12 +547,11 @@ setQuickStats([
     } else if (paymentOption === 'credit') {
       setAmountPaid("0");
     } else {
-      // For partial, keep the current amount or set to empty
       if (!amountPaid || parseFloat(amountPaid) > total) {
         setAmountPaid("");
       }
     }
-  }, [saleItems, paymentOption, amountPaid]); // Added amountPaid to dependencies
+  }, [saleItems, paymentOption, amountPaid]);
 
   const filteredCustomers = useMemo(() => {
     if (!customerSearch.trim()) return customers.slice(0, 10);
@@ -602,13 +586,10 @@ setQuickStats([
     return stock === 0;
   };
 
-  // ================ FIXED CUSTOMER CREATION ================
-  
   const handleImportFromContacts = async () => {
     try {
-      // Check if Contact Picker API is available
       if ('contacts' in navigator && 'ContactsManager' in window) {
-        // @ts-ignore - Contact Picker API
+        // @ts-ignore
         const contacts = await navigator.contacts.select(['name', 'tel', 'email'], { multiple: false });
         
         if (contacts && contacts.length > 0) {
@@ -620,11 +601,9 @@ setQuickStats([
           });
         }
       } else {
-        // Fallback to clipboard/paste
         try {
           const text = await navigator.clipboard.readText();
           if (text.includes('BEGIN:VCARD')) {
-            // Simple VCF parsing
             const lines = text.split('\n');
             let name = '', phone = '', email = '';
             
@@ -636,11 +615,9 @@ setQuickStats([
             
             setNewCustomer({ name, phone, email });
           } else {
-            // If not VCF, maybe just a name
             setNewCustomer(prev => ({ ...prev, name: text }));
           }
         } catch (clipboardError) {
-          // Show file upload option
           const input = document.createElement('input');
           input.type = 'file';
           input.accept = '.vcf,.vcard,text/vcard';
@@ -650,7 +627,6 @@ setQuickStats([
               const reader = new FileReader();
               reader.onload = (event) => {
                 const content = event.target?.result as string;
-                // Simple VCF parsing
                 const lines = content.split('\n');
                 let name = '', phone = '', email = '';
                 
@@ -675,228 +651,210 @@ setQuickStats([
     }
   };
 
- const handleCreateCustomer = async () => {
-  if (!newCustomer.name.trim()) {
-    setSaleError("Customer name is required");
-    setTimeout(() => setSaleError(null), 3000);
-    return;
-  }
+  const handleCreateCustomer = async () => {
+    if (!newCustomer.name.trim()) {
+      setSaleError("Customer name is required");
+      setTimeout(() => setSaleError(null), 3000);
+      return;
+    }
 
-  setAddingCustomer(true);
+    setAddingCustomer(true);
 
-  try {
-    const response = await fetch("/api/customer", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Accept": "application/json"
-      },
-      body: JSON.stringify({
-        name: newCustomer.name.trim(),
-        phone: newCustomer.phone.trim() || undefined,
-        email: newCustomer.email.trim() || undefined
-      })
-    });
-
-    // Read body ONCE only
-    const rawBody = await response.text();
-
-    let data: any = null;
-    let parseError = false;
-
-    // Try converting to JSON once
     try {
-      data = JSON.parse(rawBody);
-    } catch {
-      parseError = true;
-    }
-
-    // If request failed
-    if (!response.ok) {
-      const errorMessage =
-        (!parseError && (data?.error || data?.message)) ||
-        rawBody ||
-        "Failed to create customer";
-
-      throw new Error(errorMessage);
-    }
-
-    // If success but response is not JSON
-    const createdCustomer = !parseError
-      ? data
-      : {
-          id: Date.now(),
+      const response = await fetch("/api/customer", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Accept": "application/json"
+        },
+        body: JSON.stringify({
           name: newCustomer.name.trim(),
           phone: newCustomer.phone.trim() || undefined,
           email: newCustomer.email.trim() || undefined
-        };
+        })
+      });
 
-    // Update UI
-    setCustomers(prev => [...prev, createdCustomer]);
-    setSelectedCustomer(createdCustomer);
-    setShowAddCustomer(false);
-    setNewCustomer({ name: "", phone: "", email: "" });
+      const rawBody = await response.text();
 
-    setSaleSuccess("Customer added successfully!");
-    setTimeout(() => setSaleSuccess(null), 2000);
+      let data: any = null;
+      let parseError = false;
 
-  } catch (error: any) {
-    console.error("Error creating customer:", error);
-    setSaleError(error.message || "Failed to create customer");
-    setTimeout(() => setSaleError(null), 3000);
-  } finally {
-    setAddingCustomer(false);
-  }
-};
-
-  // ================ NEW PRODUCT CREATION WITH CATEGORY ================
- const handleCreateProduct = async () => {
-  // Validation
-  if (!newProduct.name.trim()) {
-    setProductError("Product name is required");
-    setTimeout(() => setProductError(null), 3000);
-    return;
-  }
-
-  const productionCost = parseFloat(newProduct.productionCost);
-  const sellingPrice = parseFloat(newProduct.sellingPrice);
-  
-  // Parse stock - handle empty string case
-  const stockStr = newProduct.initialStock.trim();
-  const initialStock = stockStr === "" ? 0 : parseInt(stockStr, 10);
-
-  if (isNaN(productionCost) || productionCost <= 0) {
-    setProductError("Please enter a valid production cost greater than 0");
-    setTimeout(() => setProductError(null), 3000);
-    return;
-  }
-
-  if (isNaN(sellingPrice) || sellingPrice <= 0) {
-    setProductError("Please enter a valid selling price greater than 0");
-    setTimeout(() => setProductError(null), 3000);
-    return;
-  }
-
-  if (sellingPrice <= productionCost) {
-    setProductError("Selling price must be greater than production cost");
-    setTimeout(() => setProductError(null), 3000);
-    return;
-  }
-
-  if (isNaN(initialStock) || initialStock < 0) {
-    setProductError("Please enter a valid initial stock (0 or greater)");
-    setTimeout(() => setProductError(null), 3000);
-    return;
-  }
-
-  if (!newProduct.category.trim()) {
-    setProductError("Please select a category for the product");
-    setTimeout(() => setProductError(null), 3000);
-    return;
-  }
-
-  setAddingProduct(true);
-  setProductError(null);
-
-  try {
-    // CORRECTED: Match API expected field names
-    const requestBody = {
-      name: newProduct.name.trim(),
-      productionCost: productionCost,
-      price: sellingPrice, // API expects 'price' not 'sellingPrice'
-      stockQuantity: initialStock, // API expects 'stockQuantity' not 'stock'
-      category: newProduct.category.trim(),
-      // description is optional, can be added if needed
-      description: "" // Add description field if you want
-    };
-
-    console.log("Sending to API:", requestBody);
-
-    const response = await fetch("/api/products", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Accept": "application/json"
-      },
-      body: JSON.stringify(requestBody)
-    });
-
-    const rawBody = await response.text();
-    let data: any = null;
-    
-    try {
-      data = JSON.parse(rawBody);
-    } catch {
-      if (response.ok) {
-        data = {
-          id: Date.now(),
-          name: newProduct.name.trim(),
-          productionCost,
-          price: sellingPrice,
-          stockQuantity: initialStock,
-          category: newProduct.category.trim()
-        };
+      try {
+        data = JSON.parse(rawBody);
+      } catch {
+        parseError = true;
       }
+
+      if (!response.ok) {
+        const errorMessage =
+          (!parseError && (data?.error || data?.message)) ||
+          rawBody ||
+          "Failed to create customer";
+
+        throw new Error(errorMessage);
+      }
+
+      const createdCustomer = !parseError
+        ? data
+        : {
+            id: Date.now(),
+            name: newCustomer.name.trim(),
+            phone: newCustomer.phone.trim() || undefined,
+            email: newCustomer.email.trim() || undefined
+          };
+
+      setCustomers(prev => [...prev, createdCustomer]);
+      setSelectedCustomer(createdCustomer);
+      setShowAddCustomer(false);
+      setNewCustomer({ name: "", phone: "", email: "" });
+
+      setSaleSuccess("Customer added successfully!");
+      setTimeout(() => setSaleSuccess(null), 2000);
+
+    } catch (error: any) {
+      console.error("Error creating customer:", error);
+      setSaleError(error.message || "Failed to create customer");
+      setTimeout(() => setSaleError(null), 3000);
+    } finally {
+      setAddingCustomer(false);
+    }
+  };
+
+  const handleCreateProduct = async () => {
+    if (!newProduct.name.trim()) {
+      setProductError("Product name is required");
+      setTimeout(() => setProductError(null), 3000);
+      return;
     }
 
-    if (!response.ok) {
-      const errorMessage = data?.error || data?.message || rawBody || "Failed to create product";
-      throw new Error(errorMessage);
+    const productionCost = parseFloat(newProduct.productionCost);
+    const sellingPrice = parseFloat(newProduct.sellingPrice);
+    
+    const stockStr = newProduct.initialStock.trim();
+    const initialStock = stockStr === "" ? 0 : parseInt(stockStr, 10);
+
+    if (isNaN(productionCost) || productionCost <= 0) {
+      setProductError("Please enter a valid production cost greater than 0");
+      setTimeout(() => setProductError(null), 3000);
+      return;
     }
 
-    // Add the new product to the local state
-    const createdProduct = {
-      id: data.id || Date.now(),
-      name: newProduct.name.trim(),
-      productionCost,
-      price: sellingPrice,
-      stock: initialStock, // Make sure this is a number
-      category: newProduct.category.trim()
-    };
-
-    console.log("Product created successfully:", createdProduct);
-
-    setProducts(prev => [...prev, createdProduct]);
-    
-    // Add category to categories list if it's new
-    if (newProduct.category.trim() && !categories.includes(newProduct.category.trim())) {
-      setCategories(prev => [...prev, newProduct.category.trim()]);
+    if (isNaN(sellingPrice) || sellingPrice <= 0) {
+      setProductError("Please enter a valid selling price greater than 0");
+      setTimeout(() => setProductError(null), 3000);
+      return;
     }
-    
-    // Reset form
-    setNewProduct({
-      name: "",
-      productionCost: "",
-      sellingPrice: "",
-      initialStock: "0",
-      category: ""
-    });
-    
-    setShowAddProduct(false);
-    setProductSuccess(`✅ Product "${createdProduct.name}" created successfully with ${initialStock} units in stock!`);
-    setTimeout(() => setProductSuccess(null), 3000);
 
-    // Refresh dashboard data
-    setTimeout(() => {
-      fetchDashboardData().catch(console.error);
-    }, 1000);
+    if (sellingPrice <= productionCost) {
+      setProductError("Selling price must be greater than production cost");
+      setTimeout(() => setProductError(null), 3000);
+      return;
+    }
 
-  } catch (error: any) {
-    console.error("Error creating product:", error);
-    setProductError(error.message || "Failed to create product");
-    setTimeout(() => setProductError(null), 5000);
-  } finally {
-    setAddingProduct(false);
-  }
-};
-  // ================ OPTIMIZED SALE CREATION ================
+    if (isNaN(initialStock) || initialStock < 0) {
+      setProductError("Please enter a valid initial stock (0 or greater)");
+      setTimeout(() => setProductError(null), 3000);
+      return;
+    }
 
-  const createSaleMutation = async (saleData: any) => {
+    if (!newProduct.category.trim()) {
+      setProductError("Please select a category for the product");
+      setTimeout(() => setProductError(null), 3000);
+      return;
+    }
+
+    setAddingProduct(true);
+    setProductError(null);
+
+    try {
+      const requestBody = {
+        name: newProduct.name.trim(),
+        productionCost: productionCost,
+        price: sellingPrice,
+        stockQuantity: initialStock,
+        category: newProduct.category.trim(),
+        description: ""
+      };
+
+      const response = await fetch("/api/products", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Accept": "application/json"
+        },
+        body: JSON.stringify(requestBody)
+      });
+
+      const rawBody = await response.text();
+      let data: any = null;
+      
+      try {
+        data = JSON.parse(rawBody);
+      } catch {
+        if (response.ok) {
+          data = {
+            id: Date.now(),
+            name: newProduct.name.trim(),
+            productionCost,
+            price: sellingPrice,
+            stockQuantity: initialStock,
+            category: newProduct.category.trim()
+          };
+        }
+      }
+
+      if (!response.ok) {
+        const errorMessage = data?.error || data?.message || rawBody || "Failed to create product";
+        throw new Error(errorMessage);
+      }
+
+      const createdProduct = {
+        id: data.id || Date.now(),
+        name: newProduct.name.trim(),
+        productionCost,
+        price: sellingPrice,
+        stock: initialStock,
+        category: newProduct.category.trim()
+      };
+
+      setProducts(prev => [...prev, createdProduct]);
+      
+      if (newProduct.category.trim() && !categories.includes(newProduct.category.trim())) {
+        setCategories(prev => [...prev, newProduct.category.trim()]);
+      }
+      
+      setNewProduct({
+        name: "",
+        productionCost: "",
+        sellingPrice: "",
+        initialStock: "0",
+        category: ""
+      });
+      
+      setShowAddProduct(false);
+      setProductSuccess(`✅ Product "${createdProduct.name}" created successfully with ${initialStock} units in stock!`);
+      setTimeout(() => setProductSuccess(null), 3000);
+
+      setTimeout(() => {
+        fetchDashboardData().catch(console.error);
+      }, 1000);
+
+    } catch (error: any) {
+      console.error("Error creating product:", error);
+      setProductError(error.message || "Failed to create product");
+      setTimeout(() => setProductError(null), 5000);
+    } finally {
+      setAddingProduct(false);
+    }
+  };
+
+  const createSaleMutation = async (saleData: any, idToken: string) => {
     const response = await fetch("/api/sales", {
       method: "POST",
       headers: { 
         "Content-Type": "application/json",
-        "Accept": "application/json"
+        "Accept": "application/json",
+        "Authorization": `Bearer ${idToken}`
       },
       body: JSON.stringify(saleData)
     });
@@ -918,128 +876,130 @@ setQuickStats([
     return await response.json();
   };
 
- const handleCreateSaleOptimistic = async () => {
-  if (!selectedCustomer) {
-    setSaleError("Please select a customer");
-    setTimeout(() => setSaleError(null), 3000);
-    return;
-  }
-
-  if (saleItems.length === 0) {
-    setSaleError("Please add at least one item to the sale");
-    setTimeout(() => setSaleError(null), 3000);
-    return;
-  }
-
-  const totalAmount = calculateTotalAmount();
-  const paidAmount = parseFloat(amountPaid) || 0;
-
-  // Payment validation
-  if (paymentOption === "partial" && (!amountPaid || isNaN(paidAmount) || paidAmount <= 0)) {
-    setSaleError("Please enter a valid payment amount");
-    setTimeout(() => setSaleError(null), 3000);
-    return;
-  }
-
-  if (paymentOption === "partial" && paidAmount > totalAmount) {
-    setSaleError("Payment amount cannot exceed total amount");
-    setTimeout(() => setSaleError(null), 3000);
-    return;
-  }
-
-  // Build sale payload compatible with API
-  const saleData: any = {
-    customerId: selectedCustomer.id,
-    amount: totalAmount, // ✅ matches API
-    saleItems: saleItems.map(item => ({
-      productId: item.productId,
-      quantity: item.quantity,
-      price: item.price,
-    })),
-    date: new Date().toISOString(),
-    paymentMethod: paymentOption === "cash" || paymentOption === "partial" ? "CASH" : undefined,
-    payments:
-      paymentOption === "cash" || paymentOption === "partial"
-        ? [
-            {
-              amount: paidAmount,
-              method: "CASH",
-              status: "CLEARED",
-              paidAt: new Date().toISOString(),
-            },
-          ]
-        : [],
-    user: "CURRENT_USER_ID_OR_NAME", // replace with logged-in user
-  };
-
-  // Optimistic updates
-  setOptimisticSale(saleData);
-
-  const updatedProducts = products.map(product => {
-    const saleItem = saleItems.find(item => item.productId === product.id);
-    if (saleItem) {
-      const currentStock = getProductStock(product);
-      return {
-        ...product,
-        stock: { quantity: Math.max(0, currentStock - saleItem.quantity) },
-      };
+  const handleCreateSaleOptimistic = async () => {
+    if (!selectedCustomer) {
+      setSaleError("Please select a customer");
+      setTimeout(() => setSaleError(null), 3000);
+      return;
     }
-    return product;
-  });
 
-  setOptimisticProducts(updatedProducts);
-  setIsCreating(true);
-  setSaleError(null);
+    if (saleItems.length === 0) {
+      setSaleError("Please add at least one item to the sale");
+      setTimeout(() => setSaleError(null), 3000);
+      return;
+    }
 
-  // Clear previous timeout if exists
-  if (createSaleTimeoutRef.current) clearTimeout(createSaleTimeoutRef.current);
+    const totalAmount = calculateTotalAmount();
+    const paidAmount = parseFloat(amountPaid) || 0;
 
-  // Debounced sale creation
-  const createSalePromise = new Promise<void>(resolve => {
-    createSaleTimeoutRef.current = setTimeout(async () => {
-      try {
-        const result = await createSaleMutation(saleData);
+    if (paymentOption === "partial" && (!amountPaid || isNaN(paidAmount) || paidAmount <= 0)) {
+      setSaleError("Please enter a valid payment amount");
+      setTimeout(() => setSaleError(null), 3000);
+      return;
+    }
 
-        setSaleSuccess("Sale created successfully! 🎉");
+    if (paymentOption === "partial" && paidAmount > totalAmount) {
+      setSaleError("Payment amount cannot exceed total amount");
+      setTimeout(() => setSaleError(null), 3000);
+      return;
+    }
 
-        // Reset form
-        setSelectedCustomer(null);
-        setCustomerSearch("");
-        setSaleItems([]);
-        setCurrentProduct(null);
-        setProductSearch("");
-        setCurrentQuantity(0);
-        setCurrentPrice("");
-        setPaymentOption("cash");
-        setAmountPaid("");
+    const auth = getAuth();
+    const user = auth.currentUser;
+    
+    if (!user) {
+      setSaleError("You must be logged in to create a sale");
+      setTimeout(() => setSaleError(null), 3000);
+      return;
+    }
 
-        // Refresh dashboard
-        setTimeout(() => fetchDashboardData().catch(console.error), 1000);
+    const idToken = await user.getIdToken();
+    
+    const saleData: any = {
+      customerId: selectedCustomer.id,
+      amount: totalAmount,
+      saleItems: saleItems.map(item => ({
+        productId: item.productId,
+        quantity: item.quantity,
+        price: item.price,
+      })),
+      date: new Date().toISOString(),
+      paymentMethod: paymentOption === "cash" || paymentOption === "partial" ? "CASH" : "CASH",
+      payments:
+        paymentOption === "cash" || paymentOption === "partial"
+          ? [
+              {
+                amount: paidAmount,
+                method: "CASH",
+                status: "CLEARED",
+                paidAt: new Date().toISOString(),
+              },
+            ]
+          : [],
+      userId: user.uid,
+      userName: user.displayName || user.email || "Unknown User",
+    };
 
-        setTimeout(() => {
-          setSaleSuccess(null);
-          setShowQuickSale(false);
+    setOptimisticSale(saleData);
+
+    const updatedProducts = products.map(product => {
+      const saleItem = saleItems.find(item => item.productId === product.id);
+      if (saleItem) {
+        const currentStock = getProductStock(product);
+        return {
+          ...product,
+          stock: { quantity: Math.max(0, currentStock - saleItem.quantity) },
+        };
+      }
+      return product;
+    });
+
+    setOptimisticProducts(updatedProducts);
+    setIsCreating(true);
+    setSaleError(null);
+
+    if (createSaleTimeoutRef.current) clearTimeout(createSaleTimeoutRef.current);
+
+    const createSalePromise = new Promise<void>(resolve => {
+      createSaleTimeoutRef.current = setTimeout(async () => {
+        try {
+          const result = await createSaleMutation(saleData, idToken);
+
+          setSaleSuccess("Sale created successfully! 🎉");
+
+          setSelectedCustomer(null);
+          setCustomerSearch("");
+          setSaleItems([]);
+          setCurrentProduct(null);
+          setProductSearch("");
+          setCurrentQuantity(0);
+          setCurrentPrice("");
+          setPaymentOption("cash");
+          setAmountPaid("");
+
+          setTimeout(() => fetchDashboardData().catch(console.error), 1000);
+
+          setTimeout(() => {
+            setSaleSuccess(null);
+            setShowQuickSale(false);
+            setOptimisticSale(null);
+            setOptimisticProducts([]);
+            setIsCreating(false);
+            resolve();
+          }, 1500);
+        } catch (error: any) {
           setOptimisticSale(null);
           setOptimisticProducts([]);
-          setIsCreating(false); // ✅ crucial fix
+          setSaleError(error.message || "Failed to create sale");
+          setIsCreating(false);
           resolve();
-        }, 1500);
-      } catch (error: any) {
-        // Rollback optimistic updates
-        setOptimisticSale(null);
-        setOptimisticProducts([]);
-        setSaleError(error.message || "Failed to create sale");
-        setIsCreating(false);
-        resolve();
-      }
-    }, 100);
-  });
+        }
+      }, 100);
+    });
 
-  await createSalePromise;
-};
+    await createSalePromise;
+  };
 
-
-  // Use optimistic products if available
   const displayProducts = optimisticProducts.length > 0 ? optimisticProducts : products;
 
   const openRestockModal = (product: Product) => {
@@ -1069,7 +1029,6 @@ setQuickStats([
   const handleRestockSubmit = async () => {
     if (!restockingProduct) return;
 
-    // Validation
     if (restockForm.quantity <= 0) {
       setRestockError("Quantity must be greater than 0");
       setTimeout(() => setRestockError(null), 3000);
@@ -1135,7 +1094,6 @@ setQuickStats([
       setSaleSuccess(`✅ ${restockingProduct.name} restocked successfully!`);
       setTimeout(() => setSaleSuccess(null), 3000);
 
-      // Optimistically update product stock
       setProducts(prev => prev.map(p => 
         p.id === restockingProduct.id 
           ? { 
@@ -1147,7 +1105,6 @@ setQuickStats([
           : p
       ));
 
-      // Update current product if it's the one being restocked
       if (currentProduct && currentProduct.id === restockingProduct.id) {
         setCurrentProduct(prev => prev ? {
           ...prev,
@@ -1273,39 +1230,36 @@ setQuickStats([
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100">
-      {/* Header */}
+      {/* Header - Mobile Optimized */}
       <div className="bg-white shadow-sm border-b border-slate-200 sticky top-0 z-40">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 py-4 sm:py-6">
-          <div className="flex items-center justify-between gap-4">
+        <div className="px-3 sm:px-4 py-3">
+          <div className="flex items-center justify-between gap-3">
             <div className="min-w-0 flex-1">
-              <h1 className="text-xl sm:text-2xl md:text-3xl font-bold text-slate-900 truncate">
-                SWIFT METALS <span className="text-blue-600">Admin</span>
+              <h1 className="text-lg font-bold text-slate-900 truncate">
+                SWIFT METALS <span className="text-blue-600 text-base">Admin</span>
               </h1>
-              <p className="text-sm sm:text-base text-black mt-1">Your business at a glance</p>
+              <p className="text-xs text-black mt-0.5">Your business at a glance</p>
             </div>
 
-            <div className="flex items-center gap-3">
-              {/* Quick Sale Button */}
+            <div className="flex items-center gap-2">
               <button
                 onClick={() => setShowQuickSale(true)}
                 type="button"
-                className="flex items-center gap-2 bg-gradient-to-r from-blue-600 to-blue-700 text-white px-4 py-2.5 rounded-lg hover:from-blue-700 hover:to-blue-800 transition-all shadow-lg hover:shadow-xl font-medium"
+                className="flex items-center gap-1.5 bg-gradient-to-r from-blue-600 to-blue-700 text-white px-3 py-2 rounded-lg hover:from-blue-700 hover:to-blue-800 transition-all shadow font-medium text-sm"
               >
-                <Zap className="w-5 h-5" />
-                <span className="hidden sm:inline">Quick Sale</span>
-                <span className="sm:hidden">Sale</span>
+                <Zap className="w-4 h-4" />
+                <span className="hidden xs:inline">Sale</span>
               </button>
 
-              {/* Notification Button */}
               <div className="relative">
                 <button
                   onClick={() => setShowNotifications(!showNotifications)}
                   type="button"
-                  className="relative p-2.5 rounded-full bg-blue-100 hover:bg-blue-200 transition-colors"
+                  className="relative p-2 rounded-full bg-blue-100 hover:bg-blue-200 transition-colors"
                 >
-                  <Bell className="w-5 h-5 text-blue-700" />
+                  <Bell className="w-4 h-4 text-blue-700" />
                   {notificationCount > 0 && (
-                    <span className="absolute -top-1 -right-1 flex items-center justify-center min-w-[20px] h-5 px-1 text-xs font-bold text-white bg-red-500 rounded-full">
+                    <span className="absolute -top-1 -right-1 flex items-center justify-center min-w-[16px] h-4 px-1 text-xs font-bold text-white bg-red-500 rounded-full">
                       {notificationCount > 9 ? "9+" : notificationCount}
                     </span>
                   )}
@@ -1318,12 +1272,12 @@ setQuickStats([
                       onClick={() => setShowNotifications(false)}
                     />
                     
-                    <div className="fixed inset-x-4 top-20 md:absolute md:inset-x-auto md:right-0 md:top-auto md:mt-3 w-auto md:w-96 bg-white shadow-2xl rounded-xl border border-slate-200 z-50 max-h-[calc(100vh-6rem)] md:max-h-[600px] flex flex-col">
-                      <div className="flex items-center justify-between px-4 py-3 border-b bg-slate-50 rounded-t-xl">
+                    <div className="fixed inset-x-3 top-16 md:absolute md:inset-x-auto md:right-0 md:top-auto md:mt-3 w-auto md:w-96 bg-white shadow-2xl rounded-xl border border-slate-200 z-50 max-h-[calc(100vh-5rem)] md:max-h-[600px] flex flex-col">
+                      <div className="flex items-center justify-between px-3 py-2 border-b bg-slate-50 rounded-t-xl">
                         <div className="flex items-center gap-2">
-                          <h3 className="text-base font-semibold text-black">Notifications</h3>
+                          <h3 className="text-sm font-semibold text-black">Notifications</h3>
                           {notificationCount > 0 && (
-                            <span className="px-2 py-0.5 text-xs font-medium bg-blue-100 text-blue-700 rounded-full">
+                            <span className="px-1.5 py-0.5 text-xs font-medium bg-blue-100 text-blue-700 rounded-full">
                               {notificationCount}
                             </span>
                           )}
@@ -1338,9 +1292,9 @@ setQuickStats([
                       </div>
 
                       {notifications.length === 0 ? (
-                        <div className="flex flex-col items-center justify-center py-12">
-                          <Bell className="w-12 h-12 text-slate-400 mb-2" />
-                          <p className="text-black">All caught up!</p>
+                        <div className="flex flex-col items-center justify-center py-8">
+                          <Bell className="w-10 h-10 text-slate-400 mb-2" />
+                          <p className="text-sm text-black">All caught up!</p>
                         </div>
                       ) : (
                         <ul className="overflow-y-auto flex-1">
@@ -1349,19 +1303,19 @@ setQuickStats([
                             const Icon = note.icon || Info;
                             
                             return (
-                              <li key={note.id} className={`px-4 py-4 border-b ${styles.bg}`}>
-                                <div className="flex gap-3">
-                                  <div className={`${styles.iconBg} p-2 rounded-lg h-fit`}>
-                                    <Icon className={`w-5 h-5 ${styles.iconColor}`} />
+                              <li key={note.id} className={`px-3 py-3 border-b ${styles.bg}`}>
+                                <div className="flex gap-2">
+                                  <div className={`${styles.iconBg} p-1.5 rounded-lg h-fit`}>
+                                    <Icon className={`w-4 h-4 ${styles.iconColor}`} />
                                   </div>
-                                  <div className="flex-1">
-                                    <p className={`font-semibold text-sm ${styles.text}`}>{note.title}</p>
-                                    <p className="text-sm text-black">{note.message}</p>
+                                  <div className="flex-1 min-w-0">
+                                    <p className={`font-semibold text-xs ${styles.text} truncate`}>{note.title}</p>
+                                    <p className="text-xs text-black line-clamp-2">{note.message}</p>
                                     {note.link && (
                                       <Link
                                         href={note.link}
                                         onClick={() => setShowNotifications(false)}
-                                        className="text-sm text-blue-600 hover:underline mt-1 inline-block"
+                                        className="text-xs text-blue-600 hover:underline mt-1 inline-block"
                                       >
                                         View details →
                                       </Link>
@@ -1382,17 +1336,17 @@ setQuickStats([
         </div>
       </div>
 
-      {/* Enhanced Quick Sale Modal */}
+      {/* Enhanced Quick Sale Modal - Mobile Optimized */}
       {showQuickSale && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50 overflow-y-auto">
-          <div className="bg-white rounded-2xl max-w-3xl w-full max-h-[90vh] overflow-y-auto shadow-2xl">
-            <div className="sticky top-0 bg-gradient-to-r from-blue-600 to-blue-700 text-white p-6 rounded-t-2xl z-10">
+        <div className="fixed inset-0 bg-black/50 flex items-start justify-center p-2 sm:p-4 z-50 overflow-y-auto">
+          <div className="bg-white rounded-xl sm:rounded-2xl w-full max-w-md max-h-[90vh] overflow-y-auto shadow-2xl mt-4 sm:mt-0">
+            <div className="sticky top-0 bg-gradient-to-r from-blue-600 to-blue-700 text-white p-4 sm:p-6 rounded-t-xl sm:rounded-t-2xl z-10">
               <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <Zap className="w-8 h-8" />
+                <div className="flex items-center gap-2 sm:gap-3">
+                  <Zap className="w-6 h-6 sm:w-8 sm:h-8" />
                   <div>
-                    <h2 className="text-2xl font-bold">Quick Sale</h2>
-                    <p className="text-blue-100 text-sm">Create sale in seconds</p>
+                    <h2 className="text-lg sm:text-2xl font-bold">Quick Sale</h2>
+                    <p className="text-blue-100 text-xs sm:text-sm">Create sale in seconds</p>
                   </div>
                 </div>
                 <button
@@ -1405,59 +1359,59 @@ setQuickStats([
                     setOptimisticProducts([]);
                   }}
                   type="button"
-                  className="text-white hover:bg-white/20 p-2 rounded-lg transition-colors"
+                  className="text-white hover:bg-white/20 p-1.5 rounded-lg transition-colors"
                 >
-                  <X className="w-6 h-6" />
+                  <X className="w-5 h-5 sm:w-6 sm:h-6" />
                 </button>
               </div>
             </div>
 
-            <div className="p-6 space-y-6">
+            <div className="p-4 sm:p-6 space-y-4 sm:space-y-6">
               {optimisticSale && (
-                <div className="bg-yellow-50 border-2 border-yellow-300 text-yellow-800 px-4 py-3 rounded-lg flex items-center gap-2">
-                  <Info className="w-5 h-5 flex-shrink-0" />
+                <div className="bg-yellow-50 border-2 border-yellow-300 text-yellow-800 px-3 py-2 rounded-lg flex items-center gap-2 text-sm">
+                  <Info className="w-4 h-4 flex-shrink-0" />
                   <span>Creating sale... This may take a moment.</span>
                 </div>
               )}
 
               {saleError && (
-                <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg flex items-start gap-2">
-                  <AlertTriangle className="w-5 h-5 flex-shrink-0 mt-0.5" />
+                <div className="bg-red-50 border border-red-200 text-red-700 px-3 py-2 rounded-lg flex items-start gap-2 text-sm">
+                  <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5" />
                   <div className="flex-1">
                     <span>{saleError}</span>
                   </div>
                   <button onClick={() => setSaleError(null)} type="button" className="text-red-700 hover:text-red-900">
-                    <X size={16} />
+                    <X size={14} />
                   </button>
                 </div>
               )}
 
               {saleSuccess && (
-                <div className="bg-emerald-50 border border-emerald-200 text-emerald-700 px-4 py-3 rounded-lg flex items-start gap-2">
-                  <CheckCircle className="w-5 h-5 flex-shrink-0 mt-0.5" />
+                <div className="bg-emerald-50 border border-emerald-200 text-emerald-700 px-3 py-2 rounded-lg flex items-start gap-2 text-sm">
+                  <CheckCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
                   <span>{saleSuccess}</span>
                 </div>
               )}
 
-              {/* Customer Selection with Add Customer Option */}
+              {/* Customer Selection - Mobile Optimized */}
               <div className="relative" ref={customerDropdownRef}>
                 <div className="flex items-center justify-between mb-2">
                   <label className="block text-sm font-semibold text-black">Customer *</label>
                   <button
                     type="button"
                     onClick={() => setShowAddCustomer(true)}
-                    className="text-sm text-blue-600 hover:text-blue-800 font-medium flex items-center gap-1"
+                    className="text-xs text-blue-600 hover:text-blue-800 font-medium flex items-center gap-1"
                   >
-                    <UserPlus className="w-4 h-4" />
-                    Add Customer
+                    <UserPlus className="w-3 h-3" />
+                    Add
                   </button>
                 </div>
                 
                 <div className="relative">
-                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-black" />
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-black" />
                   <input
                     type="text"
-                    placeholder="Search customer by name or phone..."
+                    placeholder="Search customer..."
                     value={selectedCustomer ? selectedCustomer.name : customerSearch}
                     onChange={(e) => {
                       setCustomerSearch(e.target.value);
@@ -1465,12 +1419,12 @@ setQuickStats([
                       setShowCustomerDropdown(true);
                     }}
                     onFocus={() => setShowCustomerDropdown(true)}
-                    className="w-full pl-10 pr-4 py-3 border-2 border-black rounded-lg focus:border-blue-500 focus:ring-2 focus:ring-blue-200 transition-all text-black placeholder-black"
+                    className="w-full pl-9 pr-4 py-2.5 border-2 border-black rounded-lg focus:border-blue-500 focus:ring-2 focus:ring-blue-200 transition-all text-black placeholder-black text-sm"
                   />
                 </div>
 
                 {showCustomerDropdown && !selectedCustomer && filteredCustomers.length > 0 && (
-                  <div className="absolute z-20 w-full mt-2 bg-white border-2 border-black rounded-lg shadow-xl max-h-60 overflow-y-auto">
+                  <div className="absolute z-20 w-full mt-1 bg-white border-2 border-black rounded-lg shadow-xl max-h-48 overflow-y-auto">
                     {filteredCustomers.map(customer => (
                       <button
                         key={customer.id}
@@ -1482,48 +1436,48 @@ setQuickStats([
                           setCustomerSearch("");
                           setShowCustomerDropdown(false);
                         }}
-                        className="w-full text-left px-4 py-3 hover:bg-blue-50 border-b last:border-b-0 transition-colors"
+                        className="w-full text-left px-3 py-2 hover:bg-blue-50 border-b last:border-b-0 transition-colors text-sm"
                       >
-                        <div className="font-medium text-black">{customer.name}</div>
-                        {customer.phone && <div className="text-sm text-black">{customer.phone}</div>}
+                        <div className="font-medium text-black truncate">{customer.name}</div>
+                        {customer.phone && <div className="text-xs text-black truncate">{customer.phone}</div>}
                       </button>
                     ))}
                   </div>
                 )}
 
                 {selectedCustomer && (
-                  <div className="mt-2 bg-blue-50 border border-blue-200 rounded-lg px-4 py-3 flex items-center justify-between">
-                    <div>
-                      <div className="font-medium text-black">{selectedCustomer.name}</div>
-                      {selectedCustomer.phone && <div className="text-sm text-black">{selectedCustomer.phone}</div>}
+                  <div className="mt-2 bg-blue-50 border border-blue-200 rounded-lg px-3 py-2 flex items-center justify-between text-sm">
+                    <div className="min-w-0">
+                      <div className="font-medium text-black truncate">{selectedCustomer.name}</div>
+                      {selectedCustomer.phone && <div className="text-xs text-black truncate">{selectedCustomer.phone}</div>}
                     </div>
-                    <CheckCircle className="w-5 h-5 text-blue-600" />
+                    <CheckCircle className="w-4 h-4 text-blue-600 flex-shrink-0" />
                   </div>
                 )}
               </div>
 
-              {/* Add Customer Modal/Form */}
+              {/* Add Customer Modal - Mobile Optimized */}
               {showAddCustomer && (
-                <div className="bg-blue-50 border-2 border-blue-200 rounded-lg p-4 space-y-4">
+                <div className="bg-blue-50 border-2 border-blue-200 rounded-lg p-3 space-y-3">
                   <div className="flex items-center justify-between">
-                    <h4 className="font-semibold text-blue-900">Add New Customer</h4>
+                    <h4 className="font-semibold text-blue-900 text-sm">Add New Customer</h4>
                     <button
                       onClick={() => setShowAddCustomer(false)}
                       type="button"
                       className="text-blue-600 hover:text-blue-800"
                     >
-                      <X className="w-5 h-5" />
+                      <X className="w-4 h-4" />
                     </button>
                   </div>
                   
-                  <div className="space-y-3">
+                  <div className="space-y-2">
                     <div>
                       <label className="block text-xs font-medium text-black mb-1">Name *</label>
                       <input
                         type="text"
                         value={newCustomer.name}
                         onChange={(e) => setNewCustomer({...newCustomer, name: e.target.value})}
-                        className="w-full px-3 py-2 border border-blue-300 rounded-lg focus:border-blue-500 text-black"
+                        className="w-full px-3 py-2 border border-blue-300 rounded-lg focus:border-blue-500 text-black text-sm"
                         placeholder="Enter customer name"
                       />
                     </div>
@@ -1534,7 +1488,7 @@ setQuickStats([
                         type="tel"
                         value={newCustomer.phone}
                         onChange={(e) => setNewCustomer({...newCustomer, phone: e.target.value})}
-                        className="w-full px-3 py-2 border border-blue-300 rounded-lg focus:border-blue-500 text-black"
+                        className="w-full px-3 py-2 border border-blue-300 rounded-lg focus:border-blue-500 text-black text-sm"
                         placeholder="Phone number"
                       />
                     </div>
@@ -1545,7 +1499,7 @@ setQuickStats([
                         type="email"
                         value={newCustomer.email}
                         onChange={(e) => setNewCustomer({...newCustomer, email: e.target.value})}
-                        className="w-full px-3 py-2 border border-blue-300 rounded-lg focus:border-blue-500 text-black"
+                        className="w-full px-3 py-2 border border-blue-300 rounded-lg focus:border-blue-500 text-black text-sm"
                         placeholder="Email address"
                       />
                     </div>
@@ -1555,26 +1509,26 @@ setQuickStats([
                     <button
                       onClick={handleImportFromContacts}
                       type="button"
-                      className="flex-1 flex items-center justify-center gap-2 px-3 py-2 bg-white border border-blue-300 text-blue-700 rounded-lg hover:bg-blue-50 text-sm"
+                      className="flex-1 flex items-center justify-center gap-1 px-2 py-1.5 bg-white border border-blue-300 text-blue-700 rounded-lg hover:bg-blue-50 text-xs"
                     >
-                      <Phone className="w-4 h-4" />
-                      Import Contact
+                      <Phone className="w-3 h-3" />
+                      Import
                     </button>
                     
                     <button
                       onClick={handleCreateCustomer}
                       disabled={addingCustomer || !newCustomer.name.trim()}
                       type="button"
-                      className="flex-1 flex items-center justify-center gap-2 px-3 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 text-sm"
+                      className="flex-1 flex items-center justify-center gap-1 px-2 py-1.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 text-xs"
                     >
                       {addingCustomer ? (
                         <>
-                          <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
+                          <div className="animate-spin rounded-full h-3 w-3 border-b-2 border-white"></div>
                           Adding...
                         </>
                       ) : (
                         <>
-                          <UserPlus className="w-4 h-4" />
+                          <UserPlus className="w-3 h-3" />
                           Add Customer
                         </>
                       )}
@@ -1583,25 +1537,25 @@ setQuickStats([
                 </div>
               )}
 
-              {/* Product Selection - UPDATED WITH ADD PRODUCT BUTTON */}
+              {/* Product Selection - Mobile Optimized */}
               <div>
                 <div className="flex items-center justify-between mb-2">
                   <label className="block text-sm font-semibold text-black">Add Products</label>
                   <button
                     type="button"
                     onClick={() => setShowAddProduct(true)}
-                    className="text-sm text-blue-600 hover:text-blue-800 font-medium flex items-center gap-1"
+                    className="text-xs text-blue-600 hover:text-blue-800 font-medium flex items-center gap-1"
                   >
-                    <Plus className="w-4 h-4" />
-                    Add New Product
+                    <Plus className="w-3 h-3" />
+                    Add
                   </button>
                 </div>
-                <div className="space-y-3">
+                <div className="space-y-2">
                   <div className="relative" ref={productDropdownRef}>
-                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-black pointer-events-none z-10" />
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-black pointer-events-none z-10" />
                     <input
                       type="text"
-                      placeholder="Search product by name or category..."
+                      placeholder="Search product..."
                       value={currentProduct ? "" : productSearch}
                       onChange={(e) => {
                         setProductSearch(e.target.value);
@@ -1613,11 +1567,11 @@ setQuickStats([
                         }
                       }}
                       disabled={!!currentProduct}
-                      className="w-full pl-10 pr-4 py-3 border-2 border-slate-200 rounded-lg focus:border-blue-500 focus:ring-2 focus:ring-blue-200 transition-all disabled:bg-slate-100 disabled:cursor-not-allowed text-black placeholder-black"
+                      className="w-full pl-9 pr-4 py-2.5 border-2 border-slate-200 rounded-lg focus:border-blue-500 focus:ring-2 focus:ring-blue-200 transition-all disabled:bg-slate-100 disabled:cursor-not-allowed text-black placeholder-black text-sm"
                     />
 
                     {showProductDropdown && !currentProduct && filteredProducts.length > 0 && (
-                      <div className="absolute z-20 w-full mt-2 bg-white border-2 border-slate-200 rounded-lg shadow-xl max-h-60 overflow-y-auto">
+                      <div className="absolute z-20 w-full mt-1 bg-white border-2 border-slate-200 rounded-lg shadow-xl max-h-48 overflow-y-auto">
                         {filteredProducts.map(product => {
                           const stock = getProductStock(product);
                           return (
@@ -1632,19 +1586,18 @@ setQuickStats([
                                 setProductSearch("");
                                 setShowProductDropdown(false);
                                 setStockError(null);
-                                // Focus on quantity input
                                 setTimeout(() => {
                                   document.getElementById('quantity-input')?.focus();
                                 }, 100);
                               }}
-                              className="w-full text-left px-4 py-3 hover:bg-blue-50 border-b last:border-b-0 transition-colors"
+                              className="w-full text-left px-3 py-2 hover:bg-blue-50 border-b last:border-b-0 transition-colors text-sm"
                             >
                               <div className="flex justify-between items-start">
-                                <div>
-                                  <div className="font-medium text-black">{product.name}</div>
-                                  <div className="text-sm text-black">
+                                <div className="min-w-0">
+                                  <div className="font-medium text-black truncate">{product.name}</div>
+                                  <div className="text-xs text-black">
                                     {product.category && (
-                                      <span className="inline-block px-2 py-0.5 bg-purple-100 text-purple-700 rounded text-xs mr-2">
+                                      <span className="inline-block px-1.5 py-0.5 bg-purple-100 text-purple-700 rounded text-xs mr-1 truncate max-w-[80px]">
                                         {product.category}
                                       </span>
                                     )}
@@ -1660,37 +1613,37 @@ setQuickStats([
                   </div>
 
                   {currentProduct && (
-                    <div className="bg-blue-50 border-2 border-blue-200 rounded-lg p-4">
+                    <div className="bg-blue-50 border-2 border-blue-200 rounded-lg p-3">
                       {/* Stock Info and Restock Button */}
-                      <div className={`mb-4 p-3 rounded-lg border-2 ${
+                      <div className={`mb-3 p-2 rounded-lg border-2 ${
                         isOutOfStock(currentProduct) 
                           ? 'bg-red-50 border-red-300' 
                           : isLowStock(currentProduct)
                           ? 'bg-orange-50 border-orange-300'
                           : 'bg-green-50 border-green-300'
                       }`}>
-                        <div className="flex items-start justify-between gap-3">
-                          <div className="flex items-start gap-2 flex-1">
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="flex items-start gap-1.5 flex-1">
                             {isOutOfStock(currentProduct) || isLowStock(currentProduct) ? (
-                              <AlertTriangle className={`w-5 h-5 mt-0.5 flex-shrink-0 ${
+                              <AlertTriangle className={`w-4 h-4 mt-0.5 flex-shrink-0 ${
                                 isOutOfStock(currentProduct) ? 'text-red-600' : 'text-orange-600'
                               }`} />
                             ) : (
-                              <Package className="w-5 h-5 mt-0.5 flex-shrink-0 text-green-600" />
+                              <Package className="w-4 h-4 mt-0.5 flex-shrink-0 text-green-600" />
                             )}
-                            <div className="flex-1">
-                              <p className={`font-semibold text-sm ${
+                            <div className="flex-1 min-w-0">
+                              <p className={`font-semibold text-xs ${
                                 isOutOfStock(currentProduct) 
                                   ? 'text-red-800' 
                                   : isLowStock(currentProduct)
                                   ? 'text-orange-800'
                                   : 'text-green-800'
-                              }`}>
+                              } truncate`}>
                                 {isOutOfStock(currentProduct) 
-                                  ? '⚠️ Product is OUT OF STOCK' 
+                                  ? '⚠️ OUT OF STOCK' 
                                   : isLowStock(currentProduct)
-                                  ? '⚠️ Stock is LOW for this product'
-                                  : '✓ Stock Available'}
+                                  ? '⚠️ LOW STOCK'
+                                  : '✓ Available'}
                               </p>
                               <p className={`text-xs mt-0.5 ${
                                 isOutOfStock(currentProduct) 
@@ -1700,18 +1653,13 @@ setQuickStats([
                                   : 'text-green-700'
                               }`}>
                                 Available: {getProductStock(currentProduct)} units
-                                {currentProduct.category && (
-                                  <span className="ml-2 text-blue-700">
-                                    • Category: {currentProduct.category}
-                                  </span>
-                                )}
                               </p>
                             </div>
                           </div>
                           <button
                             onClick={() => openRestockModal(currentProduct)}
                             type="button"
-                            className={`px-3 py-1.5 rounded-lg text-white text-sm font-medium transition-all hover:shadow-md flex items-center gap-1.5 whitespace-nowrap ${
+                            className={`px-2 py-1 rounded-lg text-white text-xs font-medium transition-all hover:shadow-md flex items-center gap-1 whitespace-nowrap ${
                               isOutOfStock(currentProduct)
                                 ? 'bg-red-600 hover:bg-red-700'
                                 : isLowStock(currentProduct)
@@ -1719,20 +1667,17 @@ setQuickStats([
                                 : 'bg-blue-600 hover:bg-blue-700'
                             }`}
                           >
-                            <Package className="w-4 h-4" />
+                            <Package className="w-3 h-3" />
                             Restock
                           </button>
                         </div>
                       </div>
 
-                      <div className="flex items-center justify-between mb-3">
-                        <div className="flex-1">
-                          <div className="font-semibold text-blue-900">{currentProduct.name}</div>
-                          <div className="text-sm text-blue-700">
+                      <div className="flex items-center justify-between mb-2">
+                        <div className="flex-1 min-w-0">
+                          <div className="font-semibold text-blue-900 text-sm truncate">{currentProduct.name}</div>
+                          <div className="text-xs text-blue-700">
                             Available: {getProductStock(currentProduct)} | Price: KSh {currentProduct.price?.toLocaleString() || 0}
-                            {currentProduct.category && (
-                              <span className="ml-2 text-purple-700">• {currentProduct.category}</span>
-                            )}
                           </div>
                         </div>
                         <button 
@@ -1743,12 +1688,12 @@ setQuickStats([
                             setProductSearch("");
                           }}
                           type="button"
-                          className="text-blue-600 hover:text-blue-800 p-1"
+                          className="text-blue-600 hover:text-blue-800 p-1 flex-shrink-0"
                         >
-                          <X className="w-5 h-5" />
+                          <X className="w-4 h-4" />
                         </button>
                       </div>
-                      <div className="grid grid-cols-2 gap-3 mb-3">
+                      <div className="grid grid-cols-2 gap-2 mb-2">
                         <div>
                           <label className="block text-xs font-semibold text-black mb-1">Quantity *</label>
                           <input
@@ -1760,7 +1705,7 @@ setQuickStats([
                               const val = parseInt(e.target.value);
                               setCurrentQuantity(isNaN(val) ? 0 : Math.max(0, val));
                             }}
-                            className="w-full px-3 py-2 border-2 border-slate-200 rounded-lg focus:border-blue-500 text-black placeholder-black"
+                            className="w-full px-2 py-1.5 border-2 border-slate-200 rounded-lg focus:border-blue-500 text-black placeholder-black text-sm"
                             onKeyDown={(e) => {
                               if (e.key === 'Enter' && currentQuantity > 0) {
                                 addItemToSale();
@@ -1778,32 +1723,22 @@ setQuickStats([
                               value={currentPrice}
                               onChange={(e) => setCurrentPrice(e.target.value)}
                               placeholder={currentProduct.price?.toString() || "0.00"}
-                              className={`w-full px-3 py-2 border-2 rounded-lg focus:border-blue-500 focus:ring-2 focus:ring-blue-200 transition-all ${
+                              className={`w-full px-2 py-1.5 border-2 rounded-lg focus:border-blue-500 focus:ring-2 focus:ring-blue-200 transition-all text-sm ${
                                 currentPrice === currentProduct.price?.toString() 
                                   ? 'text-gray-400 italic border-gray-300 bg-gray-50' 
                                   : 'text-black border-slate-200 bg-white'
                               }`}
                             />
                             {currentPrice === currentProduct.price?.toString() && (
-                              <div className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-orange-500 font-medium bg-orange-50 px-2 py-1 rounded">
+                              <div className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-orange-500 font-medium bg-orange-50 px-1 py-0.5 rounded">
                                 Default
-                              </div>
-                            )}
-                          </div>
-                          <div className="flex items-center justify-between mt-1">
-                            <div className="text-xs text-blue-600">
-                              Default: KSh {currentProduct.price?.toLocaleString() || 0}
-                            </div>
-                            {currentPrice !== currentProduct.price?.toString() && currentPrice && (
-                              <div className="text-xs text-green-600 font-medium">
-                                ✓ Custom price
                               </div>
                             )}
                           </div>
                         </div>
                       </div>
                       {currentQuantity > 0 && currentProduct && (
-                        <div className="bg-blue-100 text-blue-900 px-3 py-2 rounded-lg text-sm font-bold mb-3">
+                        <div className="bg-blue-100 text-blue-900 px-2 py-1.5 rounded-lg text-xs font-bold mb-2">
                           Subtotal: KSh {(currentQuantity * (currentPrice && currentPrice.trim() !== "" ? parseFloat(currentPrice) : (currentProduct.price || 0))).toLocaleString()}
                         </div>
                       )}
@@ -1811,9 +1746,9 @@ setQuickStats([
                         onClick={addItemToSale}
                         type="button"
                         disabled={!currentProduct || currentQuantity <= 0}
-                        className="w-full bg-blue-600 text-white px-4 py-3 rounded-lg hover:bg-blue-700 font-medium flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+                        className="w-full bg-blue-600 text-white px-3 py-2 rounded-lg hover:bg-blue-700 font-medium flex items-center justify-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed transition-all text-sm"
                       >
-                        <Plus className="w-5 h-5" />
+                        <Plus className="w-4 h-4" />
                         Add to Sale
                       </button>
                     </div>
@@ -1821,137 +1756,133 @@ setQuickStats([
                 </div>
               </div>
 
-              {/* Sale Items */}
+              {/* Sale Items - Mobile Optimized */}
               {saleItems.length > 0 && (
-                <div className="border-2 border-slate-200 rounded-lg p-4 bg-slate-50">
-                  <h3 className="font-semibold text-black mb-3 flex items-center gap-2">
-                    <Package className="w-5 h-5 text-blue-600" />
+                <div className="border-2 border-slate-200 rounded-lg p-3 bg-slate-50">
+                  <h3 className="font-semibold text-black mb-2 flex items-center gap-1.5 text-sm">
+                    <Package className="w-4 h-4 text-blue-600" />
                     Sale Items ({saleItems.length})
                   </h3>
-                  <div className="space-y-2 mb-4">
+                  <div className="space-y-1.5 mb-3">
                     {saleItems.map(item => (
-                      <div key={item.productId} className="flex items-center justify-between bg-white p-3 rounded-lg border border-slate-200">
-                        <div className="flex-1">
-                          <div className="font-medium text-black">{item.productName}</div>
-                          <div className="text-sm text-black">
+                      <div key={item.productId} className="flex items-center justify-between bg-white p-2 rounded-lg border border-slate-200">
+                        <div className="flex-1 min-w-0">
+                          <div className="font-medium text-black text-sm truncate">{item.productName}</div>
+                          <div className="text-xs text-black">
                             {item.quantity} × KSh {item.price.toLocaleString()} = KSh {(item.quantity * item.price).toLocaleString()}
                           </div>
                         </div>
                         <button
                           onClick={() => removeItem(item.productId)}
                           type="button"
-                          className="text-red-600 hover:text-red-800 p-2 hover:bg-red-50 rounded transition-colors"
+                          className="text-red-600 hover:text-red-800 p-1 hover:bg-red-50 rounded transition-colors flex-shrink-0"
                         >
-                          <Trash2 className="w-5 h-5" />
+                          <Trash2 className="w-4 h-4" />
                         </button>
                       </div>
                     ))}
                   </div>
-                  <div className="pt-3 border-t-2 border-slate-300">
+                  <div className="pt-2 border-t-2 border-slate-300">
                     <div className="flex justify-between items-center">
-                      <span className="text-lg font-bold text-black">Total Amount</span>
-                      <span className="text-2xl font-bold text-blue-600">KSh {calculateTotalAmount().toLocaleString()}</span>
+                      <span className="text-sm font-bold text-black">Total Amount</span>
+                      <span className="text-lg font-bold text-blue-600">KSh {calculateTotalAmount().toLocaleString()}</span>
                     </div>
                   </div>
                 </div>
               )}
 
-              {/* NEW PAYMENT OPTIONS OVERHAUL */}
+              {/* Payment Options - Mobile Optimized */}
               {saleItems.length > 0 && (
-                <div className="space-y-4">
-                  <h3 className="font-semibold text-black flex items-center gap-2">
-                    <DollarSign className="w-5 h-5 text-blue-600" />
+                <div className="space-y-3">
+                  <h3 className="font-semibold text-black flex items-center gap-1.5 text-sm">
+                    <DollarSign className="w-4 h-4 text-blue-600" />
                     Payment Options
                   </h3>
                   
-                  <div className="grid grid-cols-3 gap-3">
-                    {/* Cash Option */}
+                  <div className="grid grid-cols-3 gap-2">
                     <button
                       type="button"
                       onClick={() => {
                         setPaymentOption('cash');
                         setAmountPaid(calculateTotalAmount().toFixed(2));
                       }}
-                      className={`p-4 rounded-lg border-2 flex flex-col items-center justify-center gap-2 transition-all ${
+                      className={`p-3 rounded-lg border-2 flex flex-col items-center justify-center gap-1 transition-all text-xs ${
                         paymentOption === 'cash'
                           ? 'border-blue-500 bg-blue-50'
                           : 'border-gray-200 hover:border-blue-300 hover:bg-blue-25'
                       }`}
                     >
-                      <div className={`p-3 rounded-full ${
+                      <div className={`p-2 rounded-full ${
                         paymentOption === 'cash' ? 'bg-blue-100' : 'bg-gray-100'
                       }`}>
-                        <Coins className={`w-6 h-6 ${
+                        <Coins className={`w-5 h-5 ${
                           paymentOption === 'cash' ? 'text-blue-600' : 'text-gray-400'
                         }`} />
                       </div>
                       <span className={`font-medium ${
                         paymentOption === 'cash' ? 'text-blue-700' : 'text-gray-700'
                       }`}>Cash</span>
-                      <span className="text-sm text-gray-500">Full payment</span>
+                      <span className="text-xs text-gray-500">Full</span>
                     </button>
 
-                    {/* Partial Option */}
                     <button
                       type="button"
                       onClick={() => {
                         setPaymentOption('partial');
                         setAmountPaid("");
                       }}
-                      className={`p-4 rounded-lg border-2 flex flex-col items-center justify-center gap-2 transition-all ${
+                      className={`p-3 rounded-lg border-2 flex flex-col items-center justify-center gap-1 transition-all text-xs ${
                         paymentOption === 'partial'
                           ? 'border-green-500 bg-green-50'
                           : 'border-gray-200 hover:border-green-300 hover:bg-green-25'
                       }`}
                     >
-                      <div className={`p-3 rounded-full ${
+                      <div className={`p-2 rounded-full ${
                         paymentOption === 'partial' ? 'bg-green-100' : 'bg-gray-100'
                       }`}>
-                        <Wallet className={`w-6 h-6 ${
+                        <Wallet className={`w-5 h-5 ${
                           paymentOption === 'partial' ? 'text-green-600' : 'text-gray-400'
                         }`} />
                       </div>
                       <span className={`font-medium ${
                         paymentOption === 'partial' ? 'text-green-700' : 'text-gray-700'
                       }`}>Partial</span>
-                      <span className="text-sm text-gray-500">Pay some now</span>
+                      <span className="text-xs text-gray-500">Pay some</span>
                     </button>
 
-                    {/* Credit Option */}
                     <button
                       type="button"
                       onClick={() => {
                         setPaymentOption('credit');
                         setAmountPaid("0");
                       }}
-                      className={`p-4 rounded-lg border-2 flex flex-col items-center justify-center gap-2 transition-all ${
+                      className={`p-3 rounded-lg border-2 flex flex-col items-center justify-center gap-1 transition-all text-xs ${
                         paymentOption === 'credit'
                           ? 'border-yellow-500 bg-yellow-50'
                           : 'border-gray-200 hover:border-yellow-300 hover:bg-yellow-25'
                       }`}
                     >
-                      <div className={`p-3 rounded-full ${
+                      <div className={`p-2 rounded-full ${
                         paymentOption === 'credit' ? 'bg-yellow-100' : 'bg-gray-100'
                       }`}>
-                        <CreditCard className={`w-6 h-6 ${
+                        <CreditCard className={`w-5 h-5 ${
                           paymentOption === 'credit' ? 'text-yellow-600' : 'text-gray-400'
                         }`} />
                       </div>
                       <span className={`font-medium ${
                         paymentOption === 'credit' ? 'text-yellow-700' : 'text-gray-700'
                       }`}>Credit</span>
-                      <span className="text-sm text-gray-500">Pay later</span>
+                      <span className="text-xs text-gray-500">Pay later</span>
                     </button>
                   </div>
 
-                  {/* Payment Amount Input (for partial only) */}
                   {paymentOption === 'partial' && (
-                    <div className="bg-green-50 border-2 border-green-200 rounded-lg p-4">
-                      <label className="block text-sm font-medium text-black mb-2">
+                    <div className="bg-green-50 border-2 border-green-200 rounded-lg p-3">
+                      <label className="block text-xs font-medium text-black mb-1">
                         Amount Paid (KSh) *
                       </label>
                       <div className="relative">
-                        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500">KSh</span>
+                        <span className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-500 text-sm">KSh</span>
                         <input
                           type="number"
                           min="0"
@@ -1960,17 +1891,16 @@ setQuickStats([
                           value={amountPaid}
                           onChange={(e) => setAmountPaid(e.target.value)}
                           placeholder="Enter amount paid"
-                          className="w-full pl-12 pr-4 py-3 border-2 border-green-300 rounded-lg focus:border-green-500 focus:ring-2 focus:ring-green-200 text-black placeholder-gray-400"
+                          className="w-full pl-10 pr-3 py-2 border-2 border-green-300 rounded-lg focus:border-green-500 focus:ring-2 focus:ring-green-200 text-black placeholder-gray-400 text-sm"
                         />
                       </div>
-                      <div className="text-sm text-gray-600 mt-2">
+                      <div className="text-xs text-gray-600 mt-1">
                         Remaining: KSh {Math.max(0, calculateTotalAmount() - (parseFloat(amountPaid) || 0)).toLocaleString()}
                       </div>
                     </div>
                   )}
 
-                  {/* Payment Summary */}
-                  <div className="bg-gray-50 border-2 border-gray-200 rounded-lg p-4 space-y-3">
+                  <div className="bg-gray-50 border-2 border-gray-200 rounded-lg p-3 space-y-2 text-sm">
                     <div className="flex justify-between items-center">
                       <span className="text-black">Total Amount:</span>
                       <span className="font-bold text-black">KSh {calculateTotalAmount().toLocaleString()}</span>
@@ -1987,13 +1917,13 @@ setQuickStats([
                       }`}>
                         {paymentOption === 'cash' ? `KSh ${calculateTotalAmount().toLocaleString()}` :
                          paymentOption === 'partial' ? `KSh ${(parseFloat(amountPaid) || 0).toLocaleString()}` :
-                         'Credit (Pay Later)'}
+                         'Credit'}
                       </span>
                     </div>
                     
                     {paymentOption === 'partial' && (
-                      <div className="flex justify-between items-center pt-2 border-t border-gray-300">
-                        <span className="font-bold text-black">Remaining Balance:</span>
+                      <div className="flex justify-between items-center pt-1 border-t border-gray-300">
+                        <span className="font-bold text-black">Remaining:</span>
                         <span className="font-bold text-red-600">
                           KSh {Math.max(0, calculateTotalAmount() - (parseFloat(amountPaid) || 0)).toLocaleString()}
                         </span>
@@ -2003,8 +1933,8 @@ setQuickStats([
                 </div>
               )}
 
-              {/* Action Buttons */}
-              <div className="flex gap-3 pt-4 border-t-2 border-slate-200">
+              {/* Action Buttons - Mobile Optimized */}
+              <div className="flex gap-2 pt-3 border-t-2 border-slate-200">
                 <button
                   onClick={() => {
                     setShowQuickSale(false);
@@ -2016,7 +1946,7 @@ setQuickStats([
                   }}
                   type="button"
                   disabled={isCreating}
-                  className="flex-1 px-6 py-3 border-2 border-slate-300 text-black rounded-lg hover:bg-slate-50 font-medium transition-colors disabled:opacity-50"
+                  className="flex-1 px-3 py-2 border-2 border-slate-300 text-black rounded-lg hover:bg-slate-50 font-medium transition-colors disabled:opacity-50 text-sm"
                 >
                   Cancel
                 </button>
@@ -2026,16 +1956,16 @@ setQuickStats([
                   type="button"
                   disabled={isCreating || !selectedCustomer || saleItems.length === 0 || 
                     (paymentOption === 'partial' && (!amountPaid || parseFloat(amountPaid) <= 0))}
-                  className="flex-1 px-6 py-3 bg-gradient-to-r from-blue-600 to-blue-700 text-white rounded-lg hover:from-blue-700 hover:to-blue-800 font-medium transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 shadow-lg"
+                  className="flex-1 px-3 py-2 bg-gradient-to-r from-blue-600 to-blue-700 text-white rounded-lg hover:from-blue-700 hover:to-blue-800 font-medium transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-1.5 shadow text-sm"
                 >
                   {isCreating ? (
                     <>
-                      <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
-                      Creating Sale...
+                      <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
+                      Creating...
                     </>
                   ) : (
                     <>
-                      <CheckCircle className="w-5 h-5" />
+                      <CheckCircle className="w-4 h-4" />
                       Create Sale
                     </>
                   )}
@@ -2046,17 +1976,17 @@ setQuickStats([
         </div>
       )}
 
-      {/* NEW ADD PRODUCT MODAL WITH CATEGORY */}
+      {/* Add Product Modal - Mobile Optimized */}
       {showAddProduct && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50 overflow-y-auto">
-          <div className="bg-white rounded-2xl max-w-md w-full shadow-2xl">
-            <div className="sticky top-0 bg-gradient-to-r from-purple-600 to-purple-700 text-white p-6 rounded-t-2xl z-10">
+        <div className="fixed inset-0 bg-black/50 flex items-start justify-center p-2 sm:p-4 z-50 overflow-y-auto">
+          <div className="bg-white rounded-xl sm:rounded-2xl w-full max-w-md shadow-2xl mt-4 sm:mt-0">
+            <div className="sticky top-0 bg-gradient-to-r from-purple-600 to-purple-700 text-white p-4 sm:p-6 rounded-t-xl sm:rounded-t-2xl z-10">
               <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <Package className="w-8 h-8" />
+                <div className="flex items-center gap-2 sm:gap-3">
+                  <Package className="w-6 h-6 sm:w-8 sm:h-8" />
                   <div>
-                    <h2 className="text-2xl font-bold">Add New Product</h2>
-                    <p className="text-purple-100 text-sm">Create a new product in your inventory</p>
+                    <h2 className="text-lg sm:text-2xl font-bold">Add New Product</h2>
+                    <p className="text-purple-100 text-xs sm:text-sm">Create a new product</p>
                   </div>
                 </div>
                 <button
@@ -2066,37 +1996,36 @@ setQuickStats([
                     setProductSuccess(null);
                   }}
                   type="button"
-                  className="text-white hover:bg-white/20 p-2 rounded-lg transition-colors"
+                  className="text-white hover:bg-white/20 p-1.5 rounded-lg transition-colors"
                 >
-                  <X className="w-6 h-6" />
+                  <X className="w-5 h-5 sm:w-6 sm:h-6" />
                 </button>
               </div>
             </div>
 
-            <div className="p-6 space-y-4">
+            <div className="p-4 sm:p-6 space-y-3 sm:space-y-4">
               {productError && (
-                <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg flex items-start gap-2">
-                  <AlertTriangle className="w-5 h-5 flex-shrink-0 mt-0.5" />
+                <div className="bg-red-50 border border-red-200 text-red-700 px-3 py-2 rounded-lg flex items-start gap-2 text-sm">
+                  <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5" />
                   <div className="flex-1">
                     <span>{productError}</span>
                   </div>
                   <button onClick={() => setProductError(null)} type="button" className="text-red-700 hover:text-red-900">
-                    <X size={16} />
+                    <X size={14} />
                   </button>
                 </div>
               )}
 
               {productSuccess && (
-                <div className="bg-emerald-50 border border-emerald-200 text-emerald-700 px-4 py-3 rounded-lg flex items-start gap-2">
-                  <CheckCircle className="w-5 h-5 flex-shrink-0 mt-0.5" />
+                <div className="bg-emerald-50 border border-emerald-200 text-emerald-700 px-3 py-2 rounded-lg flex items-start gap-2 text-sm">
+                  <CheckCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
                   <span>{productSuccess}</span>
                 </div>
               )}
 
-              <div className="space-y-4">
-                {/* Product Name */}
+              <div className="space-y-3">
                 <div>
-                  <label className="block text-sm font-semibold text-black mb-2">
+                  <label className="block text-sm font-semibold text-black mb-1">
                     Product Name *
                   </label>
                   <input
@@ -2104,21 +2033,20 @@ setQuickStats([
                     value={newProduct.name}
                     onChange={(e) => setNewProduct({...newProduct, name: e.target.value})}
                     placeholder="Enter product name"
-                    className="w-full px-4 py-3 border-2 border-slate-200 rounded-lg focus:border-purple-500 focus:ring-2 focus:ring-purple-200 transition-all text-black placeholder-gray-400"
+                    className="w-full px-3 py-2 border-2 border-slate-200 rounded-lg focus:border-purple-500 focus:ring-2 focus:ring-purple-200 transition-all text-black placeholder-gray-400 text-sm"
                     disabled={addingProduct}
                   />
                 </div>
 
-                {/* Category */}
                 <div>
-                  <label className="block text-sm font-semibold text-black mb-2">
+                  <label className="block text-sm font-semibold text-black mb-1">
                     Category *
                   </label>
-                  <div className="flex gap-2">
+                  <div className="flex flex-col gap-2">
                     <select
                       value={newProduct.category}
                       onChange={(e) => setNewProduct({...newProduct, category: e.target.value})}
-                      className="flex-1 px-4 py-3 border-2 border-slate-200 rounded-lg focus:border-purple-500 focus:ring-2 focus:ring-purple-200 text-black"
+                      className="w-full px-3 py-2 border-2 border-slate-200 rounded-lg focus:border-purple-500 focus:ring-2 focus:ring-purple-200 text-black text-sm"
                       disabled={addingProduct}
                     >
                       <option value="">Select a category</option>
@@ -2133,19 +2061,18 @@ setQuickStats([
                       value={newProduct.category}
                       onChange={(e) => setNewProduct({...newProduct, category: e.target.value})}
                       placeholder="Or type new category"
-                      className="flex-1 px-4 py-3 border-2 border-slate-200 rounded-lg focus:border-purple-500 focus:ring-2 focus:ring-purple-200 text-black placeholder-gray-400"
+                      className="w-full px-3 py-2 border-2 border-slate-200 rounded-lg focus:border-purple-500 focus:ring-2 focus:ring-purple-200 text-black placeholder-gray-400 text-sm"
                       disabled={addingProduct}
                     />
                   </div>
                 </div>
 
-                {/* Production Cost */}
                 <div>
-                  <label className="block text-sm font-semibold text-black mb-2">
+                  <label className="block text-sm font-semibold text-black mb-1">
                     Production Cost (KSh) *
                   </label>
                   <div className="relative">
-                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500">KSh</span>
+                    <span className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-500 text-sm">KSh</span>
                     <input
                       type="number"
                       min="0"
@@ -2153,19 +2080,18 @@ setQuickStats([
                       value={newProduct.productionCost}
                       onChange={(e) => setNewProduct({...newProduct, productionCost: e.target.value})}
                       placeholder="Enter production cost"
-                      className="w-full pl-12 pr-4 py-3 border-2 border-slate-200 rounded-lg focus:border-purple-500 focus:ring-2 focus:ring-purple-200 text-black placeholder-gray-400"
+                      className="w-full pl-10 pr-3 py-2 border-2 border-slate-200 rounded-lg focus:border-purple-500 focus:ring-2 focus:ring-purple-200 text-black placeholder-gray-400 text-sm"
                       disabled={addingProduct}
                     />
                   </div>
                 </div>
 
-                {/* Selling Price */}
                 <div>
-                  <label className="block text-sm font-semibold text-black mb-2">
+                  <label className="block text-sm font-semibold text-black mb-1">
                     Selling Price (KSh) *
                   </label>
                   <div className="relative">
-                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500">KSh</span>
+                    <span className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-500 text-sm">KSh</span>
                     <input
                       type="number"
                       min="0"
@@ -2173,11 +2099,10 @@ setQuickStats([
                       value={newProduct.sellingPrice}
                       onChange={(e) => setNewProduct({...newProduct, sellingPrice: e.target.value})}
                       placeholder="Enter selling price"
-                      className="w-full pl-12 pr-4 py-3 border-2 border-slate-200 rounded-lg focus:border-purple-500 focus:ring-2 focus:ring-purple-200 text-black placeholder-gray-400"
+                      className="w-full pl-10 pr-3 py-2 border-2 border-slate-200 rounded-lg focus:border-purple-500 focus:ring-2 focus:ring-purple-200 text-black placeholder-gray-400 text-sm"
                       disabled={addingProduct}
                     />
                   </div>
-                  {/* Profit calculation - FIXED VERSION */}
                   {newProduct.productionCost && newProduct.sellingPrice && (
                     (() => {
                       const productionCost = parseFloat(newProduct.productionCost);
@@ -2186,8 +2111,8 @@ setQuickStats([
                         const profit = sellingPrice - productionCost;
                         const profitMargin = (profit / productionCost) * 100;
                         return (
-                          <div className={`mt-1 text-sm ${profit > 0 ? 'text-green-600' : 'text-red-600'}`}>
-                            Profit: KSh {profit.toLocaleString()} ({profitMargin.toFixed(1)}% margin)
+                          <div className={`mt-1 text-xs ${profit > 0 ? 'text-green-600' : 'text-red-600'}`}>
+                            Profit: KSh {profit.toLocaleString()} ({profitMargin.toFixed(1)}%)
                           </div>
                         );
                       }
@@ -2196,9 +2121,8 @@ setQuickStats([
                   )}
                 </div>
 
-                {/* Initial Stock */}
                 <div>
-                  <label className="block text-sm font-semibold text-black mb-2">
+                  <label className="block text-sm font-semibold text-black mb-1">
                     Initial Stock *
                   </label>
                   <input
@@ -2206,24 +2130,23 @@ setQuickStats([
                     min="0"
                     value={newProduct.initialStock}
                     onChange={(e) => setNewProduct({...newProduct, initialStock: e.target.value})}
-                    placeholder="Enter initial stock quantity"
-                    className="w-full px-4 py-3 border-2 border-slate-200 rounded-lg focus:border-purple-500 focus:ring-2 focus:ring-purple-200 text-black placeholder-gray-400"
+                    placeholder="Enter initial stock"
+                    className="w-full px-3 py-2 border-2 border-slate-200 rounded-lg focus:border-purple-500 focus:ring-2 focus:ring-purple-200 text-black placeholder-gray-400 text-sm"
                     disabled={addingProduct}
                   />
                 </div>
 
-                {/* Summary - FIXED VERSION */}
                 {newProduct.name && newProduct.category && newProduct.productionCost && newProduct.sellingPrice && newProduct.initialStock && (
-                  <div className="bg-purple-50 border-2 border-purple-200 rounded-lg p-4">
-                    <h4 className="font-semibold text-purple-900 mb-2">Product Summary</h4>
-                    <div className="space-y-2 text-sm">
+                  <div className="bg-purple-50 border-2 border-purple-200 rounded-lg p-3 text-sm">
+                    <h4 className="font-semibold text-purple-900 mb-1">Product Summary</h4>
+                    <div className="space-y-1">
                       <div className="flex justify-between">
                         <span className="text-black">Product:</span>
-                        <span className="font-medium">{newProduct.name}</span>
+                        <span className="font-medium truncate ml-2">{newProduct.name}</span>
                       </div>
                       <div className="flex justify-between">
                         <span className="text-black">Category:</span>
-                        <span className="font-medium text-purple-700">{newProduct.category}</span>
+                        <span className="font-medium text-purple-700 truncate ml-2">{newProduct.category}</span>
                       </div>
                       <div className="flex justify-between">
                         <span className="text-black">Cost:</span>
@@ -2237,7 +2160,6 @@ setQuickStats([
                         <span className="text-black">Stock:</span>
                         <span className="font-medium">{newProduct.initialStock} units</span>
                       </div>
-                      {/* Total Potential Profit - FIXED VERSION */}
                       {(() => {
                         const productionCost = parseFloat(newProduct.productionCost);
                         const sellingPrice = parseFloat(newProduct.sellingPrice);
@@ -2247,8 +2169,8 @@ setQuickStats([
                           const profit = sellingPrice - productionCost;
                           const totalProfit = profit * initialStock;
                           return (
-                            <div className="flex justify-between pt-2 border-t border-purple-300">
-                              <span className="font-bold text-black">Total Potential Profit:</span>
+                            <div className="flex justify-between pt-1 border-t border-purple-300">
+                              <span className="font-bold text-black">Total Profit:</span>
                               <span className="font-bold text-green-700">KSh {totalProfit.toLocaleString()}</span>
                             </div>
                           );
@@ -2260,8 +2182,7 @@ setQuickStats([
                 )}
               </div>
 
-              {/* Action Buttons */}
-              <div className="flex gap-3 pt-4">
+              <div className="flex gap-2 pt-3">
                 <button
                   onClick={() => {
                     setShowAddProduct(false);
@@ -2270,7 +2191,7 @@ setQuickStats([
                   }}
                   type="button"
                   disabled={addingProduct}
-                  className="flex-1 px-6 py-3 border-2 border-slate-300 text-black rounded-lg hover:bg-slate-50 font-medium transition-colors disabled:opacity-50"
+                  className="flex-1 px-3 py-2 border-2 border-slate-300 text-black rounded-lg hover:bg-slate-50 font-medium transition-colors disabled:opacity-50 text-sm"
                 >
                   Cancel
                 </button>
@@ -2278,16 +2199,16 @@ setQuickStats([
                   onClick={handleCreateProduct}
                   type="button"
                   disabled={addingProduct || !newProduct.name.trim() || !newProduct.category.trim() || !newProduct.productionCost || !newProduct.sellingPrice}
-                  className="flex-1 px-6 py-3 bg-gradient-to-r from-purple-600 to-purple-700 text-white rounded-lg hover:from-purple-700 hover:to-purple-800 font-medium transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 shadow-lg"
+                  className="flex-1 px-3 py-2 bg-gradient-to-r from-purple-600 to-purple-700 text-white rounded-lg hover:from-purple-700 hover:to-purple-800 font-medium transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-1.5 shadow text-sm"
                 >
                   {addingProduct ? (
                     <>
-                      <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
+                      <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
                       Creating...
                     </>
                   ) : (
                     <>
-                      <CheckCircle className="w-5 h-5" />
+                      <CheckCircle className="w-4 h-4" />
                       Add Product
                     </>
                   )}
@@ -2298,61 +2219,56 @@ setQuickStats([
         </div>
       )}
 
-      {/* Restock Modal */}
+      {/* Restock Modal - Mobile Optimized */}
       {showRestockModal && restockingProduct && (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-[60]">
-          <div className="bg-white rounded-2xl max-w-md w-full shadow-2xl">
-            <div className="bg-gradient-to-r from-orange-600 to-orange-700 text-white p-6 rounded-t-2xl">
+        <div className="fixed inset-0 bg-black/60 flex items-start justify-center p-2 sm:p-4 z-[60]">
+          <div className="bg-white rounded-xl sm:rounded-2xl w-full max-w-md shadow-2xl mt-4 sm:mt-0">
+            <div className="bg-gradient-to-r from-orange-600 to-orange-700 text-white p-4 sm:p-6 rounded-t-xl sm:rounded-t-2xl">
               <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <Package className="w-8 h-8" />
+                <div className="flex items-center gap-2 sm:gap-3">
+                  <Package className="w-6 h-6 sm:w-8 sm:h-8" />
                   <div>
-                    <h2 className="text-2xl font-bold">Restock Product</h2>
-                    <p className="text-orange-100 text-sm">{restockingProduct.name}</p>
+                    <h2 className="text-lg sm:text-2xl font-bold">Restock Product</h2>
+                    <p className="text-orange-100 text-xs sm:text-sm truncate">{restockingProduct.name}</p>
                   </div>
                 </div>
                 <button
                   onClick={closeRestockModal}
                   disabled={restocking}
                   type="button"
-                  className="text-white hover:bg-white/20 p-2 rounded-lg transition-colors disabled:opacity-50"
+                  className="text-white hover:bg-white/20 p-1.5 rounded-lg transition-colors disabled:opacity-50"
                 >
-                  <X className="w-6 h-6" />
+                  <X className="w-5 h-5 sm:w-6 sm:h-6" />
                 </button>
               </div>
             </div>
 
-            <div className="p-6 space-y-4">
+            <div className="p-4 sm:p-6 space-y-3 sm:space-y-4">
               {restockError && (
-                <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg flex items-start gap-2">
-                  <AlertTriangle className="w-5 h-5 flex-shrink-0 mt-0.5" />
+                <div className="bg-red-50 border border-red-200 text-red-700 px-3 py-2 rounded-lg flex items-start gap-2 text-sm">
+                  <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5" />
                   <div className="flex-1">
                     <span>{restockError}</span>
                   </div>
                   <button onClick={() => setRestockError(null)} type="button" className="text-red-700 hover:text-red-900">
-                    <X size={16} />
+                    <X size={14} />
                   </button>
                 </div>
               )}
 
-              {/* Current Stock Info */}
-              <div className="bg-orange-50 border border-orange-200 rounded-lg p-4">
+              <div className="bg-orange-50 border border-orange-200 rounded-lg p-3">
                 <div className="flex items-center justify-between">
                   <div>
-                    <p className="text-sm text-orange-700 font-medium">Current Stock</p>
-                    <p className="text-2xl font-bold text-orange-900">{getProductStock(restockingProduct)} units</p>
-                    {restockingProduct.category && (
-                      <p className="text-sm text-orange-600 mt-1">Category: {restockingProduct.category}</p>
-                    )}
+                    <p className="text-xs text-orange-700 font-medium">Current Stock</p>
+                    <p className="text-xl font-bold text-orange-900">{getProductStock(restockingProduct)} units</p>
                   </div>
-                  <Package className="w-12 h-12 text-orange-300" />
+                  <Package className="w-8 h-8 sm:w-12 sm:h-12 text-orange-300" />
                 </div>
               </div>
 
-              {/* Restock Form */}
-              <div className="space-y-4">
+              <div className="space-y-3">
                 <div>
-                  <label className="block text-sm font-semibold text-black mb-2">
+                  <label className="block text-sm font-semibold text-black mb-1">
                     Quantity to Add *
                   </label>
                   <input
@@ -2363,13 +2279,13 @@ setQuickStats([
                       ...restockForm,
                       quantity: Math.max(1, parseInt(e.target.value) || 1)
                     })}
-                    className="w-full px-4 py-3 border-2 border-slate-200 rounded-lg focus:border-orange-500 focus:ring-2 focus:ring-orange-200 transition-all text-black"
+                    className="w-full px-3 py-2 border-2 border-slate-200 rounded-lg focus:border-orange-500 focus:ring-2 focus:ring-orange-200 transition-all text-black text-sm"
                     disabled={restocking}
                   />
                 </div>
 
                 <div>
-                  <label className="block text-sm font-semibold text-black mb-2">
+                  <label className="block text-sm font-semibold text-black mb-1">
                     Cost Price (KSh) *
                   </label>
                   <input
@@ -2379,18 +2295,18 @@ setQuickStats([
                     value={restockForm.costPrice}
                     onChange={(e) => setRestockForm({...restockForm, costPrice: e.target.value})}
                     placeholder="Enter cost price"
-                    className="w-full px-4 py-3 border-2 border-slate-200 rounded-lg focus:border-orange-500 focus:ring-2 focus:ring-orange-200 transition-all text-black placeholder-gray-400"
+                    className="w-full px-3 py-2 border-2 border-slate-200 rounded-lg focus:border-orange-500 focus:ring-2 focus:ring-orange-200 transition-all text-black placeholder-gray-400 text-sm"
                     disabled={restocking}
                   />
                   {restockForm.costPrice && restockForm.quantity > 0 && (
-                    <p className="text-sm text-gray-600 mt-1">
+                    <p className="text-xs text-gray-600 mt-1">
                       Total Cost: KSh {(parseFloat(restockForm.costPrice || "0") * restockForm.quantity).toLocaleString()}
                     </p>
                   )}
                 </div>
 
                 <div>
-                  <label className="block text-sm font-semibold text-black mb-2">
+                  <label className="block text-sm font-semibold text-black mb-1">
                     Payment Source *
                   </label>
                   <select
@@ -2400,7 +2316,7 @@ setQuickStats([
                       paymentSource: e.target.value as "cash" | "credit",
                       creditorName: e.target.value === "cash" ? "" : restockForm.creditorName
                     })}
-                    className="w-full px-4 py-3 border-2 border-slate-200 rounded-lg focus:border-orange-500 focus:ring-2 focus:ring-orange-200 transition-all text-black"
+                    className="w-full px-3 py-2 border-2 border-slate-200 rounded-lg focus:border-orange-500 focus:ring-2 focus:ring-orange-200 transition-all text-black text-sm"
                     disabled={restocking}
                   >
                     <option value="cash">Cash Payment</option>
@@ -2410,38 +2326,36 @@ setQuickStats([
 
                 {restockForm.paymentSource === "credit" && (
                   <div>
-                    <label className="block text-sm font-semibold text-black mb-2">
-                      Creditor Name * <span className="text-red-600">(Required)</span>
+                    <label className="block text-sm font-semibold text-black mb-1">
+                      Creditor Name *
                     </label>
                     <input
                       type="text"
                       value={restockForm.creditorName}
                       onChange={(e) => setRestockForm({...restockForm, creditorName: e.target.value})}
-                      placeholder="Enter creditor/supplier name"
-                      className="w-full px-4 py-3 border-2 border-slate-200 rounded-lg focus:border-orange-500 focus:ring-2 focus:ring-orange-200 transition-all text-black placeholder-gray-400"
+                      placeholder="Enter creditor name"
+                      className="w-full px-3 py-2 border-2 border-slate-200 rounded-lg focus:border-orange-500 focus:ring-2 focus:ring-orange-200 transition-all text-black placeholder-gray-400 text-sm"
                       disabled={restocking}
                     />
                   </div>
                 )}
 
-                {/* New Stock Preview */}
                 {restockForm.quantity > 0 && (
-                  <div className="bg-green-50 border border-green-200 rounded-lg p-4">
-                    <p className="text-sm text-green-700 font-medium mb-1">After Restock:</p>
-                    <p className="text-2xl font-bold text-green-900">
+                  <div className="bg-green-50 border border-green-200 rounded-lg p-3">
+                    <p className="text-xs text-green-700 font-medium mb-1">After Restock:</p>
+                    <p className="text-lg font-bold text-green-900">
                       {getProductStock(restockingProduct) + restockForm.quantity} units
                     </p>
                   </div>
                 )}
               </div>
 
-              {/* Action Buttons */}
-              <div className="flex gap-3 pt-4">
+              <div className="flex gap-2 pt-3">
                 <button
                   onClick={closeRestockModal}
                   disabled={restocking}
                   type="button"
-                  className="flex-1 px-6 py-3 border-2 border-slate-300 text-black rounded-lg hover:bg-slate-50 font-medium transition-colors disabled:opacity-50"
+                  className="flex-1 px-3 py-2 border-2 border-slate-300 text-black rounded-lg hover:bg-slate-50 font-medium transition-colors disabled:opacity-50 text-sm"
                 >
                   Cancel
                 </button>
@@ -2449,17 +2363,17 @@ setQuickStats([
                   onClick={handleRestockSubmit}
                   disabled={restocking}
                   type="button"
-                  className="flex-1 px-6 py-3 bg-gradient-to-r from-orange-600 to-orange-700 text-white rounded-lg hover:from-orange-700 hover:to-orange-800 font-medium transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 shadow-lg"
+                  className="flex-1 px-3 py-2 bg-gradient-to-r from-orange-600 to-orange-700 text-white rounded-lg hover:from-orange-700 hover:to-orange-800 font-medium transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-1.5 shadow text-sm"
                 >
                   {restocking ? (
                     <>
-                      <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
+                      <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
                       Restocking...
                     </>
                   ) : (
                     <>
-                      <CheckCircle className="w-5 h-5" />
-                      Restock Product
+                      <CheckCircle className="w-4 h-4" />
+                      Restock
                     </>
                   )}
                 </button>
@@ -2469,43 +2383,43 @@ setQuickStats([
         </div>
       )}
 
-      {/* Quick Stats */}
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 py-6 sm:py-10">
-        <h2 className="text-xl sm:text-2xl font-semibold text-slate-900 mb-4 sm:mb-6">
+      {/* Quick Stats - Mobile Optimized */}
+      <div className="px-3 sm:px-4 py-4 sm:py-6">
+        <h2 className="text-lg sm:text-xl font-semibold text-slate-900 mb-3 sm:mb-4">
           Quick Overview
         </h2>
         
         {isLoading ? (
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-6">
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 sm:gap-4">
             {[...Array(4)].map((_, i) => (
-              <div key={i} className="bg-white rounded-xl shadow-sm border border-slate-200 p-4 sm:p-6 animate-pulse">
-                <div className="h-12 bg-slate-200 rounded mb-3"></div>
-                <div className="h-6 bg-slate-200 rounded mb-2"></div>
-                <div className="h-4 bg-slate-200 rounded w-2/3"></div>
+              <div key={i} className="bg-white rounded-lg shadow-sm border border-slate-200 p-3 sm:p-4 animate-pulse">
+                <div className="h-8 sm:h-10 bg-slate-200 rounded mb-2"></div>
+                <div className="h-5 sm:h-6 bg-slate-200 rounded mb-1.5"></div>
+                <div className="h-3 sm:h-4 bg-slate-200 rounded w-2/3"></div>
               </div>
             ))}
           </div>
         ) : (
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-6">
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 sm:gap-4">
             {quickStats.map((stat) => (
               <div
                 key={stat.title}
-                className="bg-white rounded-xl shadow-sm border border-slate-200 p-4 sm:p-6 hover:shadow-md transition-shadow"
+                className="bg-white rounded-lg shadow-sm border border-slate-200 p-3 sm:p-4 hover:shadow-md transition-shadow"
               >
-                <div className="flex items-center justify-between mb-3 sm:mb-4">
+                <div className="flex items-center justify-between mb-2 sm:mb-3">
                   <div
-                    className={`p-2 sm:p-3 rounded-lg ${
+                    className={`p-1.5 sm:p-2 rounded-lg ${
                       stat.positive ? "bg-emerald-100" : "bg-orange-100"
                     }`}
                   >
                     <stat.icon
-                      className={`w-5 h-5 sm:w-6 sm:h-6 ${
+                      className={`w-4 h-4 sm:w-5 sm:h-5 ${
                         stat.positive ? "text-emerald-600" : "text-orange-600"
                       }`}
                     />
                   </div>
                   <span
-                    className={`text-xs sm:text-sm font-medium px-2 py-1 rounded-full whitespace-nowrap ${
+                    className={`text-xs font-medium px-1.5 py-0.5 rounded-full whitespace-nowrap ${
                       stat.positive
                         ? "bg-emerald-100 text-emerald-700"
                         : "bg-orange-100 text-orange-700"
@@ -2514,40 +2428,40 @@ setQuickStats([
                     {stat.change}
                   </span>
                 </div>
-                <div className="text-lg sm:text-2xl font-bold text-slate-900 mb-1 truncate">
+                <div className="text-base sm:text-lg font-bold text-slate-900 mb-0.5 truncate">
                   {stat.value}
                 </div>
-                <div className="text-black text-xs sm:text-sm">{stat.title}</div>
+                <div className="text-black text-xs">{stat.title}</div>
               </div>
             ))}
           </div>
         )}
 
-        {/* Admin Sections */}
-        <div className="mt-8 sm:mt-12">
-          <h2 className="text-xl sm:text-2xl font-semibold text-slate-900 mb-4 sm:mb-6">
+        {/* Admin Sections - Mobile Optimized */}
+        <div className="mt-6 sm:mt-8">
+          <h2 className="text-lg sm:text-xl font-semibold text-slate-900 mb-3 sm:mb-4">
             Management Sections
           </h2>
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 sm:gap-6">
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2 sm:gap-4">
             {adminSections.map((section) => (
               <Link
                 key={section.title}
                 href={section.href}
-                className="group bg-white rounded-xl shadow-sm border border-slate-200 p-4 sm:p-6 hover:shadow-lg hover:scale-105 transition-all"
+                className="group bg-white rounded-lg shadow-sm border border-slate-200 p-3 sm:p-4 hover:shadow-md hover:scale-[1.02] transition-all"
               >
-                <div className="flex items-start justify-between mb-3 sm:mb-4">
-                  <div className={`p-2 sm:p-3 rounded-lg ${section.color}`}>
-                    <section.icon className="w-5 h-5 sm:w-6 sm:h-6 text-white" />
+                <div className="flex items-start justify-between mb-2 sm:mb-3">
+                  <div className={`p-1.5 sm:p-2 rounded-lg ${section.color}`}>
+                    <section.icon className="w-4 h-4 sm:w-5 sm:h-5 text-white" />
                   </div>
-                  <ChevronRight className="w-4 h-4 sm:w-5 sm:h-5 text-slate-400 group-hover:text-slate-600 transition" />
+                  <ChevronRight className="w-3 h-3 sm:w-4 sm:h-4 text-slate-400 group-hover:text-slate-600 transition" />
                 </div>
-                <h3 className="text-base sm:text-lg font-semibold text-slate-900 mb-2 group-hover:text-blue-600 truncate">
+                <h3 className="text-sm sm:text-base font-semibold text-slate-900 mb-1 group-hover:text-blue-600 truncate">
                   {section.title}
                 </h3>
-                <p className="text-xs sm:text-sm text-black mb-3 sm:mb-4 line-clamp-2">
+                <p className="text-xs text-black mb-2 sm:mb-3 line-clamp-2">
                   {section.description}
                 </p>
-                <div className="text-xs font-medium text-black bg-slate-50 rounded-full px-2 sm:px-3 py-1 inline-block truncate max-w-full">
+                <div className="text-xs font-medium text-black bg-slate-50 rounded-full px-2 py-0.5 inline-block truncate max-w-full">
                   {section.stats}
                 </div>
               </Link>
