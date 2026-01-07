@@ -181,6 +181,91 @@ export default function DebtorsSection() {
     }
   };
 
+  // Function to download debtors as CSV
+  const downloadDebtorsCSV = () => {
+    if (filteredDebtors.length === 0) {
+      alert("No debtors to download.");
+      return;
+    }
+
+    try {
+      // Define CSV headers
+      const headers = [
+        "Customer ID",
+        "Customer Name",
+        "Email",
+        "Phone",
+        "Total Sales (KES)",
+        "Amount Paid (KES)",
+        "Balance (KES)",
+        "Payment Rate (%)",
+        "Number of Sales",
+        "Last Sale Date",
+        "Last Payment Date"
+      ];
+
+      // Prepare data rows
+      const rows = filteredDebtors.map(debtor => {
+        const lastSale = debtor.sales.length > 0 
+          ? new Date(debtor.sales[debtor.sales.length - 1].date).toLocaleDateString()
+          : "N/A";
+        
+        const lastPayment = debtor.payments.length > 0
+          ? new Date(debtor.payments[debtor.payments.length - 1].date).toLocaleDateString()
+          : "N/A";
+
+        const paymentRate = debtor.totalSales > 0 
+          ? ((debtor.paid / debtor.totalSales) * 100).toFixed(2)
+          : "0.00";
+
+        return [
+          debtor.id,
+          `"${debtor.name.replace(/"/g, '""')}"`, // Escape quotes in names
+          `"${debtor.email}"`,
+          `"${debtor.phone}"`,
+          formatCurrencyForCSV(debtor.totalSales),
+          formatCurrencyForCSV(debtor.paid),
+          formatCurrencyForCSV(debtor.balance),
+          paymentRate,
+          debtor.sales.length,
+          lastSale,
+          lastPayment
+        ];
+      });
+
+      // Combine headers and rows
+      const csvContent = [
+        headers.join(","),
+        ...rows.map(row => row.join(","))
+      ].join("\n");
+
+      // Create download link
+      const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      
+      // Generate filename with current date
+      const date = new Date().toISOString().split('T')[0];
+      const time = new Date().toTimeString().split(' ')[0].replace(/:/g, '-');
+      link.download = `debtors-report_${date}_${time}.csv`;
+      
+      // Trigger download
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error("Error generating CSV:", error);
+      alert("Failed to generate CSV file. Please try again.");
+    }
+  };
+
+  // Helper function to format currency for CSV (without commas)
+  const formatCurrencyForCSV = (amount: number) => {
+    return Number(amount || 0).toFixed(2);
+  };
+
   const handleSearch = (e: React.ChangeEvent<HTMLInputElement>) => {
     setSearchQuery(e.target.value);
   };
@@ -402,6 +487,16 @@ Swiftmetals`;
                 </button>
               )}
             </div>
+            
+            {/* CSV Download Button - Added Here */}
+            <button
+              onClick={downloadDebtorsCSV}
+              disabled={filteredDebtors.length === 0}
+              className="bg-gradient-to-r from-green-500 to-emerald-500 hover:from-green-600 hover:to-emerald-600 text-white px-4 md:px-6 py-2.5 rounded-lg font-medium transition flex items-center gap-2 shadow-lg hover:shadow-xl text-sm md:text-base w-full sm:w-auto justify-center disabled:opacity-50 disabled:cursor-not-allowed"
+              title={filteredDebtors.length === 0 ? "No debtors to download" : "Download CSV report"}
+            >
+              <Download className="w-4 h-4 md:w-5 md:h-5" /> Download CSV
+            </button>
             
             <button
               onClick={() => openModal()}
@@ -810,6 +905,7 @@ Swiftmetals`;
                   <ul className="mt-1 ml-2">
                     <li>• Single Receipt: Opens receipt API</li>
                     <li>• Full Statement: Opens customer statement API</li>
+                    <li>• CSV Export: Download all debtors as spreadsheet</li>
                   </ul>
                 </p>
               </div>

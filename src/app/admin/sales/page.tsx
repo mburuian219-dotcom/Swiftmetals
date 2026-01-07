@@ -32,7 +32,7 @@ interface Payment {
   referenceId?: string | null;
   checkDepositDate?: string | null;
   dueDate?: string | null;
-  status?: "PENDING" | "COMPLETED" | "BOUNCED";
+  status?: "PENDING" | "COMPLETED" | "BOUNCED" | "CLEARED";
 }
 
 interface NewPayment {
@@ -119,7 +119,6 @@ const EnhancedSalesPage = () => {
   const [success, setSuccess] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<"messaging" | "overview" | "paid" | "partial" | "unpaid">("overview");
   const [selectedSales, setSelectedSales] = useState<number[]>([]);
-  const [messagingLoading, setMessagingLoading] = useState(false);
   const [selectedMessageType, setSelectedMessageType] = useState("delivery");
 
   // Filter state variables
@@ -148,7 +147,44 @@ const EnhancedSalesPage = () => {
     return cleanPhone;
   };
 
-  // Message templates
+  // Format date helper
+  const formatDate = (dateString: string | null | undefined): string => {
+    if (!dateString) return "";
+    try {
+      const date = new Date(dateString);
+      return date.toLocaleDateString('en-US', {
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric'
+      });
+    } catch {
+      return "";
+    }
+  };
+
+  // Format time helper
+  const formatTime = (dateString: string | null | undefined): string => {
+    if (!dateString) return "";
+    try {
+      const date = new Date(dateString);
+      return date.toLocaleTimeString('en-US', {
+        hour: '2-digit',
+        minute: '2-digit'
+      });
+    } catch {
+      return "";
+    }
+  };
+
+  // Format currency helper
+  const formatCurrency = (amount: number): string => {
+    return new Intl.NumberFormat('en-KE', {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2
+    }).format(amount);
+  };
+
+  // Corrected message templates
   const messageTypes = [
     { 
       value: "delivery", 
@@ -159,14 +195,60 @@ const EnhancedSalesPage = () => {
     { 
       value: "payment", 
       label: "Payment Reminder",
-      getTemplate: (sale: Sale) => 
-        `Hello ${sale.customer.name}, this is a kind reminder of your outstanding balance of Ksh ${sale.remainingAmount.toFixed(2)}. We kindly request that you settle at your earliest convenience. Best regards, Swift Metals.`
+      getTemplate: (sale: Sale) => {
+        // Get items list
+        const itemsList = sale.saleitems?.map(item => 
+          `${item.product.name} (${item.quantity} units)`
+        ).join(', ') || 'Various items';
+        
+        // Calculate outstanding balance
+        const outstandingBalance = sale.remainingAmount > 0.01 ? sale.remainingAmount : sale.amount;
+        
+        // Construct the receipt URL
+        const receiptLink = typeof window !== 'undefined' ? 
+          `${window.location.origin}/api/receipt/${sale.id}` : 
+          `/api/receipt/${sale.id}`;
+        
+        return `Hello ${sale.customer.name},
+
+This is a friendly reminder regarding your pending payment for sale #${sale.id} dated ${formatDate(sale.date)}.
+
+Sale Details:
+- Invoice #: ${sale.id}
+- Date: ${formatDate(sale.date)}
+- Amount Due: KES ${formatCurrency(sale.amount)}
+- Items: ${itemsList}
+
+Outstanding Balance: KES ${formatCurrency(outstandingBalance)}
+
+We kindly request that you settle this outstanding balance at your earliest convenience.
+
+Attached is the receipt: ${receiptLink}
+
+Best regards,
+Swiftmetals`;
+      }
     },
     { 
       value: "check", 
       label: "Check Reminder",
-      getTemplate: (sale: Sale) => 
-        `Hello ${sale.customer.name}, this is a reminder that your check payment is scheduled for deposit soon. Please ensure sufficient funds are available. Best regards, Swift Metals.`
+      getTemplate: (sale: Sale) => {
+        // Find check payment if any
+        const checkPayment = sale.payments?.find(p => p.method === "CHECK");
+        
+        if (checkPayment?.checkDepositDate) {
+          const depositDate = new Date(checkPayment.checkDepositDate);
+          const formattedDate = depositDate.toLocaleDateString('en-US', {
+            month: 'short',
+            day: 'numeric',
+            year: 'numeric'
+          });
+          
+          return `Hello ${sale.customer.name}, this is a reminder that your check payment (KES ${formatCurrency(checkPayment.amount)}) is scheduled for deposit on ${formattedDate}. Please ensure sufficient funds are available in your account. Best regards, Swift Metals.`;
+        }
+        
+        return `Hello ${sale.customer.name}, this is a reminder that your check payment is scheduled for deposit soon. Please ensure sufficient funds are available. Best regards, Swift Metals.`;
+      }
     }
   ];
 
@@ -217,34 +299,6 @@ const EnhancedSalesPage = () => {
       name: nameFromEmail,
       email: email
     };
-  };
-
-  // Format date helper
-  const formatDate = (dateString: string | null | undefined): string => {
-    if (!dateString) return "";
-    try {
-      const date = new Date(dateString);
-      return date.toLocaleDateString('en-US', {
-        month: 'short',
-        day: 'numeric'
-      });
-    } catch {
-      return "";
-    }
-  };
-
-  // Format time helper
-  const formatTime = (dateString: string | null | undefined): string => {
-    if (!dateString) return "";
-    try {
-      const date = new Date(dateString);
-      return date.toLocaleTimeString('en-US', {
-        hour: '2-digit',
-        minute: '2-digit'
-      });
-    } catch {
-      return "";
-    }
   };
 
   useEffect(() => {
@@ -814,26 +868,24 @@ const EnhancedSalesPage = () => {
     );
   }, [products, productSearch]);
 
-  const sendDeliveryConfirmation = async (saleId: number) => {
-    setMessagingLoading(true);
-    try {
-      const res = await fetch("/api/sms/send-delivery-confirmation", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ saleId }),
-      });
+  // Handle sending messages via WhatsApp/SMS (directly opens messaging app)
+  const handleSendMessage = (sale: Sale) => {
+    if (!sale.customer?.phone) {
+      setError("Customer phone number is required");
+      setTimeout(() => setError(null), 3000);
+      return;
+    }
 
-      const data = await res.json();
+    const phone = formatPhoneNumber(sale.customer.phone);
+    const selectedTemplate = messageTypes.find(t => t.value === selectedMessageType);
+    const message = encodeURIComponent(selectedTemplate?.getTemplate(sale) || "Thank you for your business!");
 
-      if (res.ok && !data.blacklist) {
-        setSuccess(`Delivery confirmation SMS sent to ${data.customer}`);
-      } else {
-        setError(data.error || "Failed to send delivery confirmation SMS");
-      }
-    } catch (err) {
-      setError("Failed to send delivery confirmation SMS");
-    } finally {
-      setMessagingLoading(false);
+    const useWhatsApp = confirm("Send via WhatsApp? (Cancel for SMS)");
+
+    if (useWhatsApp) {
+      window.open(`https://wa.me/${phone}?text=${message}`, "_blank");
+    } else {
+      window.open(`sms:${phone}?body=${message}`, "_blank");
     }
   };
 
@@ -1093,27 +1145,27 @@ const EnhancedSalesPage = () => {
       <div className="grid grid-cols-2 gap-2 mb-4">
         <div className="bg-white p-3 rounded-lg shadow border-l-2 border-emerald-500">
           <div className="text-xs text-gray-600">Total Sales</div>
-          <div className="text-base font-bold text-emerald-600">Ksh {stats.totalSales.toFixed(2)}</div>
+          <div className="text-base font-bold text-emerald-600">Ksh {formatCurrency(stats.totalSales)}</div>
           <div className="text-xs text-black">{sales.length} orders</div>
         </div>
         <div className="bg-white p-3 rounded-lg shadow border-l-2 border-blue-500">
           <div className="text-xs text-gray-600">Fully Paid</div>
-          <div className="text-base font-bold text-blue-600">Ksh {stats.paidSales.toFixed(2)}</div>
+          <div className="text-base font-bold text-blue-600">Ksh {formatCurrency(stats.paidSales)}</div>
           <div className="text-xs text-black">{stats.paidCount} orders</div>
         </div>
         <div className="bg-white p-3 rounded-lg shadow border-l-2 border-orange-500">
           <div className="text-xs text-gray-600">Partial</div>
-          <div className="text-base font-bold text-orange-600">Ksh {stats.partialSales.toFixed(2)}</div>
+          <div className="text-base font-bold text-orange-600">Ksh {formatCurrency(stats.partialSales)}</div>
           <div className="text-xs text-black">{stats.partialCount} orders</div>
         </div>
         <div className="bg-white p-3 rounded-lg shadow border-l-2 border-red-500">
           <div className="text-xs text-gray-600">Unpaid</div>
-          <div className="text-base font-bold text-red-600">Ksh {stats.unpaidSales.toFixed(2)}</div>
+          <div className="text-base font-bold text-red-600">Ksh {formatCurrency(stats.unpaidSales)}</div>
           <div className="text-xs text-black">{stats.unpaidCount} orders</div>
         </div>
         <div className="bg-white p-3 rounded-lg shadow border-l-2 border-purple-500 col-span-2">
           <div className="text-xs text-gray-600">Outstanding Amount</div>
-          <div className="text-base font-bold text-purple-600">Ksh {stats.totalOutstanding.toFixed(2)}</div>
+          <div className="text-base font-bold text-purple-600">Ksh {formatCurrency(stats.totalOutstanding)}</div>
           <div className="text-xs text-black">Total remaining</div>
         </div>
       </div>
@@ -1180,11 +1232,11 @@ const EnhancedSalesPage = () => {
                 <div className="grid grid-cols-2 gap-2 text-xs mb-2">
                   <div>
                     <span className="text-gray-600">Amount:</span>
-                    <span className="font-semibold text-emerald-600 ml-1">Ksh {sale.amount.toFixed(2)}</span>
+                    <span className="font-semibold text-emerald-600 ml-1">Ksh {formatCurrency(sale.amount)}</span>
                   </div>
                   <div>
                     <span className="text-gray-600">Remaining:</span>
-                    <span className="font-semibold text-red-600 ml-1">Ksh {sale.remainingAmount.toFixed(2)}</span>
+                    <span className="font-semibold text-red-600 ml-1">Ksh {formatCurrency(sale.remainingAmount)}</span>
                   </div>
                   <div>
                     <span className="text-gray-600">Date:</span>
@@ -1278,25 +1330,7 @@ const EnhancedSalesPage = () => {
                     
                     <div className="col-span-2 grid grid-cols-4 gap-1">
                       <button
-                        onClick={() => {
-                          if (!sale.customer?.phone) {
-                            setError("Customer phone required");
-                            setTimeout(() => setError(null), 3000);
-                            return;
-                          }
-
-                          const phone = formatPhoneNumber(sale.customer.phone);
-                          const selectedTemplate = messageTypes.find(t => t.value === selectedMessageType);
-                          const message = encodeURIComponent(selectedTemplate?.getTemplate(sale) || "Thank you for your business!");
-
-                          const useWhatsApp = confirm("Send via WhatsApp? (Cancel for SMS)");
-
-                          if (useWhatsApp) {
-                            window.open(`https://wa.me/${phone}?text=${message}`, "_blank");
-                          } else {
-                            window.open(`sms:${phone}?body=${message}`, "_blank");
-                          }
-                        }}
+                        onClick={() => handleSendMessage(sale)}
                         disabled={!sale.customer?.phone}
                         className="px-1 py-1.5 text-xs bg-blue-500 text-white rounded hover:bg-blue-600 disabled:opacity-50 flex items-center justify-center gap-0.5"
                         title="Message"
@@ -1333,15 +1367,6 @@ const EnhancedSalesPage = () => {
                         <span className="hidden xs:inline">Del</span>
                       </button>
                     </div>
-                    
-                    <button
-                      onClick={() => sendDeliveryConfirmation(sale.id)}
-                      disabled={messagingLoading || !sale.customer?.phone}
-                      className="col-span-2 px-1 py-1.5 text-xs bg-green-500 text-white rounded hover:bg-green-600 disabled:opacity-50 flex items-center justify-center gap-1"
-                    >
-                      <MessageSquare size={12} />
-                      Send SMS Confirmation
-                    </button>
                   </div>
                 </div>
               </div>
@@ -1526,7 +1551,7 @@ const EnhancedSalesPage = () => {
                         />
                       </div>
                       <div className="text-xs text-green-600 mt-1">
-                        Subtotal: Ksh {(item.quantity * item.price).toFixed(2)}
+                        Subtotal: Ksh {formatCurrency(item.quantity * item.price)}
                       </div>
                     </div>
                   ))}
@@ -1536,7 +1561,7 @@ const EnhancedSalesPage = () => {
                   <div className="flex justify-between items-center">
                     <span className="font-semibold text-black text-sm">New Total:</span>
                     <span className="font-bold text-blue-600">
-                      Ksh {editSaleItems.reduce((sum, item) => sum + (item.quantity * item.price), 0).toFixed(2)}
+                      Ksh {formatCurrency(editSaleItems.reduce((sum, item) => sum + (item.quantity * item.price), 0))}
                     </span>
                   </div>
                 </div>
@@ -1557,7 +1582,7 @@ const EnhancedSalesPage = () => {
                           }`}>
                             {payment.method}
                           </span>
-                          <span className="font-medium">Ksh {parseFloat(payment.amount).toFixed(2)}</span>
+                          <span className="font-medium">Ksh {formatCurrency(parseFloat(payment.amount))}</span>
                         </div>
                         {payment.id !== undefined && (
                           <button
@@ -1643,12 +1668,12 @@ const EnhancedSalesPage = () => {
                 <div className="bg-blue-50 p-2 rounded-lg text-sm">
                   <div className="flex justify-between mb-1">
                     <span>Total Sale:</span>
-                    <span className="font-bold">Ksh {editSaleItems.reduce((sum, item) => sum + (item.quantity * item.price), 0).toFixed(2)}</span>
+                    <span className="font-bold">Ksh {formatCurrency(editSaleItems.reduce((sum, item) => sum + (item.quantity * item.price), 0))}</span>
                   </div>
                   <div className="flex justify-between mb-1">
                     <span>Total Payments:</span>
                     <span className="font-bold text-green-600">
-                      Ksh {editPayments.reduce((sum, p) => sum + Number(p.amount), 0).toFixed(2)}
+                      Ksh {formatCurrency(editPayments.reduce((sum, p) => sum + Number(p.amount), 0))}
                     </span>
                   </div>
                   <div className="flex justify-between pt-1 border-t">
@@ -1657,7 +1682,7 @@ const EnhancedSalesPage = () => {
                       Math.max(0, editSaleItems.reduce((sum, item) => sum + (item.quantity * item.price), 0) - editPayments.reduce((sum, p) => sum + Number(p.amount), 0)) > 0 
                         ? 'text-red-600' : 'text-green-600'
                     }`}>
-                      Ksh {Math.max(0, editSaleItems.reduce((sum, item) => sum + (item.quantity * item.price), 0) - editPayments.reduce((sum, p) => sum + Number(p.amount), 0)).toFixed(2)}
+                      Ksh {formatCurrency(Math.max(0, editSaleItems.reduce((sum, item) => sum + (item.quantity * item.price), 0) - editPayments.reduce((sum, p) => sum + Number(p.amount), 0)))}
                     </span>
                   </div>
                 </div>

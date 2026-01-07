@@ -25,6 +25,30 @@ interface Sale {
   staff?: any;
 }
 
+// Define the return type for inventory operations
+interface InventoryOperationResult {
+  success: boolean;
+  saleId?: number;
+  staffId?: number;
+  inventoryUpdates?: Array<{
+    productId: number;
+    productName?: string;
+    quantitySold: number;
+    previousSold: number;
+    newSold: number;
+    inventoryId: number;
+  }>;
+  inventoryRestorations?: Array<{
+    productId: number;
+    quantityRestored: number;
+    previousSold: number;
+    newSold: number;
+    inventoryId: number;
+  }>;
+  errors?: string[];
+  error?: string;
+}
+
 // Helper to normalize email
 function normalizeEmail(email: string): string {
   if (!email) return '';
@@ -37,14 +61,12 @@ async function findStaffByEmailCaseInsensitive(email: string) {
   
   const normalizedEmail = normalizeEmail(email);
   
-  // First try exact match
   let staff = await prisma.staff.findFirst({
     where: { 
       email: normalizedEmail 
     }
   });
 
-  // If not found, try case-insensitive by fetching all and filtering
   if (!staff) {
     const allStaff = await prisma.staff.findMany({
       where: { 
@@ -67,21 +89,17 @@ function emailsMatch(email1: string, email2: string): boolean {
   const norm1 = normalizeEmail(email1);
   const norm2 = normalizeEmail(email2);
   
-  // Exact match
   if (norm1 === norm2) return true;
   
-  // Match without dots (gmail style)
   const norm1NoDots = norm1.replace(/\./g, '');
   const norm2NoDots = norm2.replace(/\./g, '');
   if (norm1NoDots === norm2NoDots) return true;
   
-  // Match username part (before @)
   const [user1, domain1] = norm1.split('@');
   const [user2, domain2] = norm2.split('@');
   
   if (!user1 || !user2 || !domain1 || !domain2) return false;
   
-  // Same domain, compare usernames without dots
   if (domain1 === domain2) {
     return user1.replace(/\./g, '') === user2.replace(/\./g, '');
   }
@@ -119,7 +137,6 @@ async function debugEmailMatching(staffEmail: string) {
   console.log('🔍 Debug email matching for:', staffEmail);
   console.log('Normalized staff email:', normalizedStaffEmail);
   
-  // Get all unique createdBy values
   const uniqueCreatedBys = await prisma.$queryRaw<{createdBy: string}[]>`
     SELECT DISTINCT createdBy 
     FROM sale 
@@ -149,7 +166,6 @@ async function debugEmailMatching(staffEmail: string) {
 // Helper function to link inventory sales
 async function findInventoryLinkedSales(staffId: number) {
   try {
-    // Get sales through staff inventory -> saleItems
     const inventorySales = await prisma.staffInventory.findMany({
       where: { staffId },
       select: {
@@ -165,10 +181,265 @@ async function findInventoryLinkedSales(staffId: number) {
       inv.saleItems.map(si => si.saleId)
     );
     
-    return [...new Set(saleIds)]; // Remove duplicates
+    return [...new Set(saleIds)];
   } catch (error) {
     console.error('Error finding inventory linked sales:', error);
     return [];
+  }
+}
+
+// NEW FUNCTION: Reduce staff inventory when a sale is linked
+async function reduceStaffInventoryFromSale(staffId: number, saleId: number): Promise<InventoryOperationResult> {
+  try {
+    console.log(`🔄 Starting inventory reduction for staff ${staffId} from sale ${saleId}`);
+    
+    // Get the sale with its items
+    const sale = await prisma.sale.findUnique({
+      where: { id: saleId },
+      include: {
+        saleitem: {
+          include: {
+            product: true,
+            staffInventory: true
+          }
+        }
+      }
+    });
+    
+    if (!sale) {
+      console.error(`❌ Sale ${saleId} not found`);
+      return { 
+        success: false, 
+        error: 'Sale not found' 
+      };
+    }
+    
+    const inventoryUpdates = [];
+    const errors = [];
+    
+    // Process each item in the sale
+    for (const item of sale.saleitem) {
+      const productId = item.productId;
+      const quantitySold = item.quantity;
+      
+      console.log(`📦 Processing sale item: ${quantitySold}x ${item.product?.name} (ID: ${productId})`);
+      
+      // Find the staff's inventory for this product
+      const staffInventory = await prisma.staffInventory.findFirst({
+        where: {
+          staffId: staffId,
+          productId: productId,
+          quantityGiven: {
+            gt: 0 // Only consider inventory that was actually given
+          }
+        },
+        orderBy: {
+          createdAt: 'asc' // Process oldest inventory first (FIFO)
+        }
+      });
+      
+      if (!staffInventory) {
+        const error = `❌ No inventory found for product ${productId} assigned to staff ${staffId}`;
+        console.error(error);
+        errors.push(error);
+        continue;
+      }
+      
+      // Calculate remaining quantity before this sale
+      const currentSold = staffInventory.quantitySold;
+      const currentReturned = staffInventory.quantityReturned;
+      const currentRemaining = staffInventory.quantityGiven - currentSold - currentReturned;
+      
+      if (currentRemaining < quantitySold) {
+        const error = `❌ Insufficient inventory for product ${productId}. Available: ${currentRemaining}, Required: ${quantitySold}`;
+        console.error(error);
+        errors.push(error);
+        continue;
+      }
+      
+      // Calculate new sold quantity
+      const newSoldQuantity = currentSold + quantitySold;
+      
+      // Update the staff inventory
+      await prisma.staffInventory.update({
+        where: { id: staffInventory.id },
+        data: {
+          quantitySold: newSoldQuantity,
+          updatedAt: new Date()
+        }
+      });
+      
+      // Link this sale item to the staff inventory
+      await prisma.saleitem.update({
+        where: { id: item.id },
+        data: {
+          staffInventoryId: staffInventory.id
+        }
+      });
+      
+      inventoryUpdates.push({
+        productId,
+        productName: item.product?.name,
+        quantitySold,
+        previousSold: currentSold,
+        newSold: newSoldQuantity,
+        inventoryId: staffInventory.id
+      });
+      
+      console.log(`✅ Updated inventory ${staffInventory.id}: ${currentSold} → ${newSoldQuantity} sold`);
+    }
+    
+    return {
+      success: errors.length === 0,
+      saleId,
+      staffId,
+      inventoryUpdates,
+      ...(errors.length > 0 && { errors })
+    };
+    
+  } catch (error: any) {
+    console.error(`❌ Error reducing inventory for sale ${saleId}:`, error);
+    return {
+      success: false,
+      error: error.message,
+      saleId,
+      staffId
+    };
+  }
+}
+
+// NEW FUNCTION: Reduce inventory when a sale is created/updated
+async function reduceInventoryForNewSale(saleId: number, staffId?: number, staffEmail?: string): Promise<InventoryOperationResult> {
+  try {
+    console.log(`🔄 Processing inventory reduction for sale ${saleId}`);
+    
+    // Determine staff ID from parameters or find by email
+    let targetStaffId = staffId;
+    
+    if (!targetStaffId && staffEmail) {
+      const staff = await findStaffByEmailCaseInsensitive(staffEmail);
+      targetStaffId = staff?.id;
+    }
+    
+    if (!targetStaffId) {
+      console.log(`⚠️ No staff ID provided for sale ${saleId}, skipping inventory reduction`);
+      return { 
+        success: false, 
+        error: 'No staff identified for inventory reduction' 
+      };
+    }
+    
+    // Call the reduction function
+    return await reduceStaffInventoryFromSale(targetStaffId, saleId);
+    
+  } catch (error: any) {
+    console.error(`❌ Error in inventory reduction for sale ${saleId}:`, error);
+    return {
+      success: false,
+      error: error.message,
+      saleId
+    };
+  }
+}
+
+// NEW FUNCTION: Restore inventory when a sale is deleted/cancelled
+async function restoreStaffInventoryFromSale(staffId: number, saleId: number): Promise<InventoryOperationResult> {
+  try {
+    console.log(`🔄 Restoring inventory for staff ${staffId} from cancelled sale ${saleId}`);
+    
+    // Get the sale with its items
+    const sale = await prisma.sale.findUnique({
+      where: { id: saleId },
+      include: {
+        saleitem: {
+          include: {
+            staffInventory: true
+          }
+        }
+      }
+    });
+    
+    if (!sale) {
+      console.error(`❌ Sale ${saleId} not found for restoration`);
+      return { 
+        success: false, 
+        error: 'Sale not found' 
+      };
+    }
+    
+    const inventoryRestorations = [];
+    
+    // Process each item in the sale
+    for (const item of sale.saleitem) {
+      if (!item.staffInventoryId) {
+        continue; // Skip items not linked to inventory
+      }
+      
+      const quantitySold = item.quantity;
+      const staffInventoryId = item.staffInventoryId;
+      
+      // Get current inventory
+      const staffInventory = await prisma.staffInventory.findUnique({
+        where: { id: staffInventoryId }
+      });
+      
+      if (!staffInventory) {
+        console.warn(`⚠️ Inventory ${staffInventoryId} not found for restoration`);
+        continue;
+      }
+      
+      if (staffInventory.staffId !== staffId) {
+        console.warn(`⚠️ Inventory ${staffInventoryId} does not belong to staff ${staffId}`);
+        continue;
+      }
+      
+      // Calculate new sold quantity (subtract what was sold)
+      const currentSold = staffInventory.quantitySold;
+      const newSoldQuantity = Math.max(0, currentSold - quantitySold);
+      
+      // Update the staff inventory
+      await prisma.staffInventory.update({
+        where: { id: staffInventoryId },
+        data: {
+          quantitySold: newSoldQuantity,
+          updatedAt: new Date()
+        }
+      });
+      
+      // Remove the link from sale item
+      await prisma.saleitem.update({
+        where: { id: item.id },
+        data: {
+          staffInventoryId: null
+        }
+      });
+      
+      inventoryRestorations.push({
+        productId: staffInventory.productId,
+        quantityRestored: quantitySold,
+        previousSold: currentSold,
+        newSold: newSoldQuantity,
+        inventoryId: staffInventoryId
+      });
+      
+      console.log(`✅ Restored inventory ${staffInventoryId}: ${currentSold} → ${newSoldQuantity} sold`);
+    }
+    
+    return {
+      success: true,
+      saleId,
+      staffId,
+      inventoryRestorations
+    };
+    
+  } catch (error: any) {
+    console.error(`❌ Error restoring inventory from sale ${saleId}:`, error);
+    return {
+      success: false,
+      error: error.message,
+      saleId,
+      staffId
+    };
   }
 }
 
@@ -231,7 +502,6 @@ export async function GET(req: NextRequest, { params }: Params) {
       const matchedSaleIds = await findSalesByFlexibleEmail(staff.email, staffId);
       
       if (matchedSaleIds.length > 0) {
-        // Fetch full sale details
         emailMatchedSales = await prisma.sale.findMany({
           where: {
             id: { in: matchedSaleIds }
@@ -268,7 +538,6 @@ export async function GET(req: NextRequest, { params }: Params) {
     let inventoryLinkedSales: Sale[] = [];
     
     if (inventoryLinkedSaleIds.length > 0) {
-      // Remove duplicates that are already in directSales or emailMatchedSales
       const existingSaleIds = new Set([
         ...directSales.map(s => s.id),
         ...emailMatchedSales.map(s => s.id)
@@ -544,6 +813,218 @@ export async function GET(req: NextRequest, { params }: Params) {
   }
 }
 
+// NEW ENDPOINT: Process inventory reduction for a specific sale
+export async function POST(req: NextRequest, { params }: Params) {
+  try {
+    const { id } = await params;
+    
+    if (!id || isNaN(parseInt(id))) {
+      return NextResponse.json(
+        { error: "Valid staff ID is required" },
+        { status: 400 }
+      );
+    }
+
+    const staffId = parseInt(id);
+    const body = await req.json();
+    const { saleId, action = 'reduce' } = body;
+    
+    if (!saleId) {
+      return NextResponse.json(
+        { error: "Sale ID is required" },
+        { status: 400 }
+      );
+    }
+    
+    // Verify staff exists
+    const staff = await prisma.staff.findUnique({
+      where: { id: staffId }
+    });
+    
+    if (!staff) {
+      return NextResponse.json(
+        { error: "Staff member not found" },
+        { status: 404 }
+      );
+    }
+    
+    let result: InventoryOperationResult;
+    
+    if (action === 'reduce') {
+      // Reduce inventory for this sale
+      result = await reduceStaffInventoryFromSale(staffId, saleId);
+    } else if (action === 'restore') {
+      // Restore inventory from this sale (for cancelled/returned sales)
+      result = await restoreStaffInventoryFromSale(staffId, saleId);
+    } else {
+      return NextResponse.json(
+        { error: "Invalid action. Use 'reduce' or 'restore'" },
+        { status: 400 }
+      );
+    }
+    
+    if (!result.success) {
+      return NextResponse.json(
+        { 
+          error: result.error || "Failed to process inventory",
+          details: result.errors
+        },
+        { status: 400 }
+      );
+    }
+    
+    return NextResponse.json({
+      success: true,
+      message: `Inventory ${action === 'reduce' ? 'reduced' : 'restored'} successfully`,
+      staffId,
+      saleId,
+      result
+    });
+    
+  } catch (error: any) {
+    console.error("Error processing inventory:", error);
+    return NextResponse.json(
+      { error: "Failed to process inventory", details: error.message },
+      { status: 500 }
+    );
+  }
+}
+
+// NEW ENDPOINT: Bulk inventory reduction for all linked sales
+export async function PATCH(req: NextRequest, { params }: Params) {
+  try {
+    const { id } = await params;
+    
+    if (!id || isNaN(parseInt(id))) {
+      return NextResponse.json(
+        { error: "Valid staff ID is required" },
+        { status: 400 }
+      );
+    }
+
+    const staffId = parseInt(id);
+    const staff = await prisma.staff.findUnique({
+      where: { id: staffId },
+      select: { id: true, name: true, email: true }
+    });
+
+    if (!staff) {
+      return NextResponse.json(
+        { error: "Staff member not found" },
+        { status: 404 }
+      );
+    }
+
+    console.log(`🔄 Starting bulk inventory reduction for staff: ${staff.name}`);
+    
+    // Get all sales linked to this staff (direct and email)
+    const directSaleIds = await prisma.sale.findMany({
+      where: { createdById: staffId },
+      select: { id: true }
+    }).then(sales => sales.map(s => s.id));
+    
+    let emailMatchedSaleIds: number[] = [];
+    if (staff.email) {
+      emailMatchedSaleIds = await findSalesByFlexibleEmail(staff.email, staffId);
+    }
+    
+    const allSaleIds = [...new Set([...directSaleIds, ...emailMatchedSaleIds])];
+    
+    console.log(`📊 Found ${allSaleIds.length} sales to process`);
+    
+    const results = {
+      processed: 0,
+      successful: 0,
+      failed: 0,
+      details: [] as any[]
+    };
+    
+    // Process each sale
+    for (const saleId of allSaleIds) {
+      try {
+        const result = await reduceStaffInventoryFromSale(staffId, saleId);
+        results.processed++;
+        
+        if (result.success) {
+          results.successful++;
+          console.log(`✅ Processed sale ${saleId}: SUCCESS`);
+        } else {
+          results.failed++;
+          console.log(`❌ Processed sale ${saleId}: FAILED - ${result.error}`);
+        }
+        
+        results.details.push({
+          saleId,
+          success: result.success,
+          inventoryUpdates: result.inventoryUpdates,
+          error: result.error
+        });
+        
+        // Small delay to avoid overwhelming the database
+        await new Promise(resolve => setTimeout(resolve, 100));
+        
+      } catch (error: any) {
+        results.failed++;
+        results.details.push({
+          saleId,
+          success: false,
+          error: error.message
+        });
+        console.error(`❌ Error processing sale ${saleId}:`, error);
+      }
+    }
+    
+    // Get updated inventory summary
+    const staffInventories = await prisma.staffInventory.findMany({
+      where: { staffId },
+      select: {
+        productId: true,
+        product: { select: { name: true } },
+        quantityGiven: true,
+        quantitySold: true,
+        quantityReturned: true
+      }
+    });
+    
+    const inventorySummary = staffInventories.map(inv => ({
+      productId: inv.productId,
+      productName: inv.product?.name,
+      given: inv.quantityGiven,
+      sold: inv.quantitySold,
+      returned: inv.quantityReturned,
+      remaining: inv.quantityGiven - inv.quantitySold - inv.quantityReturned
+    }));
+    
+    return NextResponse.json({
+      success: true,
+      message: `Bulk inventory processing completed for ${staff.name}`,
+      staff: {
+        id: staff.id,
+        name: staff.name,
+        email: staff.email
+      },
+      summary: {
+        totalSales: allSaleIds.length,
+        ...results
+      },
+      inventorySummary,
+      timestamp: new Date().toISOString()
+    });
+    
+  } catch (error: any) {
+    console.error("Error in bulk inventory processing:", error);
+    return NextResponse.json(
+      {
+        success: false,
+        error: "Failed to process bulk inventory reduction",
+        details: error.message
+      },
+      { status: 500 }
+    );
+  }
+}
+
+// Helper endpoint to check inventory status before sale
 export async function PUT(req: NextRequest, { params }: Params) {
   try {
     const { id } = await params;
@@ -556,61 +1037,101 @@ export async function PUT(req: NextRequest, { params }: Params) {
     }
 
     const staffId = parseInt(id);
-    const data = await req.json();
+    const body = await req.json();
+    const { items } = body; // Array of { productId: number, quantity: number }
     
-    if (!data.name) {
+    if (!Array.isArray(items) || items.length === 0) {
       return NextResponse.json(
-        { error: "Name is required" },
+        { error: "Items array is required" },
         { status: 400 }
       );
     }
-
-    let normalizedEmail: string | null = null;
-    if (data.email) {
-      normalizedEmail = normalizeEmail(data.email);
-      
-      // Check if another staff has this email (case-insensitive)
-      const existingStaff = await findStaffByEmailCaseInsensitive(normalizedEmail);
-
-      if (existingStaff && existingStaff.id !== staffId) {
-        return NextResponse.json(
-          { 
-            error: "Another staff member already has this email",
-            existingStaff: {
-              id: existingStaff.id,
-              name: existingStaff.name,
-              email: existingStaff.email
-            }
-          },
-          { status: 409 }
-        );
-      }
-    }
-
-    const updatedStaff = await prisma.staff.update({
-      where: { id: staffId },
-      data: {
-        name: data.name,
-        email: normalizedEmail, // Store normalized email
-        phone: data.phone ? data.phone.trim() : null
-      }
-    });
-
-    console.log(`✏️ Updated staff: ${updatedStaff.name} (${updatedStaff.email}) ID: ${updatedStaff.id}`);
-
-    return NextResponse.json(updatedStaff);
-  } catch (error: any) {
-    console.error("Error updating staff:", error);
     
-    if (error.code === "P2025") {
+    // Verify staff exists
+    const staff = await prisma.staff.findUnique({
+      where: { id: staffId }
+    });
+    
+    if (!staff) {
       return NextResponse.json(
         { error: "Staff member not found" },
         { status: 404 }
       );
     }
-
+    
+    const inventoryCheckResults = [];
+    let allItemsAvailable = true;
+    
+    // Check each item's availability
+    for (const item of items) {
+      const { productId, quantity } = item;
+      
+      if (!productId || !quantity || quantity <= 0) {
+        inventoryCheckResults.push({
+          productId,
+          quantity,
+          available: false,
+          error: "Invalid product ID or quantity"
+        });
+        allItemsAvailable = false;
+        continue;
+      }
+      
+      // Get staff's inventory for this product
+      const staffInventory = await prisma.staffInventory.findFirst({
+        where: {
+          staffId,
+          productId
+        }
+      });
+      
+      if (!staffInventory) {
+        inventoryCheckResults.push({
+          productId,
+          quantity,
+          available: false,
+          error: "No inventory assigned for this product"
+        });
+        allItemsAvailable = false;
+        continue;
+      }
+      
+      // Calculate available quantity
+      const availableQuantity = staffInventory.quantityGiven - 
+                               staffInventory.quantitySold - 
+                               staffInventory.quantityReturned;
+      
+      const isAvailable = availableQuantity >= quantity;
+      
+      inventoryCheckResults.push({
+        productId,
+        quantity,
+        available: isAvailable,
+        availableQuantity,
+        inventoryId: staffInventory.id,
+        productName: (await prisma.product.findUnique({
+          where: { id: productId },
+          select: { name: true }
+        }))?.name
+      });
+      
+      if (!isAvailable) {
+        allItemsAvailable = false;
+      }
+    }
+    
+    return NextResponse.json({
+      success: true,
+      staffId,
+      allItemsAvailable,
+      items: inventoryCheckResults,
+      timestamp: new Date().toISOString()
+    });
+    
+  } catch (error: any) {
+    console.error("Error checking inventory:", error);
     return NextResponse.json(
-      { error: "Failed to update staff member", details: error.message },
+      { error: "Failed to check inventory", details: error.message },
       { status: 500 }
     );
   }
@@ -702,256 +1223,6 @@ export async function DELETE(req: NextRequest, { params }: Params) {
 
     return NextResponse.json(
       { error: "Failed to delete staff member", details: error.message },
-      { status: 500 }
-    );
-  }
-}
-
-// Special endpoint to link staff's existing sales
-export async function PATCH(req: NextRequest, { params }: Params) {
-  try {
-    const { id } = await params;
-    
-    if (!id || isNaN(parseInt(id))) {
-      return NextResponse.json(
-        { error: "Valid staff ID is required" },
-        { status: 400 }
-      );
-    }
-
-    const staffId = parseInt(id);
-    const staff = await prisma.staff.findUnique({
-      where: { id: staffId },
-      select: { id: true, name: true, email: true }
-    });
-
-    if (!staff) {
-      return NextResponse.json(
-        { error: "Staff member not found" },
-        { status: 404 }
-      );
-    }
-
-    if (!staff.email) {
-      return NextResponse.json(
-        { error: "Staff has no email to match against" },
-        { status: 400 }
-      );
-    }
-
-    console.log(`🔗 Linking sales for staff: ${staff.name} (${staff.email})`);
-    
-    // Find sales using flexible matching
-    const matchedSaleIds = await findSalesByFlexibleEmail(staff.email, staffId);
-    
-    console.log(`📊 Found ${matchedSaleIds.length} matching unlinked sales`);
-
-    if (matchedSaleIds.length === 0) {
-      return NextResponse.json({
-        success: true,
-        message: "No matching unlinked sales found",
-        staffId: staff.id,
-        staffName: staff.name,
-        staffEmail: staff.email,
-        linkedCount: 0
-      });
-    }
-
-    // Link the sales
-    const updateResult = await prisma.sale.updateMany({
-      where: {
-        id: { in: matchedSaleIds }
-      },
-      data: {
-        createdById: staff.id
-      }
-    });
-
-    console.log(`✅ Linked ${updateResult.count} sales to staff ${staff.name}`);
-
-    // Get sample of linked sales
-    const sampleSales = await prisma.sale.findMany({
-      where: {
-        id: { in: matchedSaleIds.slice(0, 5) }
-      },
-      include: {
-        customer: {
-          select: { name: true }
-        },
-        saleitem: {
-          include: {
-            product: {
-              select: { name: true }
-            }
-          }
-        }
-      }
-    });
-
-    return NextResponse.json({
-      success: true,
-      message: `Linked ${updateResult.count} sales to ${staff.name}`,
-      staffId: staff.id,
-      staffName: staff.name,
-      staffEmail: staff.email,
-      linkedCount: updateResult.count,
-      matchedCount: matchedSaleIds.length,
-      sampleSales: sampleSales.map(s => ({
-        id: s.id,
-        createdBy: s.createdBy,
-        createdById: s.createdById,
-        amount: s.amount,
-        date: s.date,
-        customer: s.customer?.name,
-        items: s.saleitem?.map((si: any) => ({
-          product: si.product?.name,
-          quantity: si.quantity,
-          total: si.total
-        }))
-      }))
-    });
-    
-  } catch (error: any) {
-    console.error("Error linking staff sales:", error);
-    return NextResponse.json(
-      {
-        success: false,
-        error: "Failed to link staff sales",
-        details: error.message
-      },
-      { status: 500 }
-    );
-  }
-}
-
-// Additional helper endpoint to fix ALL staff links
-export async function POST(req: NextRequest, { params }: Params) {
-  try {
-    const { id } = await params;
-    
-    if (!id || isNaN(parseInt(id))) {
-      return NextResponse.json(
-        { error: "Valid staff ID is required" },
-        { status: 400 }
-      );
-    }
-
-    const staffId = parseInt(id);
-    const staff = await prisma.staff.findUnique({
-      where: { id: staffId },
-      select: { id: true, name: true, email: true }
-    });
-
-    if (!staff) {
-      return NextResponse.json(
-        { error: "Staff member not found" },
-        { status: 404 }
-      );
-    }
-
-    // Also fix inventory links
-    console.log(`🛠️ Running comprehensive fix for staff: ${staff.name}`);
-    
-    interface FixResults {
-      salesLinked: number;
-      inventoryChecked: number;
-      inventoryLinked: number;
-      errors: string[];
-    }
-    
-    const results: FixResults = {
-      salesLinked: 0,
-      inventoryChecked: 0,
-      inventoryLinked: 0,
-      errors: []
-    };
-
-    // 1. Link sales by email
-    if (staff.email) {
-      try {
-        const matchedSaleIds = await findSalesByFlexibleEmail(staff.email, staffId);
-        
-        if (matchedSaleIds.length > 0) {
-          await prisma.sale.updateMany({
-            where: { id: { in: matchedSaleIds } },
-            data: { createdById: staff.id }
-          });
-          results.salesLinked = matchedSaleIds.length;
-          console.log(`✅ Linked ${matchedSaleIds.length} sales`);
-        }
-      } catch (error: any) {
-        results.errors.push(`Sales linking failed: ${error.message}`);
-      }
-    }
-
-    // 2. Link inventory sales (update saleitems with staffInventoryId)
-    try {
-      // Get staff inventory items
-      const staffInventoryItems = await prisma.staffInventory.findMany({
-        where: { staffId },
-        select: { id: true, productId: true }
-      });
-      
-      results.inventoryChecked = staffInventoryItems.length;
-      
-      // For each inventory item, find sales of that product and link them
-      for (const inventory of staffInventoryItems) {
-        // Find sales of this product by this staff
-        const salesToLink = await prisma.sale.findMany({
-          where: {
-            createdById: staffId,
-            saleitem: {
-              some: {
-                productId: inventory.productId,
-                staffInventoryId: null
-              }
-            }
-          },
-          select: { id: true }
-        });
-        
-        if (salesToLink.length > 0) {
-          // Update the saleitems
-          await prisma.saleitem.updateMany({
-            where: {
-              saleId: { in: salesToLink.map(s => s.id) },
-              productId: inventory.productId,
-              staffInventoryId: null
-            },
-            data: {
-              staffInventoryId: inventory.id
-            }
-          });
-          
-          results.inventoryLinked += salesToLink.length;
-        }
-      }
-      
-      console.log(`✅ Linked ${results.inventoryLinked} inventory items to sales`);
-    } catch (error: any) {
-      results.errors.push(`Inventory linking failed: ${error.message}`);
-    }
-
-    return NextResponse.json({
-      success: true,
-      message: `Comprehensive fix completed for ${staff.name}`,
-      staff: {
-        id: staff.id,
-        name: staff.name,
-        email: staff.email
-      },
-      results,
-      timestamp: new Date().toISOString()
-    });
-    
-  } catch (error: any) {
-    console.error("Error in comprehensive fix:", error);
-    return NextResponse.json(
-      {
-        success: false,
-        error: "Failed to run comprehensive fix",
-        details: error.message
-      },
       { status: 500 }
     );
   }

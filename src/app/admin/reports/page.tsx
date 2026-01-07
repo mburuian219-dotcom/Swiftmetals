@@ -9,7 +9,7 @@ import DebtorsSection from "../DebtorsSection";
 import BalanceSheetSection from "../BalanceSheetSection";
 import InventorySection from "../inventory";
 import MoneyTracker from "../cash";
-
+import SalesIncomeReport from "../SalesIncomeReport"; // Add this import
 
 type CashTransaction = {
   id: string;
@@ -93,7 +93,7 @@ type BalanceSheet = {
 };
 
 export default function AccountingSystem() {
-  const [activeTab, setActiveTab] = useState<"overview" | "cash" | "creditors" | "debtors" | "inventory" | "balance-sheet">("overview");
+  const [activeTab, setActiveTab] = useState<"overview" | "cash" | "creditors" | "debtors" | "inventory" | "balance-sheet" | "sales-income">("overview");
   const [cashTransactions, setCashTransactions] = useState<CashTransaction[]>([]);
   const [creditors, setCreditors] = useState<Creditor[]>([]);
   const [debtors, setDebtors] = useState<Debtor[]>([]);
@@ -109,7 +109,6 @@ export default function AccountingSystem() {
   const [inventoryHistory, setInventoryHistory] = useState<any[]>([]);
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [showCash, setShowCash] = useState(false);
-
 
   const [stats, setStats] = useState({
     cashBalance: 0,
@@ -950,26 +949,26 @@ export default function AccountingSystem() {
           </div>
         </div>
 
-        {/* UPDATED: Download Section in Overview - REMOVED Balance Sheet Button */}
+        {/* UPDATED: Download Section in Overview - Added Sales Income Report Button */}
         {activeTab === "overview" && (
           <div className="bg-white rounded-xl shadow-lg p-4 sm:p-6 mb-6 sm:mb-8 border-2 border-green-200">
             <h3 className="text-lg sm:text-xl font-bold text-gray-800 mb-4">Download Reports</h3>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-             <button
-  onClick={() => setShowCash(true)}
-  className="bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 px-4 rounded-lg flex items-center gap-3"
->
-  
-  <span>Cash Ledger details</span>
-</button>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <button
+                onClick={() => setShowCash(true)}
+                className="bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 px-4 rounded-lg flex items-center justify-center gap-3"
+              >
+                <span>Cash Ledger details</span>
+              </button>
+              
+              <button
+                onClick={() => setActiveTab("sales-income")}
+                className="bg-gradient-to-r from-purple-500 to-indigo-500 hover:from-purple-600 hover:to-indigo-600 text-white font-semibold py-3 px-4 rounded-lg transition-all flex items-center justify-center gap-3 shadow-lg hover:shadow-xl"
+              >
+                <DollarSign className="w-5 h-5" />
+                <span>Sales Income Report</span>
+              </button>
 
-{showCash && (
-  <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4">
-    <div className="bg-white w-full max-w-4xl p-6 rounded-lg shadow-xl overflow-auto max-h-[90vh]">
-      <MoneyTracker />
-    </div>
-  </div>
-)}
               <button
                 onClick={downloadCOGSLedger}
                 className="bg-orange-600 hover:bg-orange-700 text-white font-semibold py-3 px-4 rounded-lg transition-all flex items-center justify-center gap-3 shadow-lg hover:shadow-xl"
@@ -1026,6 +1025,7 @@ export default function AccountingSystem() {
                 { id: "debtors", label: "Debtors", icon: Users },
                 { id: "inventory", label: "Inventory", icon: Package },
                 { id: "balance-sheet", label: "Balance Sheet", icon: BookOpen },
+                { id: "sales-income", label: "Sales Income", icon: DollarSign },
               ].map((tab) => {
                 const Icon = tab.icon;
                 return (
@@ -1046,7 +1046,7 @@ export default function AccountingSystem() {
             </nav>
           </div>
 
-          {activeTab !== "overview" && activeTab !== "balance-sheet" && (
+          {activeTab !== "overview" && activeTab !== "balance-sheet" && activeTab !== "sales-income" && (
             <div className="p-4 border-b border-gray-200">
               <div className="relative">
                 <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400" />
@@ -1152,10 +1152,9 @@ export default function AccountingSystem() {
               </div>
             )}
 
-            
-{activeTab === "cash" && (
-  <DailyTransactionsTracker />
-)}
+            {activeTab === "cash" && (
+              <DailyTransactionsTracker />
+            )}
 
             {activeTab === "creditors" && (
               <CreditorsSection />
@@ -1169,89 +1168,108 @@ export default function AccountingSystem() {
               <InventorySection/>
             )}
 
-{activeTab === "balance-sheet" && (
-  <BalanceSheetSection 
-    balanceSheet={
-      balanceSheet ? {
-        assets: {
-          currentAssets: {
-            inventory: balanceSheet.assets.currentAssets.inventory,
-            cash: balanceSheet.assets.currentAssets.cash,
-            bankBalances: 0, // Add default
-            accountsReceivable: balanceSheet.assets.currentAssets.accountsReceivable,
-            pettyCash: 0, // Add default
-            total: balanceSheet.assets.currentAssets.total
-          },
-          nonCurrentAssets: {
-            machinery: 0, // Add default
-            motorVehicle: 0, // Add default
-            phoneAndAccessories: 0, // Add default
-            total: 0 // Add default
-          },
-          totalAssets: balanceSheet.assets.totalAssets
-        },
-        liabilities: {
-          currentLiabilities: {
-            shortTermLoans: 0, // Add default
-            creditors: balanceSheet.liabilities.currentLiabilities.accountsPayable,
-            total: balanceSheet.liabilities.currentLiabilities.total
-          },
-          nonCurrentLiabilities: {
-            longTermLoans: 0, // Add default
-            total: 0 // Add default
-          },
-          totalLiabilities: balanceSheet.liabilities.totalLiabilities
-        },
-        equity: {
-          shareCapital: balanceSheet.equity.capital,
-          retainedEarnings: balanceSheet.equity.retainedEarnings,
-          totalEquity: balanceSheet.equity.totalEquity
-        },
-        netAssets: 0, // Add default
-        date: balanceSheet.date
-      } : undefined
-    }
-    pettyCashBalance={0}
-    onDownload={() => {
-      // Simple download function
-      if (balanceSheet) {
-        const csvContent = [
-          ["Balance Sheet", `As of ${new Date(balanceSheet.date).toLocaleDateString()}`],
-          [""],
-          ["ASSETS", "Amount (KES)"],
-          ["Cash", balanceSheet.assets.currentAssets.cash.toLocaleString()],
-          ["Accounts Receivable", balanceSheet.assets.currentAssets.accountsReceivable.toLocaleString()],
-          ["Inventory", balanceSheet.assets.currentAssets.inventory.toLocaleString()],
-          ["Total Assets", balanceSheet.assets.totalAssets.toLocaleString()],
-          [""],
-          ["LIABILITIES & EQUITY", "Amount (KES)"],
-          ["Accounts Payable", balanceSheet.liabilities.currentLiabilities.accountsPayable.toLocaleString()],
-          ["Total Liabilities", balanceSheet.liabilities.totalLiabilities.toLocaleString()],
-          ["Capital", balanceSheet.equity.capital.toLocaleString()],
-          ["Retained Earnings", balanceSheet.equity.retainedEarnings.toLocaleString()],
-          ["Total Equity", balanceSheet.equity.totalEquity.toLocaleString()]
-        ].map(row => row.map(cell => `"${cell}"`).join(",")).join("\n");
+            {activeTab === "balance-sheet" && (
+              <BalanceSheetSection 
+                balanceSheet={
+                  balanceSheet ? {
+                    assets: {
+                      currentAssets: {
+                        inventory: balanceSheet.assets.currentAssets.inventory,
+                        cash: balanceSheet.assets.currentAssets.cash,
+                        bankBalances: 0,
+                        accountsReceivable: balanceSheet.assets.currentAssets.accountsReceivable,
+                        pettyCash: 0,
+                        total: balanceSheet.assets.currentAssets.total
+                      },
+                      nonCurrentAssets: {
+                        machinery: 0,
+                        motorVehicle: 0,
+                        phoneAndAccessories: 0,
+                        total: 0
+                      },
+                      totalAssets: balanceSheet.assets.totalAssets
+                    },
+                    liabilities: {
+                      currentLiabilities: {
+                        shortTermLoans: 0,
+                        creditors: balanceSheet.liabilities.currentLiabilities.accountsPayable,
+                        total: balanceSheet.liabilities.currentLiabilities.total
+                      },
+                      nonCurrentLiabilities: {
+                        longTermLoans: 0,
+                        total: 0
+                      },
+                      totalLiabilities: balanceSheet.liabilities.totalLiabilities
+                    },
+                    equity: {
+                      shareCapital: balanceSheet.equity.capital,
+                      retainedEarnings: balanceSheet.equity.retainedEarnings,
+                      totalEquity: balanceSheet.equity.totalEquity
+                    },
+                    netAssets: 0,
+                    date: balanceSheet.date
+                  } : undefined
+                }
+                pettyCashBalance={0}
+                onDownload={() => {
+                  if (balanceSheet) {
+                    const csvContent = [
+                      ["Balance Sheet", `As of ${new Date(balanceSheet.date).toLocaleDateString()}`],
+                      [""],
+                      ["ASSETS", "Amount (KES)"],
+                      ["Cash", balanceSheet.assets.currentAssets.cash.toLocaleString()],
+                      ["Accounts Receivable", balanceSheet.assets.currentAssets.accountsReceivable.toLocaleString()],
+                      ["Inventory", balanceSheet.assets.currentAssets.inventory.toLocaleString()],
+                      ["Total Assets", balanceSheet.assets.totalAssets.toLocaleString()],
+                      [""],
+                      ["LIABILITIES & EQUITY", "Amount (KES)"],
+                      ["Accounts Payable", balanceSheet.liabilities.currentLiabilities.accountsPayable.toLocaleString()],
+                      ["Total Liabilities", balanceSheet.liabilities.totalLiabilities.toLocaleString()],
+                      ["Capital", balanceSheet.equity.capital.toLocaleString()],
+                      ["Retained Earnings", balanceSheet.equity.retainedEarnings.toLocaleString()],
+                      ["Total Equity", balanceSheet.equity.totalEquity.toLocaleString()]
+                    ].map(row => row.map(cell => `"${cell}"`).join(",")).join("\n");
 
-        const blob = new Blob([csvContent], { type: "text/csv" });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = `balance-sheet-${new Date().toISOString().split('T')[0]}.csv`;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-      }
-    }}
-    onManualInputChange={(category, field, value) => {
-      console.log('Manual input changed:', category, field, value);
-      // You can implement manual input handling here if needed
-    }}
-  />
-)}
-           
+                    const blob = new Blob([csvContent], { type: "text/csv" });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement("a");
+                    a.href = url;
+                    a.download = `balance-sheet-${new Date().toISOString().split('T')[0]}.csv`;
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    URL.revokeObjectURL(url);
+                  }
+                }}
+                onManualInputChange={(category, field, value) => {
+                  console.log('Manual input changed:', category, field, value);
+                }}
+              />
+            )}
+
+            {/* NEW: Sales Income Report Tab */}
+            {activeTab === "sales-income" && (
+              <SalesIncomeReport />
+            )}
           </div>
         </div>
+
+        {showCash && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
+            <div className="bg-white w-full max-w-4xl p-6 rounded-lg shadow-xl overflow-auto max-h-[90vh]">
+              <div className="flex justify-between items-center mb-4">
+                <h2 className="text-xl font-bold">Cash Ledger Details</h2>
+                <button
+                  onClick={() => setShowCash(false)}
+                  className="text-gray-500 hover:text-gray-700"
+                >
+                  <X className="w-6 h-6" />
+                </button>
+              </div>
+              <MoneyTracker />
+            </div>
+          </div>
+        )}
 
         <div className="text-center text-gray-500 text-xs sm:text-sm mt-8">
           <p>Integrated Financial Management System • Last updated: {new Date().toLocaleString()}</p>

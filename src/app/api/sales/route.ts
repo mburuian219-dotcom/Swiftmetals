@@ -9,9 +9,22 @@ function normalizeEmail(email: string): string {
   return email.trim().toLowerCase();
 }
 
+// Check if string is a valid email
+function isValidEmail(str: string): boolean {
+  if (!str) return false;
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  return emailRegex.test(str);
+}
+
+// Check if string is Firebase UID (starts with letter, length > 20, no @)
+function isFirebaseUid(str: string): boolean {
+  if (!str) return false;
+  return /^[a-zA-Z][a-zA-Z0-9]{20,}$/.test(str) && !str.includes('@');
+}
+
 // Helper for case-insensitive email search in MySQL
 async function findStaffByEmailCaseInsensitive(email: string) {
-  if (!email) return null;
+  if (!email || !isValidEmail(email)) return null;
   
   const normalizedEmail = normalizeEmail(email);
   
@@ -40,19 +53,13 @@ async function findStaffByEmailCaseInsensitive(email: string) {
 }
 
 async function findOrCreateStaff(userEmail: string, userName?: string) {
-  if (!userEmail) {
-    console.log(`⚠️ No email provided for staff lookup`);
+  if (!userEmail || !isValidEmail(userEmail)) {
+    console.log(`⚠️ Invalid email provided for staff lookup: ${userEmail}`);
     return null;
   }
 
   const normalizedEmail = normalizeEmail(userEmail);
   
-  // Only process valid email formats
-  if (!normalizedEmail.includes('@')) {
-    console.log(`⚠️ Invalid email format for staff: ${userEmail}`);
-    return null;
-  }
-
   try {
     // Try to find staff by email (case-insensitive)
     let staff = await findStaffByEmailCaseInsensitive(normalizedEmail);
@@ -119,6 +126,9 @@ export async function GET(req: NextRequest) {
     const { searchParams } = new URL(req.url);
     const staffId = searchParams.get('staffId');
     const createdBy = searchParams.get('createdBy');
+    const customerId = searchParams.get('customerId');
+    const startDate = searchParams.get('startDate');
+    const endDate = searchParams.get('endDate');
     
     // Build where clause
     const where: any = {};
@@ -127,10 +137,20 @@ export async function GET(req: NextRequest) {
       where.createdById = parseInt(staffId);
     }
     
-    if (createdBy) {
+    if (createdBy && isValidEmail(createdBy)) {
       // Search with normalized email
       const normalizedSearch = normalizeEmail(createdBy);
       where.createdBy = { contains: normalizedSearch };
+    }
+    
+    if (customerId) {
+      where.customerId = parseInt(customerId);
+    }
+    
+    if (startDate || endDate) {
+      where.date = {};
+      if (startDate) where.date.gte = new Date(startDate);
+      if (endDate) where.date.lte = new Date(endDate);
     }
 
     const sales = await prisma.sale.findMany({
@@ -155,31 +175,81 @@ export async function GET(req: NextRequest) {
   }
 }
 
-// ================== CREATE SALE (IMPROVED) ==================
+// ================== CREATE SALE (FIXED EMAIL HANDLING) ==================
 export async function POST(req: NextRequest) {
   try {
     const data = await req.json();
     
+    // Debug: Log raw request data
+    console.log("📨 Raw request data keys:", Object.keys(data));
+    if (data.authInfo) {
+      console.log("🔐 Auth info:", data.authInfo);
+    }
+    
     console.log("📦 Creating sale...");
     
-    // ✅ Get user info from request - check multiple fields
-    const userEmail = data.userEmail || data.createdBy || data.email || data.userId || "unknown@example.com";
-    const userName = data.userName || data.createdByName || userEmail.split('@')[0] || "Unknown User";
+    // ✅ EXTRACT USER INFO CORRECTLY
+    let userId = "";
+    let userEmail = "";
+    let userName = "";
+    
+    // Check for structured auth info first
+    if (data.authInfo) {
+      userId = data.authInfo.userId || data.authInfo.uid || "";
+      userEmail = data.authInfo.email || "";
+      userName = data.authInfo.name || data.authInfo.displayName || "";
+    }
+    
+    // If no structured auth info, check individual fields
+    if (!userEmail) {
+      // Check each possible field for email
+      const possibleEmailFields = ['email', 'userEmail', 'createdBy', 'userName', 'user'];
+      for (const field of possibleEmailFields) {
+        if (data[field] && isValidEmail(data[field])) {
+          userEmail = data[field];
+          break;
+        }
+      }
+    }
+    
+    if (!userId) {
+      // Check for Firebase UID
+      const possibleUidFields = ['userId', 'uid', 'userEmail', 'createdBy'];
+      for (const field of possibleUidFields) {
+        if (data[field] && isFirebaseUid(data[field])) {
+          userId = data[field];
+          break;
+        }
+      }
+    }
+    
+    if (!userName && userEmail) {
+      userName = userEmail.split('@')[0]
+        .replace(/[._-]/g, ' ')
+        .replace(/\b\w/g, (l: string) => l.toUpperCase());
+    }
+    
+    // If still no email, use a placeholder
+    if (!userEmail) {
+      userEmail = userId ? `${userId}@firebase.uid` : "unknown@example.com";
+    }
     
     // ALWAYS normalize the email
     const normalizedUserEmail = normalizeEmail(userEmail);
     
-    console.log("👤 User info:", {
-      providedEmail: userEmail,
-      normalizedEmail: normalizedUserEmail,
-      userName: userName
+    console.log("👤 Extracted user info:", {
+      userId: userId,
+      userEmail: normalizedUserEmail,
+      userName: userName,
+      isFirebaseUid: isFirebaseUid(userId),
+      isValidEmail: isValidEmail(normalizedUserEmail)
     });
     
-    // ✅ CRITICAL: Find or create staff record
+    // ✅ CRITICAL: Find or create staff record ONLY for valid emails
     let staffRecord = null;
     let staffId = null;
     
-    if (normalizedUserEmail.includes('@')) {
+    if (isValidEmail(normalizedUserEmail)) {
       staffRecord = await findOrCreateStaff(normalizedUserEmail, userName);
       if (staffRecord) {
         staffId = staffRecord.id;
@@ -187,6 +257,8 @@ export async function POST(req: NextRequest) {
       } else {
         console.log(`⚠️ Could not find/create staff for: ${normalizedUserEmail}`);
       }
+    } else {
+      console.log(`ℹ️ Skipping staff lookup for: ${normalizedUserEmail} (not a valid email)`);
     }
 
     const customerId = Number(data.customerId);
@@ -225,7 +297,7 @@ export async function POST(req: NextRequest) {
         paidAt: p.paidAt ? new Date(p.paidAt) : new Date(),
       })) || [];
 
-    // ✅ Create sale with NORMALIZED email and staff ID
+    // ✅ Create sale with PROPER email and staff ID
     const newSale = await prisma.sale.create({
       data: {
         customerId,
@@ -234,9 +306,9 @@ export async function POST(req: NextRequest) {
         dueDate: data.dueDate ? new Date(data.dueDate) : null,
         paymentMethod: data.paymentMethod || "CASH",
         status: "UNPAID",
-        // Store NORMALIZED email AND staff ID
-        createdBy: normalizedUserEmail, // Always normalized
-        updatedBy: normalizedUserEmail, // Always normalized
+        // Store PROPER email (not UID) and staff ID
+        createdBy: normalizedUserEmail, // This should now be actual email, not UID
+        updatedBy: normalizedUserEmail,
         createdById: staffId, // Link to staff
         payment: { create: payments },
         saleitem: {
@@ -258,11 +330,12 @@ export async function POST(req: NextRequest) {
 
     console.log("✅ Sale created successfully:", {
       saleId: newSale.id,
-      createdBy: newSale.createdBy,
+      createdBy: newSale.createdBy, // Should show email now
       createdById: newSale.createdById,
       customer: newSale.customer?.name,
       amount: newSale.amount,
-      staffLinked: staffRecord ? `${staffRecord.name} (ID: ${staffRecord.id})` : 'None'
+      staffLinked: staffRecord ? `${staffRecord.name} (ID: ${staffRecord.id})` : 'None',
+      isEmail: isValidEmail(newSale.createdBy || '')
     });
 
     // Deduct stock
@@ -289,7 +362,43 @@ export async function POST(req: NextRequest) {
   }
 }
 
-// ================== UPDATE SALE (IMPROVED) ==================
+// ================== GET SINGLE SALE ==================
+export async function GET_SINGLE(req: NextRequest, { params }: { params: { id: string } }) {
+  try {
+    const id = parseInt(params.id);
+    
+    if (isNaN(id)) {
+      return NextResponse.json({ error: "Invalid sale ID" }, { status: 400 });
+    }
+
+    const sale = await prisma.sale.findUnique({
+      where: { id },
+      include: {
+        customer: true,
+        saleitem: { 
+          include: { 
+            product: true 
+          } 
+        },
+        payment: true,
+        staff: true,
+        paymentschedule: true,
+        smsreminder: true,
+      },
+    });
+
+    if (!sale) {
+      return NextResponse.json({ error: "Sale not found" }, { status: 404 });
+    }
+
+    return NextResponse.json(processSale(sale));
+  } catch (err: any) {
+    console.error("❌ Fetch sale error:", err);
+    return NextResponse.json({ error: "Internal server error" }, { status: 500 });
+  }
+}
+
+// ================== UPDATE SALE ==================
 export async function PUT(req: NextRequest) {
   try {
     const data = await req.json();
@@ -300,10 +409,36 @@ export async function PUT(req: NextRequest) {
     }
 
     // ✅ Get user info
-    const userEmail = data.userEmail || data.createdBy || data.email || data.userId || "unknown@example.com";
-    const userName = data.userName || data.createdByName || userEmail.split('@')[0] || "Unknown User";
+    let userEmail = "";
+    let userName = "";
+    let userId = "";
     
-    // ALWAYS normalize the email
+    if (data.authInfo) {
+      userId = data.authInfo.userId || data.authInfo.uid || "";
+      userEmail = data.authInfo.email || "";
+      userName = data.authInfo.name || data.authInfo.displayName || "";
+    }
+    
+    if (!userEmail) {
+      const possibleEmailFields = ['email', 'userEmail', 'createdBy', 'userName', 'user'];
+      for (const field of possibleEmailFields) {
+        if (data[field] && isValidEmail(data[field])) {
+          userEmail = data[field];
+          break;
+        }
+      }
+    }
+    
+    if (!userName && userEmail) {
+      userName = userEmail.split('@')[0]
+        .replace(/[._-]/g, ' ')
+        .replace(/\b\w/g, (l: string) => l.toUpperCase());
+    }
+    
+    if (!userEmail) {
+      userEmail = "unknown@example.com";
+    }
+    
     const normalizedUserEmail = normalizeEmail(userEmail);
     
     const existingSale = await prisma.sale.findUnique({
@@ -319,7 +454,7 @@ export async function PUT(req: NextRequest) {
     let staffId = existingSale.createdById;
     let staffRecord = existingSale.staff;
     
-    if (!staffId && normalizedUserEmail.includes('@')) {
+    if (!staffId && isValidEmail(normalizedUserEmail)) {
       staffRecord = await findOrCreateStaff(normalizedUserEmail, userName);
       if (staffRecord) {
         staffId = staffRecord.id;
@@ -337,7 +472,7 @@ export async function PUT(req: NextRequest) {
       date: data.date ? new Date(data.date) : existingSale.date,
       dueDate: data.dueDate ? new Date(data.dueDate) : existingSale.dueDate,
       paymentMethod: data.paymentMethod ?? existingSale.paymentMethod,
-      updatedBy: normalizedUserEmail, // Always normalized
+      updatedBy: normalizedUserEmail,
     };
 
     // Update createdById if we found a staff and it's currently null
@@ -345,8 +480,10 @@ export async function PUT(req: NextRequest) {
       updateData.createdById = staffId;
     }
 
-    // Also update createdBy if it's not normalized
-    if (existingSale.createdBy && existingSale.createdBy !== normalizedUserEmail) {
+    // Also update createdBy if it's not normalized or contains UID
+    if (existingSale.createdBy && 
+        (existingSale.createdBy !== normalizedUserEmail || 
+         isFirebaseUid(existingSale.createdBy))) {
       updateData.createdBy = normalizedUserEmail;
     }
 
@@ -391,14 +528,15 @@ export async function PUT(req: NextRequest) {
         customer: true,
         saleitem: { include: { product: true } },
         payment: true,
-        staff: true, // Include staff
+        staff: true,
       },
     });
 
     console.log(`✏️ Updated sale ${id}:`, {
       createdBy: updated?.createdBy,
       createdById: updated?.createdById,
-      staffLinked: updated?.staff?.name || 'None'
+      staffLinked: updated?.staff?.name || 'None',
+      isEmail: isValidEmail(updated?.createdBy || '')
     });
 
     return NextResponse.json(processSale(updated));
@@ -425,7 +563,7 @@ export async function DELETE(req: NextRequest) {
       where: { id },
       include: { 
         saleitem: true,
-        staff: true // Include staff info
+        staff: true
       },
     });
 
@@ -433,12 +571,34 @@ export async function DELETE(req: NextRequest) {
       return NextResponse.json({ error: "Sale not found" }, { status: 404 });
     }
 
-    // Log who deleted the sale
-    const userEmail = data.userEmail || data.email || "Unknown";
+    // Extract user info
+    let userEmail = "";
+    let userId = "";
+    
+    if (data.authInfo) {
+      userId = data.authInfo.userId || data.authInfo.uid || "";
+      userEmail = data.authInfo.email || "";
+    }
+    
+    if (!userEmail) {
+      const possibleEmailFields = ['email', 'userEmail', 'createdBy', 'userName'];
+      for (const field of possibleEmailFields) {
+        if (data[field] && isValidEmail(data[field])) {
+          userEmail = data[field];
+          break;
+        }
+      }
+    }
+    
+    if (!userEmail) {
+      userEmail = "unknown@example.com";
+    }
+    
     const normalizedUserEmail = normalizeEmail(userEmail);
     
     console.log(`🗑️ Sale ${id} deleted by: ${normalizedUserEmail}`);
     console.log(`   Sale was linked to staff: ${sale.staff?.name || 'None'} (ID: ${sale.createdById || 'None'})`);
+    console.log(`   Original createdBy: ${sale.createdBy} (isEmail: ${isValidEmail(sale.createdBy || '')})`);
 
     // Restore stock
     for (const item of sale.saleitem) {
@@ -460,12 +620,67 @@ export async function DELETE(req: NextRequest) {
       message: `Sale deleted successfully`,
       deletedBy: normalizedUserEmail,
       staffLinked: sale.staff?.name || null,
-      staffId: sale.createdById
+      staffId: sale.createdById,
+      saleCreatedBy: sale.createdBy,
+      saleCreatedById: sale.createdById
     });
   } catch (err: any) {
     console.error("❌ Sale delete error:", err);
     return NextResponse.json({ 
       error: "Failed to delete sale",
+      details: err.message 
+    }, { status: 500 });
+  }
+}
+
+// ================== PATCH SALE (Partial Update) ==================
+export async function PATCH(req: NextRequest) {
+  try {
+    const data = await req.json();
+    const id = Number(data.id);
+    
+    if (!id) {
+      return NextResponse.json({ error: "Sale ID is required" }, { status: 400 });
+    }
+
+    // Extract user info
+    let userEmail = "";
+    if (data.authInfo?.email) {
+      userEmail = data.authInfo.email;
+    } else if (data.email && isValidEmail(data.email)) {
+      userEmail = data.email;
+    } else if (data.userEmail && isValidEmail(data.userEmail)) {
+      userEmail = data.userEmail;
+    }
+    
+    const normalizedUserEmail = normalizeEmail(userEmail || "unknown@example.com");
+
+    const updateData: any = {
+      updatedBy: normalizedUserEmail,
+    };
+
+    // Only update provided fields
+    if (data.status !== undefined) updateData.status = data.status;
+    if (data.dueDate !== undefined) updateData.dueDate = new Date(data.dueDate);
+    if (data.paymentMethod !== undefined) updateData.paymentMethod = data.paymentMethod;
+    if (data.notes !== undefined) updateData.notes = data.notes;
+
+    const updated = await prisma.sale.update({
+      where: { id },
+      data: updateData,
+      include: {
+        customer: true,
+        saleitem: { include: { product: true } },
+        payment: true,
+        staff: true,
+      },
+    });
+
+    return NextResponse.json(processSale(updated));
+  } catch (err: any) {
+    console.error("❌ Sale patch error:", err);
+    return NextResponse.json({ 
+      error: "Failed to update sale",
       details: err.message 
     }, { status: 500 });
   }
