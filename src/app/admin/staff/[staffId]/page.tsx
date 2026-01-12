@@ -9,29 +9,45 @@ import {
   Calendar,
   Package,
   DollarSign,
-  TrendingUp,
-  ShoppingCart,
-  CreditCard,
-  FileText,
-  Download,
-  Printer,
-  BarChart3,
-  Users,
-  Warehouse,
   CheckCircle,
   AlertCircle,
   X,
   RefreshCw,
+  Trash2,
+  Eye,
+  Plus,
+  PackageX,
+  Download,
+  Printer,
+  CalendarDays,
   Clock,
   Hash,
-  Trash2,
-  Edit,
-  ChevronDown,
-  ChevronUp,
-  PieChart,
+  TrendingUp,
   TrendingDown,
+  CheckSquare,
+  AlertTriangle,
+  ChevronRight,
+  ChevronLeft,
+  Percent,
   Search,
-  Filter
+  Filter,
+  BarChart3,
+  FileText,
+  ListChecks,
+  ExternalLink,
+  Grid,
+  List,
+  Archive,
+  FileSpreadsheet,
+  ClipboardCheck,
+  History,
+  Box,
+  AlertOctagon,
+  Tag,
+  FileDigit,
+  CheckCheck,
+  FileBarChart,
+  ClipboardList
 } from "lucide-react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
@@ -46,19 +62,21 @@ interface Staff {
   updatedAt: Date;
   staffInventories?: StaffInventory[];
   sales?: Sale[];
-  stats?: StaffStats;
 }
 
 interface StaffInventory {
   id: number;
   staffId: number;
   productId: number;
+  weekStartDate: Date | null;
+  weekEndDate: Date | null;
   quantityGiven: number;
   quantitySold: number;
   quantityReturned: number;
   createdAt: Date;
   updatedAt: Date;
   product: Product;
+  saleItems?: SaleItem[];
 }
 
 interface Product {
@@ -78,12 +96,9 @@ interface Sale {
   paymentMethod: string;
   status: string;
   createdAt: Date;
-  createdBy?: string;
   createdById?: number;
   saleitem?: SaleItem[];
   customer?: Customer;
-  payment?: Payment[];
-  staff?: any;
 }
 
 interface SaleItem {
@@ -91,7 +106,9 @@ interface SaleItem {
   quantity: number;
   price: number;
   total: number;
+  productId: number;
   product: Product;
+  staffInventoryId?: number;
 }
 
 interface Customer {
@@ -101,47 +118,30 @@ interface Customer {
   phone?: string;
 }
 
-interface Payment {
-  id: number;
-  amount: number;
-  method: string;
-  status: string;
-  paidAt: Date;
+interface WeeklyPerformance {
+  week: string;
+  weekStart: Date;
+  weekEnd: Date;
+  totalGiven: number;
+  totalSold: number;
+  totalReturned: number;
+  remaining: number;
+  sellThroughRate: number;
+  status: 'active' | 'completed' | 'upcoming';
+  inventory: StaffInventory[];
+  sales: Sale[];
+  totalRevenue: number;
 }
 
-interface StaffStats {
-  sales: {
-    total: number;
-    totalAmount: number;
-    totalPaid: number;
-    averageSale: number;
-  };
-  inventory: {
-    given: number;
-    sold: number;
-    returned: number;
-    remaining: number;
-    value: number;
-  };
-  performance: {
-    salesByMethod: Array<{ method: string; count: number; amount: number }>;
-    salesByMonth: Array<{ month: string; count: number; amount: number }>;
-    salesSources: {
-      directRelation: number;
-      emailMatched: number;
-      total: number;
-    };
-  };
-}
-
-interface StaffSummary {
-  totalInventoryGiven: number;
-  totalInventorySold: number;
-  totalInventoryReturned: number;
-  totalInventoryValue: number;
-  totalSalesAmount: number;
-  totalSalesCount: number;
-  averageSaleValue: number;
+interface ReturnItem {
+  productName: string;
+  productCategory: string;
+  quantityReturned: number;
+  reason?: string;
+  returnedAt: Date;
+  weekStart: Date;
+  weekEnd: Date;
+  staffName: string;
 }
 
 const StaffDetailsPage = () => {
@@ -152,35 +152,69 @@ const StaffDetailsPage = () => {
   // States
   const [staff, setStaff] = useState<Staff | null>(null);
   const [loading, setLoading] = useState(true);
-  const [loadingData, setLoadingData] = useState(false);
-  const [deletingInventory, setDeletingInventory] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
-  const [debugMode, setDebugMode] = useState(false); // Add debug mode
-  const [apiResponse, setApiResponse] = useState<any>(null); // Store API response
+  const [loadingCloseWeek, setLoadingCloseWeek] = useState<string | null>(null);
   
-  const [summary, setSummary] = useState<StaffSummary>({
-    totalInventoryGiven: 0,
-    totalInventorySold: 0,
-    totalInventoryReturned: 0,
-    totalInventoryValue: 0,
-    totalSalesAmount: 0,
-    totalSalesCount: 0,
-    averageSaleValue: 0
-  });
+  const [weeklyPerformance, setWeeklyPerformance] = useState<WeeklyPerformance[]>([]);
+  const [selectedWeek, setSelectedWeek] = useState<WeeklyPerformance | null>(null);
+  const [showWeekDetails, setShowWeekDetails] = useState(false);
   
-  // Mobile view states
-  const [showMobileFilters, setShowMobileFilters] = useState(false);
-  const [expandedInventoryId, setExpandedInventoryId] = useState<number | null>(null);
+  const [showReturnModal, setShowReturnModal] = useState(false);
+  const [selectedInventory, setSelectedInventory] = useState<StaffInventory | null>(null);
+  const [returnQuantity, setReturnQuantity] = useState('');
+  const [returnReason, setReturnReason] = useState('');
   
-  // Filters
-  const [dateRange, setDateRange] = useState({
-    startDate: "",
-    endDate: ""
-  });
-  const [searchTerm, setSearchTerm] = useState("");
+  const [showCloseWeekModal, setShowCloseWeekModal] = useState(false);
+  const [weekToClose, setWeekToClose] = useState<WeeklyPerformance | null>(null);
+  
+  const [searchQuery, setSearchQuery] = useState("");
+  const [filterStatus, setFilterStatus] = useState("all");
+  const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
 
-  // Fetch staff details with all related data
+  // Get current week dates
+  const getCurrentWeekDates = () => {
+    const now = new Date();
+    const dayOfWeek = now.getDay();
+    let diffToMonday = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
+    
+    const monday = new Date(now);
+    monday.setDate(now.getDate() + diffToMonday);
+    monday.setHours(0, 0, 0, 0);
+    
+    const sunday = new Date(monday);
+    sunday.setDate(monday.getDate() + 6);
+    sunday.setHours(23, 59, 59, 999);
+    
+    return { weekStartDate: monday, weekEndDate: sunday };
+  };
+
+  // Check if date is in week
+  const isDateInWeek = (date: Date, weekStart: Date, weekEnd: Date) => {
+    return date >= weekStart && date <= weekEnd;
+  };
+
+  // Format week range
+  const formatWeekRange = (startDate: Date, endDate: Date) => {
+    const now = new Date();
+    const isCurrent = now >= startDate && now <= endDate;
+    
+    return `${startDate.toLocaleDateString('en-KE', { day: '2-digit', month: 'short' })} - ${endDate.toLocaleDateString('en-KE', { day: '2-digit', month: 'short' })}`;
+  };
+
+  // Format date with time
+  const formatDateTime = (date: Date | string | null) => {
+    if (!date) return 'Not set';
+    return new Date(date).toLocaleDateString('en-KE', {
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+  };
+
+  // Fetch staff details
   const fetchStaffDetails = useCallback(async () => {
     if (!staffId) return;
 
@@ -188,10 +222,7 @@ const StaffDetailsPage = () => {
     setError(null);
 
     try {
-      console.log(`🔍 Fetching staff details for ID: ${staffId}`);
-      
-      // Fetch staff with all related data from updated API
-      const response = await fetch(`/api/staff/${staffId}`);
+      const response = await fetch(`/api/staff/${staffId}?include=inventories,sales`);
       
       if (!response.ok) {
         if (response.status === 404) {
@@ -201,239 +232,283 @@ const StaffDetailsPage = () => {
       }
 
       const data = await response.json();
-      
-      // Store API response for debugging
-      setApiResponse(data);
-      
-      // Debug logging
-      console.log("🔄 Staff API Response:", {
-        staffName: data.name,
-        staffEmail: data.email,
-        salesCount: data.sales?.length || 0,
-        salesSample: data.sales?.[0],
-        stats: data.stats,
-        directSales: data.stats?.performance?.salesSources?.directRelation,
-        emailSales: data.stats?.performance?.salesSources?.emailMatched,
-        hasStaffInventories: Array.isArray(data.staffInventories),
-        staffInventoriesCount: data.staffInventories?.length || 0
-      });
-      
       setStaff(data);
       
-      // Calculate summary statistics
-      calculateSummary(data);
+      // Process weekly data
+      processWeeklyData(data.staffInventories || [], data.sales || []);
 
     } catch (err: any) {
-      console.error("❌ Error fetching staff details:", err);
+      console.error("Error fetching staff details:", err);
       setError(err.message || "Failed to load staff details");
     } finally {
       setLoading(false);
     }
   }, [staffId]);
 
-  // Calculate summary statistics
-  const calculateSummary = (staffData: Staff) => {
-    // If API provides stats, use them
-    if (staffData.stats) {
-      console.log("📊 Using API stats for summary");
-      setSummary({
-        totalInventoryGiven: staffData.stats.inventory.given,
-        totalInventorySold: staffData.stats.inventory.sold,
-        totalInventoryReturned: staffData.stats.inventory.returned,
-        totalInventoryValue: staffData.stats.inventory.value,
-        totalSalesAmount: staffData.stats.sales.totalAmount,
-        totalSalesCount: staffData.stats.sales.total,
-        averageSaleValue: staffData.stats.sales.averageSale
-      });
-    } else {
-      console.log("📊 Calculating summary from raw data");
-      // Fallback calculation for backward compatibility
-      let totalInventoryGiven = 0;
-      let totalInventorySold = 0;
-      let totalInventoryReturned = 0;
-      let totalInventoryValue = 0;
-      let totalSalesAmount = 0;
-      let totalSalesCount = staffData.sales?.length || 0;
-
-      // Calculate inventory stats
-      staffData.staffInventories?.forEach(inventory => {
-        totalInventoryGiven += inventory.quantityGiven;
-        totalInventorySold += inventory.quantitySold;
-        totalInventoryReturned += inventory.quantityReturned;
+  // Process weekly data
+  const processWeeklyData = (inventories: StaffInventory[], sales: Sale[]) => {
+    const weeklyMap = new Map<string, WeeklyPerformance>();
+    const now = new Date();
+    
+    // Group inventories by week
+    inventories.forEach(inventory => {
+      if (!inventory.weekStartDate || !inventory.weekEndDate) return;
+      
+      const startDate = new Date(inventory.weekStartDate);
+      const endDate = new Date(inventory.weekEndDate);
+      const weekKey = `${startDate.getFullYear()}-W${Math.ceil((((startDate.getTime() - new Date(startDate.getFullYear(), 0, 1).getTime()) / 86400000) + 1) / 7)}`;
+      
+      if (!weeklyMap.has(weekKey)) {
+        const isActive = now >= startDate && now <= endDate;
+        const isCompleted = now > endDate;
         
-        if (inventory.product?.productionCost) {
-          totalInventoryValue += inventory.product.productionCost * inventory.quantityGiven;
+        weeklyMap.set(weekKey, {
+          week: `Week ${weekKey.split('-W')[1]}`,
+          weekStart: startDate,
+          weekEnd: endDate,
+          totalGiven: 0,
+          totalSold: 0,
+          totalReturned: 0,
+          remaining: 0,
+          sellThroughRate: 0,
+          status: isActive ? 'active' : isCompleted ? 'completed' : 'upcoming',
+          inventory: [],
+          sales: [],
+          totalRevenue: 0
+        });
+      }
+      
+      const weekData = weeklyMap.get(weekKey)!;
+      weekData.totalGiven += inventory.quantityGiven;
+      weekData.totalSold += inventory.quantitySold;
+      weekData.totalReturned += inventory.quantityReturned;
+      weekData.inventory.push(inventory);
+    });
+    
+    // Add sales to weeks
+    sales.forEach(sale => {
+      const saleDate = new Date(sale.date);
+      
+      for (const [, weekData] of weeklyMap) {
+        if (isDateInWeek(saleDate, weekData.weekStart, weekData.weekEnd)) {
+          weekData.sales.push(sale);
+          weekData.totalRevenue += sale.amount;
+          break;
         }
-      });
-
-      // Calculate sales stats
-      staffData.sales?.forEach(sale => {
-        totalSalesAmount += sale.amount;
-      });
-
-      const averageSaleValue = totalSalesCount > 0 ? totalSalesAmount / totalSalesCount : 0;
-
-      setSummary({
-        totalInventoryGiven,
-        totalInventorySold,
-        totalInventoryReturned,
-        totalInventoryValue,
-        totalSalesAmount,
-        totalSalesCount,
-        averageSaleValue
-      });
-    }
-  };
-
-  // Calculate sale status from payments
-  const calculateSaleStatus = (sale: Sale) => {
-    // If API already provides status, use it
-    if (sale.status) return sale.status;
+      }
+    });
     
-    // Otherwise calculate from payments
-    if (!sale.payment || sale.payment.length === 0) {
-      return "UNPAID";
-    }
+    // Calculate metrics
+    weeklyMap.forEach(weekData => {
+      weekData.remaining = weekData.totalGiven - weekData.totalSold - weekData.totalReturned;
+      weekData.sellThroughRate = weekData.totalGiven > 0 
+        ? (weekData.totalSold / weekData.totalGiven) * 100 
+        : 0;
+    });
     
-    const totalPaid = sale.payment
-      .filter(p => p.status === "CLEARED" || p.status === "COMPLETED")
-      .reduce((sum, p) => sum + p.amount, 0);
-    
-    const pendingPayments = sale.payment.filter(p => 
-      p.status === "PENDING" || p.status === "BOUNCED"
+    // Sort by date (newest first)
+    const weeklyArray = Array.from(weeklyMap.values()).sort((a, b) => 
+      b.weekStart.getTime() - a.weekStart.getTime()
     );
     
-    if (totalPaid >= sale.amount && pendingPayments.length === 0) {
-      return "PAID";
-    } else if (totalPaid > 0 || pendingPayments.length > 0) {
-      return "PARTIAL";
-    }
-    
-    return "UNPAID";
+    setWeeklyPerformance(weeklyArray);
   };
 
-  // Handle date filter changes
-  const handleDateFilter = () => {
-    if (!staffId) return;
-    
-    setLoadingData(true);
-    // You can implement filtered API calls here
-    setTimeout(() => {
-      setLoadingData(false);
-    }, 1000);
-  };
-
-  // Delete assigned inventory
-  const handleDeleteInventory = async (inventoryId: number) => {
-    if (!confirm("Are you sure you want to delete this inventory assignment? This action cannot be undone.")) {
+  // Handle return items
+  const handleReturnItems = async () => {
+    if (!selectedInventory || !returnQuantity) {
+      setError("Please select inventory and enter return quantity");
       return;
     }
 
-    setDeletingInventory(inventoryId);
-    setError(null);
+    const returnQty = parseInt(returnQuantity);
+    const remaining = selectedInventory.quantityGiven - selectedInventory.quantitySold - selectedInventory.quantityReturned;
+    
+    if (returnQty > remaining) {
+      setError(`Cannot return more than ${remaining} items`);
+      return;
+    }
 
     try {
-      const response = await fetch(`/api/staff-inventory?id=${inventoryId}`, {
-        method: "DELETE",
+      const response = await fetch(`/api/staff-inventory/${selectedInventory.id}/return`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          quantityReturned: returnQty,
+          reason: returnReason || "Defective/Damaged"
+        }),
       });
 
-      const data = await response.json();
-
       if (!response.ok) {
-        throw new Error(data.error || "Failed to delete inventory assignment");
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to process return');
       }
 
-      setSuccess("Inventory assignment deleted successfully!");
+      setSuccess('Items returned successfully!');
+      setShowReturnModal(false);
+      setSelectedInventory(null);
+      setReturnQuantity('');
+      setReturnReason('');
       
-      // Refresh staff data
-      setTimeout(() => {
-        fetchStaffDetails();
-        setSuccess(null);
-      }, 2000);
+      fetchStaffDetails();
 
-    } catch (err: any) {
-      console.error("Error deleting inventory:", err);
-      setError(err.message || "Failed to delete inventory assignment");
-      setTimeout(() => setError(null), 5000);
-    } finally {
-      setDeletingInventory(null);
+    } catch (error: any) {
+      setError(error.message || 'Failed to process return');
     }
   };
 
-  // Export staff report as CSV
-  const exportReport = async (format: 'csv' | 'pdf' = 'csv') => {
-    if (!staff) return;
-
-    try {
-      const response = await fetch(`/api/staff/${staffId}/export?format=${format}`);
-      
-      if (!response.ok) {
-        throw new Error("Failed to generate report");
-      }
-
-      if (format === 'csv') {
-        const blob = await response.blob();
-        const url = window.URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `staff-report-${staff.name}-${new Date().toISOString().split('T')[0]}.csv`;
-        document.body.appendChild(a);
-        a.click();
-        window.URL.revokeObjectURL(url);
-        document.body.removeChild(a);
-      } else if (format === 'pdf') {
-        const blob = await response.blob();
-        const url = window.URL.createObjectURL(blob);
-        window.open(url, '_blank');
-      }
-    } catch (err) {
-      console.error("Error exporting report:", err);
-      setError("Failed to export report");
-    }
-  };
-
-  // Calculate remaining inventory
-  const calculateRemainingInventory = (inventory: StaffInventory) => {
-    return inventory.quantityGiven - inventory.quantitySold - inventory.quantityReturned;
-  };
-
-  // Get inventory status
-  const getInventoryStatus = (inventory: StaffInventory) => {
-    const remaining = calculateRemainingInventory(inventory);
-    if (remaining <= 0) return { text: "Completed", color: "bg-green-100 text-green-800" };
-    if (inventory.quantitySold > 0) return { text: "In Progress", color: "bg-blue-100 text-blue-800" };
-    return { text: "Assigned", color: "bg-gray-100 text-gray-800" };
-  };
-
-  // Toggle mobile inventory view
-  const toggleInventoryExpansion = (inventoryId: number) => {
-    setExpandedInventoryId(expandedInventoryId === inventoryId ? null : inventoryId);
-  };
-
-  // Format month-year for display
-  const formatMonthYear = (monthStr: string) => {
-    const [year, month] = monthStr.split('-');
-    const date = new Date(parseInt(year), parseInt(month) - 1, 1);
-    return date.toLocaleDateString('en-KE', { month: 'short', year: 'numeric' });
-  };
-
-  // Filter sales by search term
-  const filteredSales = staff?.sales?.filter(sale => {
-    if (!searchTerm) return true;
+  // Handle close week
+  const handleCloseWeek = async () => {
+    if (!weekToClose) return;
     
-    const searchLower = searchTerm.toLowerCase();
-    return (
-      sale.id.toString().includes(searchLower) ||
-      sale.customer?.name?.toLowerCase().includes(searchLower) ||
-      sale.paymentMethod?.toLowerCase().includes(searchLower) ||
-      sale.createdBy?.toLowerCase().includes(searchLower)
-    );
-  }) || [];
+    setLoadingCloseWeek(weekToClose.week);
+    
+    try {
+      const response = await fetch(`/api/staff/${staffId}/close-week`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          weekStart: weekToClose.weekStart.toISOString(),
+          weekEnd: weekToClose.weekEnd.toISOString()
+        }),
+      });
 
-  // Initial load
-  useEffect(() => {
-    fetchStaffDetails();
-  }, [fetchStaffDetails]);
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to close week');
+      }
+
+      const data = await response.json();
+      
+      setSuccess(`Week closed successfully! ${data.summary?.itemsMarked || 0} items marked as returned.`);
+      setShowCloseWeekModal(false);
+      setWeekToClose(null);
+      
+      // Generate CSV for returned items
+      if (data.returnedItems && data.returnedItems.length > 0) {
+        generateReturnItemsCSV(data.returnedItems, weekToClose);
+      }
+      
+      fetchStaffDetails();
+
+    } catch (error: any) {
+      setError(error.message || 'Failed to close week');
+    } finally {
+      setLoadingCloseWeek(null);
+    }
+  };
+
+  // Generate CSV for returned items
+  const generateReturnItemsCSV = (returnedItems: any[], week: WeeklyPerformance) => {
+    if (!staff || !returnedItems.length) return;
+    
+    const csvContent = [
+      ['Staff Return Items Report'],
+      ['Staff Name', staff.name],
+      ['Staff Email', staff.email || ''],
+      ['Staff Phone', staff.phone || ''],
+      ['Week', `${formatDate(week.weekStart)} - ${formatDate(week.weekEnd)}`],
+      ['Closed Date', new Date().toLocaleDateString('en-KE')],
+      [],
+      ['Product Name', 'Category', 'Quantity Returned', 'Reason', 'Return Date', 'Week Start', 'Week End']
+    ];
+    
+    returnedItems.forEach((item: any) => {
+      csvContent.push([
+        item.productName || 'Unknown',
+        item.productCategory || 'N/A',
+        item.quantityReturned.toString(),
+        item.reason || 'Defective/Damaged',
+        new Date(item.returnedAt).toLocaleDateString('en-KE'),
+        formatDate(week.weekStart),
+        formatDate(week.weekEnd)
+      ]);
+    });
+    
+    const csvString = csvContent.map(row => row.join(',')).join('\n');
+    const blob = new Blob([csvString], { type: 'text/csv' });
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `returned-items-${staff.name.replace(/\s+/g, '-')}-${formatDate(week.weekStart).replace(/\s+/g, '-')}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    window.URL.revokeObjectURL(url);
+    document.body.removeChild(a);
+    
+    setSuccess(`Week closed and CSV downloaded with ${returnedItems.length} returned items.`);
+  };
+
+  // Export weekly report with return details
+  const exportWeeklyReport = (week: WeeklyPerformance) => {
+    if (!staff) return;
+    
+    const csvContent = [
+      ['Staff Weekly Performance Report'],
+      ['Staff Name', staff.name],
+      ['Staff Email', staff.email || ''],
+      ['Week', `${formatDate(week.weekStart)} - ${formatDate(week.weekEnd)}`],
+      ['Status', week.status.charAt(0).toUpperCase() + week.status.slice(1)],
+      [],
+      ['Summary'],
+      ['Total Assigned', week.totalGiven.toString()],
+      ['Total Sold', week.totalSold.toString()],
+      ['Total Returned', week.totalReturned.toString()],
+      ['Remaining', week.remaining.toString()],
+      ['Sell-through Rate', `${week.sellThroughRate.toFixed(1)}%`],
+      ['Total Revenue', formatCurrency(week.totalRevenue)],
+      [],
+      ['Inventory Details'],
+      ['Product Name', 'Category', 'Assigned', 'Sold', 'Returned', 'Remaining', 'Sell-through %']
+    ];
+    
+    week.inventory.forEach((inventory) => {
+      const sellThrough = inventory.quantityGiven > 0 
+        ? (inventory.quantitySold / inventory.quantityGiven) * 100 
+        : 0;
+      
+      csvContent.push([
+        inventory.product?.name || 'Unknown',
+        inventory.product?.category || 'N/A',
+        inventory.quantityGiven.toString(),
+        inventory.quantitySold.toString(),
+        inventory.quantityReturned.toString(),
+        (inventory.quantityGiven - inventory.quantitySold - inventory.quantityReturned).toString(),
+        `${sellThrough.toFixed(1)}%`
+      ]);
+    });
+    
+    if (week.totalReturned > 0) {
+      csvContent.push([]);
+      csvContent.push(['Returned Items Summary']);
+      csvContent.push(['Total Items Returned', week.totalReturned.toString()]);
+      
+      // Group returned items by product
+      const returnedByProduct = week.inventory.filter(inv => inv.quantityReturned > 0);
+      returnedByProduct.forEach((inventory) => {
+        csvContent.push([
+          inventory.product?.name || 'Unknown',
+          inventory.product?.category || 'N/A',
+          inventory.quantityReturned.toString()
+        ]);
+      });
+    }
+    
+    const csvString = csvContent.map(row => row.join(',')).join('\n');
+    const blob = new Blob([csvString], { type: 'text/csv' });
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `weekly-report-${staff.name.replace(/\s+/g, '-')}-${formatDate(week.weekStart).replace(/\s+/g, '-')}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    window.URL.revokeObjectURL(url);
+    document.body.removeChild(a);
+  };
 
   // Format currency
   const formatCurrency = (amount: number) => {
@@ -446,41 +521,41 @@ const StaffDetailsPage = () => {
   };
 
   // Format date
-  const formatDate = (date: Date | string) => {
+  const formatDate = (date: Date | string | null) => {
+    if (!date) return 'Not set';
     return new Date(date).toLocaleDateString('en-KE', {
       day: '2-digit',
-      month: 'short',
-      year: 'numeric'
+      month: 'short'
     });
   };
 
-  // Format time
-  const formatTime = (date: Date | string) => {
-    return new Date(date).toLocaleTimeString('en-KE', { 
-      hour: '2-digit', 
-      minute: '2-digit' 
-    });
-  };
+  // Filter weekly performance
+  const filteredWeeklyPerformance = weeklyPerformance.filter(week => {
+    if (searchQuery) {
+      const query = searchQuery.toLowerCase();
+      return week.week.toLowerCase().includes(query);
+    }
+    
+    if (filterStatus !== "all") {
+      return week.status === filterStatus;
+    }
+    
+    return true;
+  });
 
-  // Get sales linked via
-  const getSaleLinkType = (sale: Sale) => {
-    if (sale.createdById === staff?.id) {
-      return { type: "Direct", color: "bg-blue-100 text-blue-800" };
-    }
-    if (staff?.email && sale.createdBy === staff.email) {
-      return { type: "Email", color: "bg-purple-100 text-purple-800" };
-    }
-    return { type: "Other", color: "bg-gray-100 text-gray-800" };
-  };
+  // Initial load
+  useEffect(() => {
+    fetchStaffDetails();
+  }, [fetchStaffDetails]);
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 p-2 sm:p-4 md:p-6">
-        <div className="max-w-7xl mx-auto">
+      <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 p-4">
+        <div className="max-w-6xl mx-auto">
           <div className="flex items-center justify-center min-h-[60vh]">
             <div className="text-center">
-              <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto"></div>
-              <div className="mt-4 text-gray-900">Loading staff details...</div>
+              <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500 mx-auto"></div>
+              <div className="mt-4 text-gray-700">Loading staff details...</div>
             </div>
           </div>
         </div>
@@ -490,19 +565,19 @@ const StaffDetailsPage = () => {
 
   if (error && !staff) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 p-2 sm:p-4 md:p-6">
-        <div className="max-w-7xl mx-auto">
-          <div className="bg-red-50 border border-red-200 rounded-lg sm:rounded-xl p-4 sm:p-6">
+      <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 p-4">
+        <div className="max-w-6xl mx-auto">
+          <div className="bg-red-50 border border-red-100 rounded-xl p-6 shadow-sm">
             <div className="flex items-start gap-3">
-              <AlertCircle className="w-5 h-5 sm:w-6 sm:h-6 text-red-600 flex-shrink-0 mt-0.5" />
+              <AlertCircle className="w-6 h-6 text-red-500 flex-shrink-0 mt-0.5" />
               <div>
-                <div className="font-semibold text-red-800 text-sm sm:text-base">Error Loading Staff Details</div>
-                <div className="text-red-700 mt-1 text-xs sm:text-sm">{error}</div>
+                <div className="font-semibold text-red-800">Error Loading Staff Details</div>
+                <div className="text-red-700 mt-1">{error}</div>
                 <button
                   onClick={() => router.push('/admin/staff')}
-                  className="mt-4 inline-flex items-center gap-2 px-3 sm:px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors text-xs sm:text-sm"
+                  className="mt-4 inline-flex items-center gap-2 px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors shadow-sm"
                 >
-                  <ArrowLeft className="w-3 h-3 sm:w-4 sm:h-4" />
+                  <ArrowLeft className="w-4 h-4" />
                   Back to Staff Management
                 </button>
               </div>
@@ -515,17 +590,17 @@ const StaffDetailsPage = () => {
 
   if (!staff) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 p-2 sm:p-4 md:p-6">
-        <div className="max-w-7xl mx-auto">
-          <div className="bg-yellow-50 border border-yellow-200 rounded-lg sm:rounded-xl p-6 sm:p-8 text-center">
-            <User className="w-12 h-12 sm:w-16 sm:h-16 text-yellow-400 mx-auto mb-4" />
-            <div className="text-lg sm:text-xl font-semibold text-gray-900 mb-2">Staff Not Found</div>
-            <div className="text-gray-700 mb-6 text-sm sm:text-base">The staff member you're looking for doesn't exist or has been removed.</div>
+      <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 p-4">
+        <div className="max-w-6xl mx-auto">
+          <div className="bg-yellow-50 border border-yellow-100 rounded-xl p-8 text-center shadow-sm">
+            <User className="w-16 h-16 text-yellow-400 mx-auto mb-4" />
+            <div className="text-xl font-semibold text-gray-900 mb-2">Staff Not Found</div>
+            <div className="text-gray-700 mb-6">The staff member you're looking for doesn't exist or has been removed.</div>
             <button
               onClick={() => router.push('/admin/staff')}
-              className="inline-flex items-center gap-2 px-4 sm:px-6 py-2 sm:py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-medium text-sm sm:text-base"
+              className="inline-flex items-center gap-2 px-6 py-3 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors font-medium shadow-sm"
             >
-              <ArrowLeft className="w-4 h-4 sm:w-5 sm:h-5" />
+              <ArrowLeft className="w-5 h-5" />
               Back to Staff Management
             </button>
           </div>
@@ -535,52 +610,11 @@ const StaffDetailsPage = () => {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 p-2 sm:p-4 md:p-6">
-      <div className="max-w-7xl mx-auto">
-        {/* Debug Mode Toggle */}
-        <div className="mb-4 flex justify-end">
-          <button
-            onClick={() => setDebugMode(!debugMode)}
-            className="px-3 py-1 bg-gray-800 text-white text-xs rounded-lg hover:bg-gray-900"
-          >
-            {debugMode ? 'Hide Debug' : 'Debug Mode'}
-          </button>
-        </div>
-
-        {/* Debug Panel */}
-        {debugMode && apiResponse && (
-          <div className="mb-4 bg-gray-900 text-white p-4 rounded-lg">
-            <div className="font-bold mb-2">🔍 DEBUG INFO:</div>
-            <div className="text-xs space-y-2">
-              <div><strong>API Response Structure:</strong></div>
-              <pre className="bg-gray-800 p-3 rounded overflow-auto max-h-60">
-                {JSON.stringify({
-                  staffId: apiResponse.id,
-                  staffName: apiResponse.name,
-                  salesCount: apiResponse.sales?.length,
-                  salesArray: apiResponse.sales?.slice(0, 3), // Show first 3 sales
-                  stats: apiResponse.stats,
-                  hasSales: !!apiResponse.sales,
-                  salesType: Array.isArray(apiResponse.sales) ? 'Array' : typeof apiResponse.sales
-                }, null, 2)}
-              </pre>
-              <div className="grid grid-cols-2 gap-2">
-                <div className="bg-blue-900 p-2 rounded">
-                  <div className="font-bold">Direct Sales:</div>
-                  <div>{apiResponse.stats?.performance?.salesSources?.directRelation || 0}</div>
-                </div>
-                <div className="bg-purple-900 p-2 rounded">
-                  <div className="font-bold">Email Sales:</div>
-                  <div>{apiResponse.stats?.performance?.salesSources?.emailMatched || 0}</div>
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
-
+    <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 p-3 sm:p-4">
+      <div className="max-w-6xl mx-auto">
         {/* Alerts */}
         {error && (
-          <div className="mb-4 bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg flex items-start gap-2">
+          <div className="mb-4 bg-red-50 border border-red-100 text-red-700 px-4 py-3 rounded-lg flex items-start gap-2 shadow-sm animate-fadeIn">
             <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
             <div className="flex-1 text-sm">
               <span>{error}</span>
@@ -592,613 +626,843 @@ const StaffDetailsPage = () => {
         )}
 
         {success && (
-          <div className="mb-4 bg-emerald-50 border border-emerald-200 text-emerald-700 px-4 py-3 rounded-lg flex items-start gap-2">
+          <div className="mb-4 bg-emerald-50 border border-emerald-100 text-emerald-700 px-4 py-3 rounded-lg flex items-start gap-2 shadow-sm animate-fadeIn">
             <CheckCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
             <span className="text-sm">{success}</span>
           </div>
         )}
 
-        {/* Header - Mobile Optimized */}
-        <div className="mb-4 sm:mb-6">
-          <div className="flex items-center justify-between mb-3 sm:mb-4">
+        {/* Header */}
+        <div className="mb-6">
+          <div className="flex items-center justify-between mb-4">
             <Link
               href="/admin/staff"
-              className="inline-flex items-center gap-1 sm:gap-2 text-blue-600 hover:text-blue-800 font-medium text-sm sm:text-base"
+              className="inline-flex items-center gap-2 text-blue-600 hover:text-blue-700 font-medium text-sm"
             >
-              <ArrowLeft className="w-4 h-4 sm:w-5 sm:h-5" />
+              <ArrowLeft className="w-4 h-4" />
               <span className="hidden sm:inline">Back to Staff</span>
-              <span className="sm:hidden">Back</span>
             </Link>
             
             <div className="flex items-center gap-2">
               <button
-                onClick={() => exportReport('csv')}
-                className="hidden sm:inline-flex items-center gap-2 px-3 sm:px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors text-xs sm:text-sm"
-              >
-                <Download className="w-3 h-3 sm:w-4 sm:h-4" />
-                <span>Export</span>
-              </button>
-              <button
                 onClick={fetchStaffDetails}
-                disabled={loadingData}
-                className="inline-flex items-center gap-2 px-3 sm:px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50 text-xs sm:text-sm"
+                className="inline-flex items-center gap-2 px-3 py-1.5 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors text-sm shadow-sm"
               >
-                <RefreshCw className={`w-3 h-3 sm:w-4 sm:h-4 ${loadingData ? 'animate-spin' : ''}`} />
+                <RefreshCw className="w-3 h-3" />
                 <span className="hidden sm:inline">Refresh</span>
-                <span className="sm:hidden">Reload</span>
               </button>
+              <Link
+                href="/admin/inventory/assign"
+                className="inline-flex items-center gap-2 px-3 py-1.5 bg-emerald-500 text-white rounded-lg hover:bg-emerald-600 transition-colors text-sm shadow-sm"
+              >
+                <Plus className="w-3 h-3" />
+                <span className="hidden sm:inline">Assign</span>
+              </Link>
             </div>
           </div>
 
-          {/* Staff Info Card - Mobile Optimized */}
-          <div className="bg-white rounded-lg sm:rounded-xl shadow-sm border border-gray-200 p-4 sm:p-6">
+          {/* Staff Info Card */}
+          <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-4 sm:p-6">
             <div className="flex flex-col sm:flex-row sm:items-start gap-4">
-              <div className="flex items-start gap-3 sm:gap-4">
-                <div className="flex-shrink-0">
-                  <div className="w-16 h-16 sm:w-20 sm:h-20 bg-gradient-to-br from-blue-500 to-blue-600 rounded-full flex items-center justify-center">
-                    <User className="w-8 h-8 sm:w-10 sm:h-10 text-white" />
-                  </div>
+              <div className="flex items-center gap-3 sm:flex-col sm:items-start">
+                <div className="w-14 h-14 sm:w-16 sm:h-16 bg-gradient-to-br from-blue-500 to-blue-600 rounded-full flex items-center justify-center shadow-md">
+                  <User className="w-6 h-6 sm:w-8 sm:h-8 text-white" />
+                </div>
+                <div className="sm:hidden">
+                  <div className="text-lg font-bold text-gray-900">{staff.name}</div>
+                  <div className="text-xs text-gray-600">ID: {staff.id}</div>
+                </div>
+              </div>
+              
+              <div className="flex-1">
+                <div className="hidden sm:block">
+                  <div className="text-xl font-bold text-gray-900 mb-1">{staff.name}</div>
+                  <div className="text-sm text-gray-600 mb-3">ID: {staff.id}</div>
                 </div>
                 
-                <div className="flex-1">
-                  <div className="text-xl sm:text-2xl font-bold text-gray-900 mb-1 sm:mb-2">{staff.name}</div>
-                  <div className="flex flex-wrap gap-2 sm:gap-3 text-gray-700">
-                    {staff.email && (
-                      <div className="flex items-center gap-1 sm:gap-2">
-                        <Mail className="w-3 h-3 sm:w-4 sm:h-4 text-gray-500" />
-                        <div className="font-medium text-xs sm:text-sm truncate max-w-[150px] sm:max-w-none">{staff.email}</div>
+                <div className="grid grid-cols-2 sm:flex sm:flex-wrap gap-3 text-gray-700 text-sm">
+                  {staff.email && (
+                    <div className="flex items-center gap-2">
+                      <Mail className="w-3 h-3 text-gray-500" />
+                      <div className="truncate">{staff.email}</div>
+                    </div>
+                  )}
+                  {staff.phone && (
+                    <div className="flex items-center gap-2">
+                      <Phone className="w-3 h-3 text-gray-500" />
+                      <div className="font-medium">{staff.phone}</div>
+                    </div>
+                  )}
+                  <div className="col-span-2 flex items-center gap-2">
+                    <Calendar className="w-3 h-3 text-gray-500" />
+                    <div className="font-medium">Joined {formatDate(staff.createdAt)}</div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-center">
+                <div className="text-xs font-medium text-blue-800 mb-1">Active Weeks</div>
+                <div className="text-lg font-bold text-blue-600">{weeklyPerformance.filter(w => w.status === 'active').length}</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Quick Stats */}
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
+          <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="text-xs font-medium text-gray-900">Total Weeks</div>
+                <div className="text-xl font-bold text-gray-900 mt-1">{weeklyPerformance.length}</div>
+              </div>
+              <CalendarDays className="w-6 h-6 text-blue-500" />
+            </div>
+          </div>
+
+          <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="text-xs font-medium text-gray-900">Total Assigned</div>
+                <div className="text-xl font-bold text-gray-900 mt-1">
+                  {weeklyPerformance.reduce((sum, week) => sum + week.totalGiven, 0)}
+                </div>
+              </div>
+              <Package className="w-6 h-6 text-emerald-500" />
+            </div>
+          </div>
+
+          <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="text-xs font-medium text-gray-900">Total Returned</div>
+                <div className="text-xl font-bold text-gray-900 mt-1">
+                  {weeklyPerformance.reduce((sum, week) => sum + week.totalReturned, 0)}
+                </div>
+              </div>
+              <PackageX className="w-6 h-6 text-orange-500" />
+            </div>
+          </div>
+
+          <div className="col-span-2 sm:col-span-1 bg-white rounded-xl shadow-sm border border-gray-200 p-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="text-xs font-medium text-gray-900">Sell-through</div>
+                <div className="text-xl font-bold text-gray-900 mt-1">
+                  {weeklyPerformance.length > 0 
+                    ? (weeklyPerformance.reduce((sum, week) => sum + week.sellThroughRate, 0) / weeklyPerformance.length).toFixed(0) 
+                    : 0}%
+                </div>
+              </div>
+              <Percent className="w-6 h-6 text-purple-500" />
+            </div>
+          </div>
+        </div>
+
+        {/* Weekly Performance Section */}
+        <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden mb-6">
+          <div className="px-4 sm:px-6 py-4 border-b border-gray-200">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <div className="text-lg sm:text-xl font-semibold text-gray-900">Weekly Performance</div>
+                <div className="text-xs sm:text-sm text-gray-600">Tap any week for details</div>
+              </div>
+              
+              <div className="flex items-center gap-2">
+                <div className="flex items-center border border-gray-300 rounded-lg overflow-hidden">
+                  <button
+                    onClick={() => setViewMode("grid")}
+                    className={`p-2 ${viewMode === "grid" ? "bg-blue-50 text-blue-600" : "text-gray-600"}`}
+                  >
+                    <Grid className="w-4 h-4" />
+                  </button>
+                  <button
+                    onClick={() => setViewMode("list")}
+                    className={`p-2 ${viewMode === "list" ? "bg-blue-50 text-blue-600" : "text-gray-600"}`}
+                  >
+                    <List className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Search and Filter */}
+          <div className="px-4 sm:px-6 py-3 border-b border-gray-200 bg-gray-50">
+            <div className="flex flex-col sm:flex-row gap-2">
+              <div className="flex-1">
+                <div className="relative">
+                  <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-3 h-3 sm:w-4 sm:h-4 text-gray-500" />
+                  <input
+                    type="text"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    placeholder="Search weeks..."
+                    className="w-full pl-9 pr-4 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  />
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <Filter className="w-3 h-3 sm:w-4 sm:h-4 text-gray-500" />
+                <select
+                  value={filterStatus}
+                  onChange={(e) => setFilterStatus(e.target.value)}
+                  className="px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                >
+                  <option value="all">All Status</option>
+                  <option value="active">Active</option>
+                  <option value="completed">Completed</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          {/* Weeks List/Grid */}
+          {filteredWeeklyPerformance.length > 0 ? (
+            <div className="p-3 sm:p-4">
+              {viewMode === "grid" ? (
+                // Grid View
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                  {filteredWeeklyPerformance.map((week, index) => (
+                    <div 
+                      key={index}
+                      className="bg-gradient-to-br from-white to-gray-50 border border-gray-200 rounded-xl p-4 shadow-sm hover:shadow-md transition-shadow"
+                    >
+                      <div className="flex items-start justify-between mb-3">
+                        <div>
+                          <div className="font-semibold text-gray-900">{week.week}</div>
+                          <div className="text-xs text-gray-600 mt-1">
+                            {formatDate(week.weekStart)} - {formatDate(week.weekEnd)}
+                          </div>
+                        </div>
+                        <div className={`px-2 py-1 rounded-full text-xs font-medium ${
+                          week.status === 'active' 
+                            ? 'bg-emerald-100 text-emerald-800'
+                            : 'bg-blue-100 text-blue-800'
+                        }`}>
+                          {week.status.charAt(0).toUpperCase() + week.status.slice(1)}
+                        </div>
                       </div>
-                    )}
-                    {staff.phone && (
-                      <div className="flex items-center gap-1 sm:gap-2">
-                        <Phone className="w-3 h-3 sm:w-4 sm:h-4 text-gray-500" />
-                        <div className="font-medium text-xs sm:text-sm">{staff.phone}</div>
+                      
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between text-sm">
+                          <span className="text-gray-600">Assigned:</span>
+                          <span className="font-semibold">{week.totalGiven}</span>
+                        </div>
+                        <div className="flex items-center justify-between text-sm">
+                          <span className="text-gray-600">Sold:</span>
+                          <span className="font-semibold text-emerald-600">{week.totalSold}</span>
+                        </div>
+                        <div className="flex items-center justify-between text-sm">
+                          <span className="text-gray-600">Returned:</span>
+                          <span className="font-semibold text-orange-600">{week.totalReturned}</span>
+                        </div>
+                        <div className="flex items-center justify-between text-sm">
+                          <span className="text-gray-600">Rate:</span>
+                          <span className={`font-semibold ${
+                            week.sellThroughRate >= 70 ? 'text-emerald-600' :
+                            week.sellThroughRate >= 50 ? 'text-yellow-600' : 'text-red-600'
+                          }`}>
+                            {week.sellThroughRate.toFixed(0)}%
+                          </span>
+                        </div>
                       </div>
-                    )}
-                    <div className="flex items-center gap-1 sm:gap-2">
-                      <Hash className="w-3 h-3 sm:w-4 sm:h-4 text-gray-500" />
-                      <div className="font-medium text-xs sm:text-sm">ID: {staff.id}</div>
+                      
+                      <div className="mt-3 pt-3 border-t border-gray-200">
+                        <div className="flex items-center justify-between text-xs text-gray-600">
+                          <span>Sales: {week.sales.length}</span>
+                          <span>{formatCurrency(week.totalRevenue)}</span>
+                        </div>
+                      </div>
+
+                      <div className="mt-3 flex flex-col gap-2">
+                        <button
+                          onClick={() => {
+                            setSelectedWeek(week);
+                            setShowWeekDetails(true);
+                          }}
+                          className="w-full py-1.5 bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100 transition-colors text-xs font-medium"
+                        >
+                          <Eye className="w-3 h-3 inline-block mr-1" />
+                          View Details
+                        </button>
+                        
+                        {week.status === 'active' && week.remaining > 0 && (
+                          <button
+                            onClick={() => {
+                              setWeekToClose(week);
+                              setShowCloseWeekModal(true);
+                            }}
+                            className="w-full py-1.5 bg-orange-50 text-orange-600 rounded-lg hover:bg-orange-100 transition-colors text-xs font-medium"
+                          >
+                            <Archive className="w-3 h-3 inline-block mr-1" />
+                            Close Week
+                          </button>
+                        )}
+                        
+                        <button
+                          onClick={() => exportWeeklyReport(week)}
+                          className="w-full py-1.5 bg-gray-50 text-gray-600 rounded-lg hover:bg-gray-100 transition-colors text-xs font-medium"
+                        >
+                          <FileSpreadsheet className="w-3 h-3 inline-block mr-1" />
+                          Export CSV
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                // List View
+                <div className="space-y-2">
+                  {filteredWeeklyPerformance.map((week, index) => (
+                    <div 
+                      key={index}
+                      className="bg-white border border-gray-200 rounded-lg p-3 hover:bg-gray-50 transition-colors"
+                    >
+                      <div className="flex items-center justify-between">
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2">
+                            <div className="font-medium text-gray-900 truncate">{week.week}</div>
+                            <div className={`px-2 py-0.5 rounded-full text-xs font-medium ${
+                              week.status === 'active' 
+                                ? 'bg-emerald-100 text-emerald-800'
+                                : 'bg-blue-100 text-blue-800'
+                            }`}>
+                              {week.status.charAt(0).toUpperCase() + week.status.slice(1)}
+                            </div>
+                          </div>
+                          <div className="text-xs text-gray-600 mt-1">
+                            {formatDate(week.weekStart)} - {formatDate(week.weekEnd)}
+                          </div>
+                        </div>
+                        
+                        <div className="flex items-center gap-3 ml-3">
+                          <div className="text-right">
+                            <div className="font-semibold text-gray-900">{week.totalSold}/{week.totalGiven}</div>
+                            <div className={`text-xs ${
+                              week.sellThroughRate >= 70 ? 'text-emerald-600' :
+                              week.sellThroughRate >= 50 ? 'text-yellow-600' : 'text-red-600'
+                            }`}>
+                              {week.sellThroughRate.toFixed(0)}%
+                            </div>
+                          </div>
+                          <div className="flex flex-col gap-1">
+                            <button
+                              onClick={() => {
+                                setSelectedWeek(week);
+                                setShowWeekDetails(true);
+                              }}
+                              className="p-1.5 bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100 transition-colors"
+                              title="View Details"
+                            >
+                              <Eye className="w-3 h-3" />
+                            </button>
+                            {week.status === 'active' && week.remaining > 0 && (
+                              <button
+                                onClick={() => {
+                                  setWeekToClose(week);
+                                  setShowCloseWeekModal(true);
+                                }}
+                                className="p-1.5 bg-orange-50 text-orange-600 rounded-lg hover:bg-orange-100 transition-colors"
+                                title="Close Week"
+                              >
+                                <Archive className="w-3 h-3" />
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="px-4 sm:px-6 py-12 text-center">
+              <CalendarDays className="w-12 h-12 text-gray-300 mx-auto mb-4" />
+              <div className="text-lg font-medium text-gray-900 mb-2">No Weekly Data</div>
+              <div className="text-gray-600 max-w-md mx-auto mb-6 text-sm">
+                No inventory has been assigned to this staff member yet.
+              </div>
+              <Link
+                href="/admin/inventory/assign"
+                className="inline-flex items-center gap-2 px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors text-sm shadow-sm"
+              >
+                <Plus className="w-4 h-4" />
+                Assign Inventory
+              </Link>
+            </div>
+          )}
+        </div>
+
+        {/* Week Details Modal */}
+        {showWeekDetails && selectedWeek && (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-2 sm:p-4 z-50 overflow-y-auto">
+            <div className="bg-white rounded-xl shadow-xl w-full max-w-4xl max-h-[90vh] overflow-hidden">
+              {/* Modal Header */}
+              <div className="sticky top-0 bg-white border-b border-gray-200 px-4 sm:px-6 py-4 z-10">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <div className="text-lg font-semibold text-gray-900">Week Details</div>
+                    <div className="text-sm text-gray-600">
+                      {formatDate(selectedWeek.weekStart)} - {formatDate(selectedWeek.weekEnd)}
                     </div>
                   </div>
-                  <div className="mt-2 flex items-center gap-1 sm:gap-2 text-gray-700">
-                    <Calendar className="w-3 h-3 sm:w-4 sm:h-4 text-gray-500" />
-                    <div className="font-medium text-xs sm:text-sm">Joined {formatDate(staff.createdAt)}</div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => exportWeeklyReport(selectedWeek)}
+                      className="inline-flex items-center gap-1 px-3 py-1.5 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors text-sm"
+                    >
+                      <FileSpreadsheet className="w-3 h-3" />
+                      Export CSV
+                    </button>
+                    <button
+                      onClick={() => setShowWeekDetails(false)}
+                      className="p-1 hover:bg-gray-100 rounded-lg transition-colors"
+                    >
+                      <X className="w-5 h-5 text-gray-500" />
+                    </button>
+                  </div>
+                </div>
+              </div>
+              
+              {/* Modal Content */}
+              <div className="overflow-y-auto max-h-[calc(90vh-80px)]">
+                {/* Week Stats */}
+                <div className="p-4 sm:p-6">
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                    <div className="bg-blue-50 border border-blue-200 rounded-xl p-3">
+                      <div className="text-xs font-medium text-blue-800">Assigned</div>
+                      <div className="text-xl font-bold text-gray-900 mt-1">{selectedWeek.totalGiven}</div>
+                    </div>
+                    <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3">
+                      <div className="text-xs font-medium text-emerald-800">Sold</div>
+                      <div className="text-xl font-bold text-gray-900 mt-1">{selectedWeek.totalSold}</div>
+                    </div>
+                    <div className="bg-orange-50 border border-orange-200 rounded-xl p-3">
+                      <div className="text-xs font-medium text-orange-800">Returned</div>
+                      <div className="text-xl font-bold text-gray-900 mt-1">{selectedWeek.totalReturned}</div>
+                    </div>
+                    <div className="bg-purple-50 border border-purple-200 rounded-xl p-3">
+                      <div className="text-xs font-medium text-purple-800">Rate</div>
+                      <div className="text-xl font-bold text-gray-900 mt-1">{selectedWeek.sellThroughRate.toFixed(1)}%</div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Inventory Section */}
+                <div className="px-4 sm:px-6 pb-6">
+                  <div className="flex items-center justify-between mb-4">
+                    <div className="text-lg font-semibold text-gray-900">Inventory</div>
+                    <div className="text-sm text-gray-600">
+                      {selectedWeek.inventory.length} products
+                    </div>
                   </div>
                   
-                  {/* Sales Link Info */}
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    <div className="inline-flex items-center gap-1 px-2 py-1 bg-blue-50 text-blue-700 rounded text-xs">
-                      <div className="w-2 h-2 rounded-full bg-blue-500"></div>
-                      <span>Direct Sales: {staff.stats?.performance?.salesSources?.directRelation || 0}</span>
-                    </div>
-                    <div className="inline-flex items-center gap-1 px-2 py-1 bg-purple-50 text-purple-700 rounded text-xs">
-                      <div className="w-2 h-2 rounded-full bg-purple-500"></div>
-                      <span>Email Sales: {staff.stats?.performance?.salesSources?.emailMatched || 0}</span>
-                    </div>
-                    <div className="inline-flex items-center gap-1 px-2 py-1 bg-green-50 text-green-700 rounded text-xs">
-                      <div className="w-2 h-2 rounded-full bg-green-500"></div>
-                      <span>Total Sales: {staff.stats?.sales?.total || 0}</span>
-                    </div>
+                  <div className="space-y-3">
+                    {selectedWeek.inventory.map((inventory) => {
+                      const remaining = inventory.quantityGiven - inventory.quantitySold - inventory.quantityReturned;
+                      
+                      return (
+                        <div key={inventory.id} className="bg-gray-50 rounded-xl p-4 border border-gray-200">
+                          <div className="flex items-start justify-between mb-3">
+                            <div>
+                              <div className="font-medium text-gray-900 text-sm">{inventory.product?.name}</div>
+                              <div className="text-xs text-gray-600 mt-1">
+                                Category: {inventory.product?.category || 'N/A'}
+                              </div>
+                            </div>
+                            
+                            {remaining > 0 && selectedWeek.status === 'active' && (
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setSelectedInventory(inventory);
+                                  setReturnQuantity('');
+                                  setReturnReason('');
+                                  setShowReturnModal(true);
+                                }}
+                                className="inline-flex items-center gap-1 px-2 py-1 bg-orange-100 text-orange-700 rounded-lg text-xs hover:bg-orange-200 transition-colors"
+                              >
+                                <PackageX className="w-3 h-3" />
+                                Return
+                              </button>
+                            )}
+                          </div>
+                          
+                          <div className="grid grid-cols-4 gap-2">
+                            <div className="text-center">
+                              <div className="text-xs text-gray-600">Assigned</div>
+                              <div className="font-bold">{inventory.quantityGiven}</div>
+                            </div>
+                            <div className="text-center">
+                              <div className="text-xs text-gray-600">Sold</div>
+                              <div className="font-bold text-emerald-600">{inventory.quantitySold}</div>
+                            </div>
+                            <div className="text-center">
+                              <div className="text-xs text-gray-600">Returned</div>
+                              <div className="font-bold text-orange-600">{inventory.quantityReturned}</div>
+                            </div>
+                            <div className="text-center">
+                              <div className="text-xs text-gray-600">Remaining</div>
+                              <div className={`font-bold ${remaining > 0 ? 'text-blue-600' : 'text-gray-600'}`}>
+                                {remaining}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
-              </div>
 
-              <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 sm:p-4 mt-3 sm:mt-0">
-                <div className="text-xs sm:text-sm font-medium text-blue-800 mb-1 sm:mb-2">Status</div>
-                <div className="flex items-center gap-1 sm:gap-2">
-                  {summary.totalInventoryGiven > 0 ? (
-                    <>
-                      <CheckCircle className="w-4 h-4 sm:w-5 sm:h-5 text-green-600" />
-                      <div className="font-semibold text-green-700 text-sm sm:text-base">Active</div>
-                      <div className="text-xs sm:text-sm text-green-600">({summary.totalInventoryGiven} items)</div>
-                    </>
-                  ) : (
-                    <>
-                      <AlertCircle className="w-4 h-4 sm:w-5 sm:h-5 text-gray-600" />
-                      <div className="font-semibold text-gray-700 text-sm sm:text-base">No Inventory</div>
-                    </>
-                  )}
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
+                {/* Returned Items Summary */}
+                {selectedWeek.totalReturned > 0 && (
+                  <div className="px-4 sm:px-6 pb-6">
+                    <div className="flex items-center justify-between mb-4">
+                      <div className="text-lg font-semibold text-gray-900">Returned Items</div>
+                      <div className="text-sm text-gray-600">
+                        {selectedWeek.totalReturned} items returned
+                      </div>
+                    </div>
+                    
+                    <div className="bg-orange-50 border border-orange-200 rounded-xl p-4">
+                      <div className="space-y-3">
+                        {selectedWeek.inventory
+                          .filter(inv => inv.quantityReturned > 0)
+                          .map((inventory) => (
+                            <div key={inventory.id} className="flex items-center justify-between">
+                              <div>
+                                <div className="font-medium text-gray-900 text-sm">{inventory.product?.name}</div>
+                                <div className="text-xs text-gray-600">{inventory.product?.category || 'N/A'}</div>
+                              </div>
+                              <div className="text-right">
+                                <div className="font-bold text-orange-600">{inventory.quantityReturned} items</div>
+                                <div className="text-xs text-gray-600">
+                                  {formatDate(inventory.updatedAt)}
+                                </div>
+                              </div>
+                            </div>
+                          ))}
+                      </div>
+                    </div>
+                  </div>
+                )}
 
-        {/* Mobile Filter Toggle */}
-        <button
-          onClick={() => setShowMobileFilters(!showMobileFilters)}
-          className="sm:hidden w-full mb-4 px-4 py-2 bg-white border border-gray-300 rounded-lg flex items-center justify-between text-gray-700 text-sm"
-        >
-          <span>Filter Options</span>
-          {showMobileFilters ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
-        </button>
-
-        {/* Date Filter - Responsive */}
-        <div className={`bg-white rounded-lg sm:rounded-xl shadow-sm border border-gray-200 p-4 mb-4 sm:mb-6 ${showMobileFilters ? 'block' : 'hidden sm:block'}`}>
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-            <div>
-              <div className="font-semibold text-gray-900 text-sm sm:text-base">Filter Data</div>
-              <div className="text-gray-700 text-xs sm:text-sm">Filter by date range</div>
-            </div>
-            
-            <div className="grid grid-cols-2 sm:flex sm:flex-row gap-2">
-              <div className="w-full">
-                <div className="block text-xs font-medium text-gray-700 mb-1">From</div>
-                <input
-                  type="date"
-                  value={dateRange.startDate}
-                  onChange={(e) => setDateRange(prev => ({ ...prev, startDate: e.target.value }))}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
-                />
+                {/* Sales Section */}
+                {selectedWeek.sales.length > 0 && (
+                  <div className="px-4 sm:px-6 pb-6">
+                    <div className="flex items-center justify-between mb-4">
+                      <div className="text-lg font-semibold text-gray-900">Sales</div>
+                      <div className="text-sm text-gray-600">
+                        {selectedWeek.sales.length} transactions
+                      </div>
+                    </div>
+                    
+                    <div className="space-y-2">
+                      {selectedWeek.sales.slice(0, 5).map((sale) => (
+                        <div key={sale.id} className="bg-white border border-gray-200 rounded-xl p-3">
+                          <div className="flex items-center justify-between">
+                            <div>
+                              <div className="font-medium text-gray-900 text-sm">Sale #{sale.id}</div>
+                              <div className="text-xs text-gray-600 mt-1">
+                                {formatDate(sale.date)}
+                              </div>
+                            </div>
+                            <div className="text-right">
+                              <div className="font-bold text-emerald-600 text-sm">
+                                {formatCurrency(sale.amount)}
+                              </div>
+                              <div className={`text-xs mt-1 px-2 py-0.5 rounded-full inline-block ${
+                                sale.status === 'PAID' 
+                                  ? 'bg-emerald-100 text-emerald-800'
+                                  : 'bg-yellow-100 text-yellow-800'
+                              }`}>
+                                {sale.status}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                      
+                      {selectedWeek.sales.length > 5 && (
+                        <div className="text-center pt-2">
+                          <div className="text-sm text-gray-600">
+                            +{selectedWeek.sales.length - 5} more sales
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
               </div>
               
-              <div className="w-full">
-                <div className="block text-xs font-medium text-gray-700 mb-1">To</div>
-                <input
-                  type="date"
-                  value={dateRange.endDate}
-                  onChange={(e) => setDateRange(prev => ({ ...prev, endDate: e.target.value }))}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
-                />
-              </div>
-              
-              <div className="col-span-2 sm:w-auto">
+              {/* Modal Footer */}
+              <div className="border-t border-gray-200 px-4 sm:px-6 py-4 bg-gray-50 flex justify-between gap-3">
+                {selectedWeek.status === 'active' && selectedWeek.remaining > 0 && (
+                  <button
+                    onClick={() => {
+                      setShowWeekDetails(false);
+                      setWeekToClose(selectedWeek);
+                      setShowCloseWeekModal(true);
+                    }}
+                    className="px-4 py-2 bg-orange-500 text-white rounded-lg hover:bg-orange-600 transition-colors text-sm font-medium"
+                  >
+                    <Archive className="w-3 h-3 inline-block mr-1" />
+                    Close Week
+                  </button>
+                )}
                 <button
-                  onClick={handleDateFilter}
-                  disabled={loadingData}
-                  className="w-full sm:w-auto px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50 text-sm h-[42px]"
+                  onClick={() => setShowWeekDetails(false)}
+                  className="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition-colors text-sm font-medium"
                 >
-                  Apply Filter
+                  Close Details
                 </button>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* Summary Stats - Mobile Optimized */}
-        <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-4 gap-2 sm:gap-3 mb-4 sm:mb-6">
-          <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-3">
-            <div className="flex items-center justify-between">
-              <div>
-                <div className="text-xs text-gray-900 font-medium">Inventory Value</div>
-                <div className="text-base sm:text-lg font-bold text-gray-900 mt-1">
-                  {formatCurrency(summary.totalInventoryValue)}
-                </div>
-                <div className="text-xs text-gray-700 mt-1">Production cost</div>
-              </div>
-              <div className="p-2 bg-blue-100 rounded-lg">
-                <Package className="w-4 h-4 sm:w-5 sm:h-5 text-blue-600" />
-              </div>
-            </div>
-          </div>
-
-          <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-3">
-            <div className="flex items-center justify-between">
-              <div>
-                <div className="text-xs text-gray-900 font-medium">Total Sales</div>
-                <div className="text-base sm:text-lg font-bold text-gray-900 mt-1">
-                  {formatCurrency(summary.totalSalesAmount)}
-                </div>
-                <div className="text-xs text-gray-700 mt-1">{summary.totalSalesCount} sales</div>
-              </div>
-              <div className="p-2 bg-green-100 rounded-lg">
-                <TrendingUp className="w-4 h-4 sm:w-5 sm:h-5 text-green-600" />
-              </div>
-            </div>
-          </div>
-
-          <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-3">
-            <div className="flex items-center justify-between">
-              <div>
-                <div className="text-xs text-gray-900 font-medium">Items Assigned</div>
-                <div className="text-base sm:text-lg font-bold text-gray-900 mt-1">{summary.totalInventoryGiven}</div>
-                <div className="flex gap-1 text-xs text-gray-700 mt-1">
-                  <div>{summary.totalInventorySold} sold</div>
-                  <div>•</div>
-                  <div>{summary.totalInventoryReturned} returned</div>
-                </div>
-              </div>
-              <div className="p-2 bg-purple-100 rounded-lg">
-                <Warehouse className="w-4 h-4 sm:w-5 sm:h-5 text-purple-600" />
-              </div>
-            </div>
-          </div>
-
-          <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-3">
-            <div className="flex items-center justify-between">
-              <div>
-                <div className="text-xs text-gray-900 font-medium">Avg Sale</div>
-                <div className="text-base sm:text-lg font-bold text-gray-900 mt-1">
-                  {formatCurrency(summary.averageSaleValue)}
-                </div>
-                <div className="text-xs text-gray-700 mt-1">Per transaction</div>
-              </div>
-              <div className="p-2 bg-orange-100 rounded-lg">
-                <BarChart3 className="w-4 h-4 sm:w-5 sm:h-5 text-orange-600" />
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* Performance Analytics Section */}
-        {staff.stats && (
-          <div className="bg-white rounded-lg sm:rounded-xl shadow-sm border border-gray-200 p-4 mb-4 sm:mb-6">
-            <div className="mb-4">
-              <div className="text-base sm:text-lg font-semibold text-gray-900">Performance Analytics</div>
-              <div className="text-gray-700 text-xs sm:text-sm">Detailed performance breakdown</div>
-            </div>
-            
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-              {/* Sales Sources */}
-              <div className="bg-gray-50 rounded-lg p-4">
-                <div className="flex items-center gap-2 mb-3">
-                  <PieChart className="w-4 h-4 text-blue-600" />
-                  <div className="text-sm font-medium text-gray-900">Sales Sources</div>
-                </div>
-                <div className="space-y-3">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <div className="w-3 h-3 rounded-full bg-blue-500"></div>
-                      <div className="text-sm text-gray-700">Direct Relation</div>
-                    </div>
-                    <div className="text-sm font-medium text-gray-900">
-                      {staff.stats.performance.salesSources.directRelation}
-                    </div>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <div className="w-3 h-3 rounded-full bg-purple-500"></div>
-                      <div className="text-sm text-gray-700">Email Match</div>
-                    </div>
-                    <div className="text-sm font-medium text-gray-900">
-                      {staff.stats.performance.salesSources.emailMatched}
-                    </div>
-                  </div>
-                  <div className="pt-2 border-t border-gray-200">
-                    <div className="flex items-center justify-between">
-                      <div className="text-sm font-medium text-gray-900">Total</div>
-                      <div className="text-sm font-bold text-gray-900">
-                        {staff.stats.performance.salesSources.total}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-              
-              {/* Sales by Payment Method */}
-              <div className="bg-gray-50 rounded-lg p-4">
-                <div className="flex items-center gap-2 mb-3">
-                  <CreditCard className="w-4 h-4 text-green-600" />
-                  <div className="text-sm font-medium text-gray-900">Sales by Payment Method</div>
-                </div>
-                <div className="space-y-2">
-                  {staff.stats.performance.salesByMethod.map((method, index) => (
-                    <div key={index} className="flex items-center justify-between">
-                      <div className="text-sm text-gray-700">{method.method}</div>
-                      <div className="flex items-center gap-2">
-                        <div className="text-xs text-gray-500">{method.count}</div>
-                        <div className="text-sm font-medium text-green-600">
-                          {formatCurrency(method.amount)}
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-              
-              {/* Recent Monthly Sales */}
-              <div className="bg-gray-50 rounded-lg p-4">
-                <div className="flex items-center gap-2 mb-3">
-                  <TrendingUp className="w-4 h-4 text-orange-600" />
-                  <div className="text-sm font-medium text-gray-900">Recent Monthly Sales</div>
-                </div>
-                <div className="space-y-2">
-                  {staff.stats.performance.salesByMonth.map((month, index) => (
-                    <div key={index} className="flex items-center justify-between">
-                      <div className="text-sm text-gray-700">{formatMonthYear(month.month)}</div>
-                      <div className="flex items-center gap-2">
-                        <div className="text-xs text-gray-500">{month.count} sales</div>
-                        <div className="text-sm font-medium text-gray-900">
-                          {formatCurrency(month.amount)}
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
               </div>
             </div>
           </div>
         )}
 
-        {/* Sales Section - Mobile Optimized */}
-        <div className="bg-white rounded-lg sm:rounded-xl shadow-sm border border-gray-200 overflow-hidden mb-6">
-          <div className="px-4 sm:px-6 py-4 border-b border-gray-200">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-              <div>
-                <div className="text-lg sm:text-xl font-semibold text-gray-900">Sales History</div>
-                <div className="text-gray-700 text-sm">
-                  Showing {filteredSales.length} of {staff.sales?.length || 0} sales
-                  {staff.stats?.performance?.salesSources && (
-                    <span className="ml-2 text-xs">
-                      (Direct: {staff.stats.performance.salesSources.directRelation}, 
-                      Email: {staff.stats.performance.salesSources.emailMatched})
-                    </span>
-                  )}
+        {/* Return Modal */}
+        {showReturnModal && selectedInventory && (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-3 sm:p-4 z-50">
+            <div className="bg-white rounded-xl shadow-xl w-full max-w-sm">
+              <div className="px-4 sm:px-6 py-4 border-b border-gray-200">
+                <div className="flex items-center justify-between">
+                  <div className="text-lg font-semibold text-gray-900">Return Items</div>
+                  <button
+                    onClick={() => {
+                      setShowReturnModal(false);
+                      setSelectedInventory(null);
+                      setReturnQuantity('');
+                      setReturnReason('');
+                    }}
+                    className="p-1 hover:bg-gray-100 rounded-lg transition-colors"
+                  >
+                    <X className="w-5 h-5 text-gray-500" />
+                  </button>
                 </div>
               </div>
               
-              <div className="flex flex-col sm:flex-row gap-3">
-                {/* Search Input */}
-                <div className="relative">
-                  <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-4 h-4" />
-                  <input
-                    type="text"
-                    placeholder="Search sales..."
-                    value={searchTerm}
-                    onChange={(e) => setSearchTerm(e.target.value)}
-                    className="pl-10 pr-4 py-2 border border-gray-300 rounded-lg text-sm w-full sm:w-64"
-                  />
+              <div className="p-4 sm:p-6">
+                <div className="space-y-4">
+                  <div className="bg-gray-50 rounded-xl p-4 border border-gray-200">
+                    <div className="text-sm font-medium text-gray-900 mb-1">Product</div>
+                    <div className="text-lg font-bold text-gray-900">{selectedInventory.product?.name}</div>
+                    
+                    <div className="grid grid-cols-3 gap-2 mt-3">
+                      <div className="text-center">
+                        <div className="text-xs text-gray-700">Assigned</div>
+                        <div className="text-lg font-bold">{selectedInventory.quantityGiven}</div>
+                      </div>
+                      <div className="text-center">
+                        <div className="text-xs text-gray-700">Sold</div>
+                        <div className="text-lg font-bold text-emerald-600">{selectedInventory.quantitySold}</div>
+                      </div>
+                      <div className="text-center">
+                        <div className="text-xs text-gray-700">Returned</div>
+                        <div className="text-lg font-bold text-orange-600">{selectedInventory.quantityReturned}</div>
+                      </div>
+                    </div>
+                    
+                    <div className="mt-3 pt-3 border-t border-gray-200">
+                      <div className="flex items-center justify-between">
+                        <div className="text-sm text-gray-700">Remaining:</div>
+                        <div className="text-lg font-bold text-blue-600">
+                          {selectedInventory.quantityGiven - selectedInventory.quantitySold - selectedInventory.quantityReturned}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                  
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Quantity to Return
+                    </label>
+                    <input
+                      type="number"
+                      value={returnQuantity}
+                      onChange={(e) => setReturnQuantity(e.target.value)}
+                      className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                      placeholder="Enter quantity"
+                      min="1"
+                      max={selectedInventory.quantityGiven - selectedInventory.quantitySold - selectedInventory.quantityReturned}
+                    />
+                    <div className="text-xs text-gray-600 mt-1">
+                      Max: {selectedInventory.quantityGiven - selectedInventory.quantitySold - selectedInventory.quantityReturned} items
+                    </div>
+                  </div>
+                  
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Reason for Return (Optional)
+                    </label>
+                    <select
+                      value={returnReason}
+                      onChange={(e) => setReturnReason(e.target.value)}
+                      className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    >
+                      <option value="">Select reason</option>
+                      <option value="Defective">Defective</option>
+                      <option value="Damaged">Damaged</option>
+                      <option value="Expired">Expired</option>
+                      <option value="Wrong Item">Wrong Item</option>
+                      <option value="Customer Return">Customer Return</option>
+                      <option value="Other">Other</option>
+                    </select>
+                  </div>
                 </div>
               </div>
-            </div>
-          </div>
-
-          {/* Data Status Alert */}
-          {debugMode && (
-            <div className="bg-yellow-50 border-b border-yellow-200 p-3">
-              <div className="text-xs text-yellow-800">
-                <strong>Data Status:</strong> Staff has {staff.sales?.length || 0} sales in state | 
-                Displaying {filteredSales.length} sales | 
-                API returned {apiResponse?.sales?.length || 0} sales
+              
+              <div className="px-4 sm:px-6 py-4 border-t border-gray-200 flex justify-end gap-3">
+                <button
+                  onClick={() => {
+                    setShowReturnModal(false);
+                    setSelectedInventory(null);
+                    setReturnQuantity('');
+                    setReturnReason('');
+                  }}
+                  className="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors text-sm"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleReturnItems}
+                  disabled={!returnQuantity || parseInt(returnQuantity) > (selectedInventory.quantityGiven - selectedInventory.quantitySold - selectedInventory.quantityReturned)}
+                  className="px-4 py-2 bg-orange-500 text-white rounded-lg hover:bg-orange-600 transition-colors disabled:opacity-50 text-sm font-medium"
+                >
+                  Process Return
+                </button>
               </div>
             </div>
-          )}
+          </div>
+        )}
 
-          {staff.sales && staff.sales.length > 0 ? (
-            <div className="overflow-x-auto">
-              <table className="min-w-full divide-y divide-gray-200">
-                <thead className="bg-gray-50">
-                  <tr>
-                    <th className="px-4 sm:px-6 py-3 text-left text-xs font-medium text-gray-900 uppercase tracking-wider">
-                      Sale ID
-                    </th>
-                    <th className="px-4 sm:px-6 py-3 text-left text-xs font-medium text-gray-900 uppercase tracking-wider">
-                      Linked Via
-                    </th>
-                    <th className="px-4 sm:px-6 py-3 text-left text-xs font-medium text-gray-900 uppercase tracking-wider">
-                      Date
-                    </th>
-                    <th className="px-4 sm:px-6 py-3 text-left text-xs font-medium text-gray-900 uppercase tracking-wider hidden sm:table-cell">
-                      Customer
-                    </th>
-                    <th className="px-4 sm:px-6 py-3 text-left text-xs font-medium text-gray-900 uppercase tracking-wider">
-                      Amount
-                    </th>
-                    <th className="px-4 sm:px-6 py-3 text-left text-xs font-medium text-gray-900 uppercase tracking-wider hidden md:table-cell">
-                      Payment
-                    </th>
-                    <th className="px-4 sm:px-6 py-3 text-left text-xs font-medium text-gray-900 uppercase tracking-wider">
-                      Status
-                    </th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-200 bg-white">
-                  {filteredSales.length > 0 ? (
-                    filteredSales.map((sale) => {
-                      const saleStatus = calculateSaleStatus(sale);
-                      const linkType = getSaleLinkType(sale);
-                      
-                      return (
-                        <tr key={sale.id} className="hover:bg-gray-50 transition-colors">
-                          <td className="px-4 sm:px-6 py-4">
-                            <div className="flex items-center gap-2">
-                              <div className="font-mono font-bold text-gray-900 text-sm">#{sale.id}</div>
-                              {debugMode && (
-                                <div className="text-xs text-gray-500">
-                                  (ID: {sale.createdById || 'none'})
-                                </div>
-                              )}
-                            </div>
-                            {sale.createdBy && (
-                              <div className="text-xs text-gray-500 mt-1 truncate max-w-[120px]">
-                                By: {sale.createdBy}
-                              </div>
-                            )}
-                          </td>
-                          <td className="px-4 sm:px-6 py-4">
-                            <div className={`inline-flex items-center px-3 py-1 rounded-full text-xs font-medium ${linkType.color}`}>
-                              {linkType.type}
-                            </div>
-                          </td>
-                          <td className="px-4 sm:px-6 py-4">
-                            <div className="text-gray-900 text-sm">{formatDate(sale.date)}</div>
-                            <div className="text-xs text-gray-700">
-                              {formatTime(sale.date)}
-                            </div>
-                          </td>
-                          <td className="px-4 sm:px-6 py-4 hidden sm:table-cell">
-                            <div className="text-gray-900 font-medium text-sm">
-                              {sale.customer?.name || 'Walk-in Customer'}
-                            </div>
-                            {sale.customer?.phone && (
-                              <div className="text-xs text-gray-700">{sale.customer.phone}</div>
-                            )}
-                          </td>
-                          <td className="px-4 sm:px-6 py-4">
-                            <div className="font-bold text-green-600 text-sm sm:text-base">
-                              {formatCurrency(sale.amount)}
-                            </div>
-                            {sale.payment && sale.payment.length > 0 && (
-                              <div className="text-xs text-gray-700">
-                                Paid: {formatCurrency(sale.payment.reduce((sum, p) => sum + p.amount, 0))}
-                              </div>
-                            )}
-                          </td>
-                          <td className="px-4 sm:px-6 py-4 hidden md:table-cell">
-                            <div className={`px-3 py-1 rounded text-xs font-medium ${
-                              sale.paymentMethod === 'CASH' 
-                                ? 'bg-green-100 text-green-800' 
-                                : sale.paymentMethod === 'MPESA'
-                                ? 'bg-emerald-100 text-emerald-800'
-                                : 'bg-blue-100 text-blue-800'
-                            }`}>
-                              {sale.paymentMethod}
-                            </div>
-                          </td>
-                          <td className="px-4 sm:px-6 py-4">
-                            <div className={`inline-flex items-center px-3 py-1 rounded-full text-xs font-medium ${
-                              saleStatus === 'PAID' 
-                                ? 'bg-green-100 text-green-800'
-                                : saleStatus === 'PARTIAL'
-                                ? 'bg-yellow-100 text-yellow-800'
-                                : 'bg-red-100 text-red-800'
-                            }`}>
-                              {saleStatus}
-                            </div>
-                          </td>
-                        </tr>
-                      );
-                    })
+        {/* Close Week Modal */}
+        {showCloseWeekModal && weekToClose && (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-3 sm:p-4 z-50">
+            <div className="bg-white rounded-xl shadow-xl w-full max-w-md">
+              <div className="px-4 sm:px-6 py-4 border-b border-gray-200">
+                <div className="flex items-center justify-between">
+                  <div className="text-lg font-semibold text-gray-900">Close Week</div>
+                  <button
+                    onClick={() => {
+                      setShowCloseWeekModal(false);
+                      setWeekToClose(null);
+                    }}
+                    className="p-1 hover:bg-gray-100 rounded-lg transition-colors"
+                  >
+                    <X className="w-5 h-5 text-gray-500" />
+                  </button>
+                </div>
+              </div>
+              
+              <div className="p-4 sm:p-6">
+                <div className="space-y-4">
+                  <div className="bg-yellow-50 border border-yellow-200 rounded-xl p-4">
+                    <div className="flex items-start gap-2">
+                      <AlertTriangle className="w-5 h-5 text-yellow-600 flex-shrink-0 mt-0.5" />
+                      <div>
+                        <div className="text-sm font-medium text-yellow-800">Important Notice</div>
+                        <div className="text-xs text-yellow-700 mt-1">
+                          Closing a week will mark all remaining inventory as returned. This action cannot be undone.
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                  
+                  <div className="bg-gray-50 rounded-xl p-4 border border-gray-200">
+                    <div className="text-sm font-medium text-gray-900 mb-2">Week Details</div>
+                    <div className="space-y-2">
+                      <div className="flex justify-between text-sm">
+                        <span className="text-gray-600">Week:</span>
+                        <span className="font-medium">{weekToClose.week}</span>
+                      </div>
+                      <div className="flex justify-between text-sm">
+                        <span className="text-gray-600">Period:</span>
+                        <span className="font-medium">{formatDate(weekToClose.weekStart)} - {formatDate(weekToClose.weekEnd)}</span>
+                      </div>
+                      <div className="flex justify-between text-sm">
+                        <span className="text-gray-600">Remaining Items:</span>
+                        <span className="font-medium text-blue-600">{weekToClose.remaining}</span>
+                      </div>
+                      <div className="flex justify-between text-sm">
+                        <span className="text-gray-600">Items to be Returned:</span>
+                        <span className="font-medium text-orange-600">{weekToClose.remaining}</span>
+                      </div>
+                    </div>
+                  </div>
+                  
+                  <div className="text-sm text-gray-600">
+                    <p>A CSV file will be automatically downloaded with details of all returned items.</p>
+                  </div>
+                </div>
+              </div>
+              
+              <div className="px-4 sm:px-6 py-4 border-t border-gray-200 flex justify-end gap-3">
+                <button
+                  onClick={() => {
+                    setShowCloseWeekModal(false);
+                    setWeekToClose(null);
+                  }}
+                  className="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors text-sm"
+                  disabled={loadingCloseWeek !== null}
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleCloseWeek}
+                  disabled={loadingCloseWeek !== null}
+                  className="px-4 py-2 bg-orange-500 text-white rounded-lg hover:bg-orange-600 transition-colors disabled:opacity-50 text-sm font-medium"
+                >
+                  {loadingCloseWeek ? (
+                    <>
+                      <div className="animate-spin rounded-full h-3 w-3 border-b-2 border-white mr-2 inline-block"></div>
+                      Closing...
+                    </>
                   ) : (
-                    <tr>
-                      <td colSpan={7} className="px-4 sm:px-6 py-8 text-center">
-                        <div className="text-gray-700">No sales match your search criteria</div>
-                      </td>
-                    </tr>
+                    <>
+                      <Archive className="w-3 h-3 inline-block mr-1" />
+                      Close Week & Download CSV
+                    </>
                   )}
-                </tbody>
-              </table>
-            </div>
-          ) : (
-            <div className="px-4 sm:px-6 py-12 text-center">
-              <ShoppingCart className="w-12 h-12 sm:w-16 sm:h-16 text-gray-300 mx-auto mb-4" />
-              <div className="text-lg sm:text-xl font-medium text-gray-900 mb-2">No Sales Recorded</div>
-              <div className="text-gray-700 max-w-md mx-auto mb-6">
-                This staff member hasn't made any sales yet, or sales are not properly linked.
-              </div>
-              <div className="text-sm text-gray-600 space-y-1">
-                <div>• Check if sales have <code>createdById</code> set to staff ID</div>
-                <div>• Verify staff email matches sales <code>createdBy</code> field</div>
-                <div>• Ensure sales API is linking staff correctly</div>
-              </div>
-            </div>
-          )}
-        </div>
-
-        {/* Inventory Section - Mobile Optimized */}
-        <div className="bg-white rounded-lg sm:rounded-xl shadow-sm border border-gray-200 overflow-hidden mb-6">
-          <div className="px-4 sm:px-6 py-4 border-b border-gray-200">
-            <div className="flex items-center justify-between">
-              <div>
-                <div className="text-lg sm:text-xl font-semibold text-gray-900">Inventory Assigned</div>
-                <div className="text-gray-700 text-sm">All items assigned to this staff</div>
-              </div>
-              <div className="text-gray-700 text-sm">
-                {staff.staffInventories?.length || 0} items
+                </button>
               </div>
             </div>
           </div>
-
-          {staff.staffInventories && staff.staffInventories.length > 0 ? (
-            <div className="overflow-x-auto">
-              <table className="min-w-full divide-y divide-gray-200">
-                <thead className="bg-gray-50">
-                  <tr>
-                    <th className="px-4 sm:px-6 py-3 text-left text-xs font-medium text-gray-900 uppercase tracking-wider">
-                      Product
-                    </th>
-                    <th className="px-4 sm:px-6 py-3 text-left text-xs font-medium text-gray-900 uppercase tracking-wider">
-                      Quantity
-                    </th>
-                    <th className="px-4 sm:px-6 py-3 text-left text-xs font-medium text-gray-900 uppercase tracking-wider hidden sm:table-cell">
-                      Status
-                    </th>
-                    <th className="px-4 sm:px-6 py-3 text-left text-xs font-medium text-gray-900 uppercase tracking-wider">
-                      Actions
-                    </th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-200">
-                  {staff.staffInventories.map((inventory) => {
-                    const remaining = calculateRemainingInventory(inventory);
-                    const status = getInventoryStatus(inventory);
-                    
-                    return (
-                      <tr key={inventory.id} className="hover:bg-gray-50">
-                        <td className="px-4 sm:px-6 py-4">
-                          <div className="font-medium text-gray-900">{inventory.product?.name || 'Unknown'}</div>
-                          {inventory.product?.category && (
-                            <div className="text-xs text-gray-700">{inventory.product.category}</div>
-                          )}
-                        </td>
-                        <td className="px-4 sm:px-6 py-4">
-                          <div className="text-gray-900 font-medium">{inventory.quantityGiven}</div>
-                          <div className="text-xs text-gray-700">
-                            <span className="text-green-600">Sold: {inventory.quantitySold}</span>
-                            <span className="mx-1">•</span>
-                            <span className="text-orange-600">Returned: {inventory.quantityReturned}</span>
-                          </div>
-                        </td>
-                        <td className="px-4 sm:px-6 py-4 hidden sm:table-cell">
-                          <div className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${status.color}`}>
-                            {status.text}
-                          </div>
-                          <div className="text-xs text-gray-700 mt-1">
-                            Remaining: {remaining}
-                          </div>
-                        </td>
-                        <td className="px-4 sm:px-6 py-4">
-                          <button
-                            onClick={() => handleDeleteInventory(inventory.id)}
-                            disabled={deletingInventory === inventory.id}
-                            className="inline-flex items-center gap-1 px-3 py-1.5 bg-red-50 text-red-600 rounded-lg hover:bg-red-100 transition-colors disabled:opacity-50 text-xs"
-                          >
-                            <Trash2 className="w-3 h-3" />
-                            <span>Delete</span>
-                          </button>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          ) : (
-            <div className="px-4 sm:px-6 py-12 text-center">
-              <Package className="w-12 h-12 sm:w-16 sm:h-16 text-gray-300 mx-auto mb-4" />
-              <div className="text-lg sm:text-xl font-medium text-gray-900 mb-2">No Inventory Assigned</div>
-              <div className="text-gray-700 max-w-md mx-auto mb-6">
-                This staff member hasn't been assigned any inventory yet.
-              </div>
-              <button
-                onClick={() => router.push(`/admin/staff/inventory?staffId=${staff.id}`)}
-                className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors text-sm"
-              >
-                <Package className="w-4 h-4" />
-                Assign Inventory
-              </button>
-            </div>
-          )}
-        </div>
+        )}
+        
 
         {/* Footer */}
-        <div className="mt-8 text-center text-gray-700 text-sm">
-          <div>Staff Details • {staff.name} • Last updated {formatDate(staff.updatedAt)}</div>
-          <div className="mt-2 flex items-center justify-center gap-4">
-            <button
-              onClick={() => exportReport('csv')}
-              className="inline-flex items-center gap-1 text-blue-600 hover:text-blue-800 text-sm"
-            >
-              <Download className="w-4 h-4" />
-              Export CSV
-            </button>
-            <div className="text-gray-400">•</div>
+        <div className="mt-8 text-center">
+          <div className="text-xs text-gray-600 mb-2">
+            Staff Details • {staff.name} • Weekly Inventory System
+          </div>
+          <div className="flex items-center justify-center gap-3">
             <button
               onClick={() => window.print()}
-              className="inline-flex items-center gap-1 text-gray-700 hover:text-gray-900 text-sm"
+              className="inline-flex items-center gap-1 text-gray-600 hover:text-gray-900 text-xs"
             >
-              <Printer className="w-4 h-4" />
+              <Printer className="w-3 h-3" />
               Print Report
+            </button>
+            <button
+              onClick={() => {
+                const csvContent = `Staff,${staff.name}\nEmail,${staff.email || ''}\nPhone,${staff.phone || ''}\n\nWeek,Start Date,End Date,Status,Assigned,Sold,Returned,Remaining,Rate%,Revenue\n${weeklyPerformance.map(w => `${w.week},${formatDate(w.weekStart)},${formatDate(w.weekEnd)},${w.status},${w.totalGiven},${w.totalSold},${w.totalReturned},${w.remaining},${w.sellThroughRate.toFixed(1)}%,${formatCurrency(w.totalRevenue)}`).join('\n')}`;
+                const blob = new Blob([csvContent], { type: 'text/csv' });
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `staff-${staff.name.replace(/\s+/g, '-')}-complete-report.csv`;
+                document.body.appendChild(a);
+                a.click();
+                window.URL.revokeObjectURL(url);
+                document.body.removeChild(a);
+              }}
+              className="inline-flex items-center gap-1 text-gray-600 hover:text-gray-900 text-xs"
+            >
+              <FileSpreadsheet className="w-3 h-3" />
+              Export Complete Report
             </button>
           </div>
         </div>

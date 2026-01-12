@@ -33,13 +33,6 @@ import {
   Check,
   XCircle,
   MoreVertical,
-  Smartphone,
-  Tablet,
-  Monitor,
-  QrCode,
-  BarChart,
-  TrendingUp,
-  TrendingDown,
   Hash,
   CreditCard,
   Truck,
@@ -67,7 +60,7 @@ import {
   Cpu,
   HardDrive,
   MemoryStick,
-  Smartphone as PhoneIcon,
+  Phone as PhoneIcon,
   Laptop,
   Headphones,
   Speaker,
@@ -75,13 +68,13 @@ import {
   Mouse,
   Monitor as MonitorIcon,
   Printer,
-  Scan, // Replaced Scanner with Scan
+  Scan,
   Server,
   Router,
   Camera,
   Video,
   Mic,
-  GamepadIcon as Gamepad,
+  Gamepad,
   Watch,
   Tablet as TabletIcon,
   Book,
@@ -97,7 +90,8 @@ import {
   BookLock,
   BookUp,
   BookDown,
-  BookHeart
+  BookHeart,
+  TrendingUp
 } from "lucide-react";
 import Link from "next/link";
 
@@ -148,10 +142,13 @@ interface Staff {
   avatar?: string;
 }
 
+// UPDATED: Added weekly fields to StaffInventory
 interface StaffInventory {
   id: number;
   staffId: number;
   productId: number;
+  weekStartDate: string | null;
+  weekEndDate: string | null;
   quantityGiven: number;
   quantitySold: number;
   quantityReturned: number;
@@ -159,12 +156,15 @@ interface StaffInventory {
   product: Product;
   createdAt: string;
   updatedAt: string;
-  assignmentDate: string;
-  dueDate: string;
   status: 'ACTIVE' | 'COMPLETED' | 'OVERDUE' | 'PENDING';
   totalSalesAmount: number;
   notes?: string;
   priority?: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
+  // Weekly specific fields
+  weekIdentifier?: string;
+  isCurrentWeek?: boolean;
+  remainingQuantity?: number;
+  sellThroughRate?: number;
 }
 
 interface AssignmentItem {
@@ -173,15 +173,17 @@ interface AssignmentItem {
   product?: Product;
 }
 
+// UPDATED: Added weekly date fields to AssignmentForm
 interface AssignmentForm {
   staffId: string;
   items: AssignmentItem[];
-  assignmentDate: string;
-  dueDate: string;
+  weekStartDate: string;
+  weekEndDate: string;
   notes?: string;
   priority?: 'LOW' | 'MEDIUM' | 'HIGH';
 }
 
+// FIXED: Updated to accept string | null
 interface ReturnForm {
   items: {
     assignmentId: number;
@@ -189,6 +191,8 @@ interface ReturnForm {
     productName: string;
     productId: number;
     maxReturnable: number;
+    weekStartDate?: string | null;
+    weekEndDate?: string | null;
   }[];
   notes?: string;
 }
@@ -209,6 +213,18 @@ interface AssignmentStats {
   averageCompletionRate: number;
   totalCostValue: number;
   totalProfit: number;
+  // Weekly stats
+  currentWeekAssignments: number;
+  currentWeekSales: number;
+  currentWeekReturns: number;
+  weeklyPerformance: Array<{
+    weekStart: string;
+    weekEnd: string;
+    totalGiven: number;
+    totalSold: number;
+    totalReturned: number;
+    sellThroughRate: number;
+  }>;
 }
 
 interface ProductSearchModalProps {
@@ -218,6 +234,56 @@ interface ProductSearchModalProps {
   products: Product[];
   excludedIds?: number[];
 }
+
+// Helper: Get current week dates (Monday to Sunday)
+const getCurrentWeekDates = () => {
+  const now = new Date();
+  const dayOfWeek = now.getDay(); // 0 = Sunday, 1 = Monday, etc.
+  const diffToMonday = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
+  
+  const monday = new Date(now);
+  monday.setDate(now.getDate() + diffToMonday);
+  monday.setHours(0, 0, 0, 0);
+  
+  const sunday = new Date(monday);
+  sunday.setDate(monday.getDate() + 6);
+  sunday.setHours(23, 59, 59, 999);
+  
+  return { 
+    weekStartDate: monday.toISOString().split('T')[0], 
+    weekEndDate: sunday.toISOString().split('T')[0] 
+  };
+};
+
+// Helper: Format week range for display
+const formatWeekRange = (startDate: string, endDate: string) => {
+  const start = new Date(startDate);
+  const end = new Date(endDate);
+  const now = new Date();
+  const isCurrent = now >= start && now <= end;
+  
+  let prefix = '';
+  if (isCurrent) prefix = '📅 Current: ';
+  
+  return `${prefix}${start.toLocaleDateString('en-KE', { day: '2-digit', month: 'short' })} - ${end.toLocaleDateString('en-KE', { day: '2-digit', month: 'short', year: 'numeric' })}`;
+};
+
+// Helper: Check if date is in current week
+const isCurrentWeek = (startDate: string | null, endDate: string | null) => {
+  if (!startDate || !endDate) return false;
+  const now = new Date();
+  const start = new Date(startDate);
+  const end = new Date(endDate);
+  return now >= start && now <= end;
+};
+
+// Helper: Calculate remaining days in week
+const getDaysRemainingInWeek = (endDate: string) => {
+  const now = new Date();
+  const end = new Date(endDate);
+  const diffTime = end.getTime() - now.getTime();
+  return Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+};
 
 // Enhanced Product Search Modal Component
 const ProductSearchModal: React.FC<ProductSearchModalProps> = ({ 
@@ -334,7 +400,7 @@ const ProductSearchModal: React.FC<ProductSearchModalProps> = ({
               </div>
               <div>
                 <h2 className="text-xl md:text-2xl font-bold">Search Products</h2>
-                <p className="text-blue-100 text-sm">Select products to assign</p>
+                <p className="text-blue-100 text-sm">Select products to assign for the week</p>
               </div>
             </div>
             <button
@@ -498,7 +564,7 @@ const ProductSearchModal: React.FC<ProductSearchModalProps> = ({
                   <div className="mt-4 pt-3 border-t border-slate-100">
                     <button className="w-full py-2 bg-gradient-to-r from-blue-600 to-blue-700 text-white rounded-lg font-medium hover:from-blue-700 hover:to-blue-800 transition-all flex items-center justify-center gap-2 text-sm">
                       <Plus className="w-4 h-4" />
-                      Add to Assignment
+                      Add to Weekly Assignment
                     </button>
                   </div>
                 </div>
@@ -701,6 +767,77 @@ const ProductSelectionCard: React.FC<{
   );
 };
 
+// NEW: Week View Component
+const WeekViewComponent: React.FC<{
+  weekStart: string;
+  weekEnd: string;
+  assignments: StaffInventory[];
+  onCloseWeek?: (staffId?: number) => void;
+}> = ({ weekStart, weekEnd, assignments, onCloseWeek }) => {
+  if (!weekStart || !weekEnd) return null;
+  
+  const formattedWeek = formatWeekRange(weekStart, weekEnd);
+  const now = new Date();
+  const endDate = new Date(weekEnd);
+  const isCurrentWeek = now >= new Date(weekStart) && now <= endDate;
+  const isPastWeek = now > endDate;
+  
+  const totalGiven = assignments.reduce((sum, a) => sum + a.quantityGiven, 0);
+  const totalSold = assignments.reduce((sum, a) => sum + a.quantitySold, 0);
+  const totalReturned = assignments.reduce((sum, a) => sum + a.quantityReturned, 0);
+  const remaining = totalGiven - totalSold - totalReturned;
+  const sellThroughRate = totalGiven > 0 ? (totalSold / totalGiven) * 100 : 0;
+  
+  return (
+    <div className={`border rounded-xl p-4 mb-4 ${isCurrentWeek ? 'border-blue-300 bg-blue-50/30' : 'border-slate-200'}`}>
+      <div className="flex items-center justify-between mb-4">
+        <div>
+          <h3 className="font-bold text-slate-900">{formattedWeek}</h3>
+          <p className="text-sm text-slate-600">
+            {isCurrentWeek ? 'Current Week' : isPastWeek ? 'Past Week' : 'Upcoming Week'}
+          </p>
+        </div>
+        {isCurrentWeek && remaining > 0 && onCloseWeek && (
+          <button
+            onClick={() => onCloseWeek()}
+            className="px-4 py-2 bg-gradient-to-r from-purple-600 to-purple-700 text-white rounded-lg hover:from-purple-700 hover:to-purple-800 transition-all text-sm font-medium"
+          >
+            Close Week
+          </button>
+        )}
+      </div>
+      
+      <div className="grid grid-cols-4 gap-4 mb-4">
+        <div className="text-center">
+          <div className="text-sm text-slate-600">Assigned</div>
+          <div className="text-xl font-bold text-slate-900">{totalGiven}</div>
+        </div>
+        <div className="text-center">
+          <div className="text-sm text-slate-600">Sold</div>
+          <div className="text-xl font-bold text-green-600">{totalSold}</div>
+        </div>
+        <div className="text-center">
+          <div className="text-sm text-slate-600">Returned</div>
+          <div className="text-xl font-bold text-orange-600">{totalReturned}</div>
+        </div>
+        <div className="text-center">
+          <div className="text-sm text-slate-600">Rate</div>
+          <div className={`text-xl font-bold ${sellThroughRate >= 70 ? 'text-green-600' : sellThroughRate >= 50 ? 'text-amber-600' : 'text-red-600'}`}>
+            {sellThroughRate.toFixed(1)}%
+          </div>
+        </div>
+      </div>
+      
+      <div className="text-sm text-slate-600">
+        <span className="font-medium">{assignments.length}</span> assignments • 
+        <span className={`ml-2 font-medium ${remaining > 0 ? 'text-blue-600' : 'text-slate-600'}`}>
+          {remaining} items remaining
+        </span>
+      </div>
+    </div>
+  );
+};
+
 // Main Enhanced Component
 export default function StaffInventoryManagementPage() {
   // States
@@ -714,30 +851,35 @@ export default function StaffInventoryManagementPage() {
   const [showReturnModal, setShowReturnModal] = useState(false);
   const [showProductSearch, setShowProductSearch] = useState(false);
   const [selectedStaff, setSelectedStaff] = useState<Staff | null>(null);
+  
+  // UPDATED: Using weekly dates
+  const currentWeek = getCurrentWeekDates();
   const [form, setForm] = useState<AssignmentForm>({
     staffId: "",
     items: [],
-    assignmentDate: new Date().toISOString().split('T')[0],
-    dueDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+    weekStartDate: currentWeek.weekStartDate,
+    weekEndDate: currentWeek.weekEndDate,
     notes: "",
     priority: 'MEDIUM'
   });
+  
   const [returnForm, setReturnForm] = useState<ReturnForm>({
     items: [],
     notes: ""
   });
+  
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [activeFilter, setActiveFilter] = useState<'all' | 'active' | 'completed' | 'overdue' | 'pending'>('all');
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
-  const [sortBy, setSortBy] = useState<'staff' | 'dueDate' | 'totalValue' | 'priority'>('dueDate');
-  const [viewMode, setViewMode] = useState<'list' | 'cards' | 'grid'>('cards');
+  const [sortBy, setSortBy] = useState<'staff' | 'week' | 'totalValue' | 'priority'>('week');
+  const [viewMode, setViewMode] = useState<'list' | 'cards' | 'grid' | 'weeks'>('weeks');
   const [selectedAssignment, setSelectedAssignment] = useState<StaffInventory | null>(null);
   const [quickActions, setQuickActions] = useState<number[]>([]);
   const [bulkSelect, setBulkSelect] = useState<number[]>([]);
-  const [statsTimeRange, setStatsTimeRange] = useState<'day' | 'week' | 'month' | 'year'>('month');
-  
+  const [statsTimeRange, setStatsTimeRange] = useState<'day' | 'week' | 'month' | 'year'>('week');
+
   // Fetch all data
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -765,14 +907,25 @@ export default function StaffInventoryManagementPage() {
 
       if (inventoryRes.status === 'fulfilled' && inventoryRes.value.ok) {
         const rawData = await inventoryRes.value.json();
-        inventoryData = rawData.map((assignment: any) => ({
-          ...assignment,
-          assignmentDate: assignment.assignmentDate || assignment.createdAt,
-          dueDate: assignment.dueDate || new Date(new Date(assignment.createdAt).getTime() + 7 * 24 * 60 * 60 * 1000).toISOString(),
-          status: calculateAssignmentStatus(assignment),
-          totalSalesAmount: (assignment.quantitySold || 0) * (assignment.product?.price || 0),
-          priority: assignment.priority || 'MEDIUM'
-        }));
+        
+        inventoryData = rawData.map((assignment: any) => {
+          const remaining = (assignment.quantityGiven || 0) - 
+                          (assignment.quantitySold || 0) - 
+                          (assignment.quantityReturned || 0);
+          const sellThroughRate = assignment.quantityGiven > 0 
+            ? ((assignment.quantitySold || 0) / assignment.quantityGiven) * 100 
+            : 0;
+          
+          return {
+            ...assignment,
+            status: calculateAssignmentStatus(assignment),
+            totalSalesAmount: (assignment.quantitySold || 0) * (assignment.product?.price || 0),
+            priority: assignment.priority || 'MEDIUM',
+            isCurrentWeek: isCurrentWeek(assignment.weekStartDate, assignment.weekEndDate),
+            remainingQuantity: remaining,
+            sellThroughRate: sellThroughRate
+          };
+        });
       }
 
       setStaffList(staffData);
@@ -788,7 +941,7 @@ export default function StaffInventoryManagementPage() {
     }
   }, []);
 
-  // Helper to calculate assignment status
+  // Helper to calculate assignment status based on weekly system
   const calculateAssignmentStatus = (assignment: any): StaffInventory['status'] => {
     const remaining = (assignment.quantityGiven || 0) - 
                      (assignment.quantitySold || 0) - 
@@ -796,10 +949,15 @@ export default function StaffInventoryManagementPage() {
     
     if (remaining === 0) return 'COMPLETED';
     
-    const dueDate = new Date(assignment.dueDate || new Date(new Date(assignment.createdAt).getTime() + 7 * 24 * 60 * 60 * 1000));
     const now = new Date();
+    const weekEnd = assignment.weekEndDate ? new Date(assignment.weekEndDate) : null;
     
-    if (dueDate < now) return 'OVERDUE';
+    // Check if week is over
+    if (weekEnd && now > weekEnd) {
+      // Week is over but items remain - this should be rare (means week wasn't closed properly)
+      return 'OVERDUE';
+    }
+    
     if (assignment.quantitySold === 0) return 'PENDING';
     return 'ACTIVE';
   };
@@ -841,9 +999,11 @@ export default function StaffInventoryManagementPage() {
           aVal = a.staff?.name?.toLowerCase() || '';
           bVal = b.staff?.name?.toLowerCase() || '';
           break;
-        case 'dueDate':
-          aVal = new Date(a.dueDate).getTime();
-          bVal = new Date(b.dueDate).getTime();
+        case 'week':
+          const aWeekStart = a.weekStartDate || '';
+          const bWeekStart = b.weekStartDate || '';
+          aVal = new Date(aWeekStart).getTime();
+          bVal = new Date(bWeekStart).getTime();
           break;
         case 'totalValue':
           aVal = a.totalSalesAmount || 0;
@@ -855,17 +1015,19 @@ export default function StaffInventoryManagementPage() {
           bVal = priorityOrder[b.priority as keyof typeof priorityOrder] || 0;
           break;
         default:
-          aVal = new Date(a.dueDate).getTime();
-          bVal = new Date(b.dueDate).getTime();
+          const aDate = a.weekStartDate || '';
+          const bDate = b.weekStartDate || '';
+          aVal = new Date(aDate).getTime();
+          bVal = new Date(bDate).getTime();
       }
 
-      return aVal > bVal ? 1 : -1;
+      return bVal - aVal; // Newest first
     });
 
     setFilteredAssignments(filtered);
   }, [searchTerm, activeFilter, inventoryAssignments, sortBy]);
 
-  // Calculate comprehensive stats
+  // Calculate comprehensive stats with weekly data
   const calculateStats = (): AssignmentStats => {
     const assignments = inventoryAssignments;
     const totalItemsGiven = assignments.reduce((sum, inv) => sum + (inv.quantityGiven || 0), 0);
@@ -880,6 +1042,15 @@ export default function StaffInventoryManagementPage() {
     const overdueAssignments = assignments.filter(inv => inv.status === 'OVERDUE');
     const pendingAssignments = assignments.filter(inv => inv.status === 'PENDING');
     
+    // Count current week assignments
+    const currentWeekAssignments = assignments.filter(inv => inv.isCurrentWeek).length;
+    const currentWeekSales = assignments
+      .filter(inv => inv.isCurrentWeek)
+      .reduce((sum, inv) => sum + inv.quantitySold, 0);
+    const currentWeekReturns = assignments
+      .filter(inv => inv.isCurrentWeek)
+      .reduce((sum, inv) => sum + inv.quantityReturned, 0);
+    
     // Count unique staff and products
     const staffIds = new Set(assignments.map(inv => inv.staffId));
     const productIds = new Set(assignments.map(inv => inv.productId));
@@ -891,6 +1062,36 @@ export default function StaffInventoryManagementPage() {
     const averageCompletionRate = completionRates.length > 0 
       ? completionRates.reduce((sum, rate) => sum + rate, 0) / completionRates.length 
       : 0;
+
+    // Group by week for weekly performance
+    const weeklyMap = new Map<string, { weekStart: string; weekEnd: string; totalGiven: number; totalSold: number; totalReturned: number; }>();
+    
+    assignments.forEach(assignment => {
+      if (!assignment.weekStartDate || !assignment.weekEndDate) return;
+      
+      const weekKey = `${assignment.weekStartDate}_${assignment.weekEndDate}`;
+      if (!weeklyMap.has(weekKey)) {
+        weeklyMap.set(weekKey, {
+          weekStart: assignment.weekStartDate,
+          weekEnd: assignment.weekEndDate,
+          totalGiven: 0,
+          totalSold: 0,
+          totalReturned: 0
+        });
+      }
+      
+      const weekData = weeklyMap.get(weekKey)!;
+      weekData.totalGiven += assignment.quantityGiven;
+      weekData.totalSold += assignment.quantitySold;
+      weekData.totalReturned += assignment.quantityReturned;
+    });
+    
+    const weeklyPerformance = Array.from(weeklyMap.values())
+      .map(week => ({
+        ...week,
+        sellThroughRate: week.totalGiven > 0 ? (week.totalSold / week.totalGiven) * 100 : 0
+      }))
+      .sort((a, b) => new Date(b.weekStart).getTime() - new Date(a.weekStart).getTime());
 
     return { 
       totalAssignments: assignments.length,
@@ -907,7 +1108,11 @@ export default function StaffInventoryManagementPage() {
       pendingAssignments: pendingAssignments.length,
       staffWithInventory: staffIds.size,
       totalProductsAssigned: productIds.size,
-      averageCompletionRate
+      averageCompletionRate,
+      currentWeekAssignments,
+      currentWeekSales,
+      currentWeekReturns,
+      weeklyPerformance
     };
   };
 
@@ -917,10 +1122,25 @@ export default function StaffInventoryManagementPage() {
     return product?.stockQuantity || 0;
   };
 
-  // Get remaining stock after considering current active assignments
-  const getRemainingStockAfterAssignments = (productId: number): number => {
+  // Get remaining stock after considering current weekly assignments
+  const getRemainingStockAfterAssignments = (productId: number, weekStartDate?: string): number => {
+    const now = new Date();
+    const targetWeekStart = weekStartDate || form.weekStartDate;
+    
     const totalAssigned = inventoryAssignments
-      .filter(inv => inv.productId === productId && inv.status !== 'COMPLETED')
+      .filter(inv => {
+        if (inv.productId !== productId) return false;
+        if (inv.status === 'COMPLETED') return false;
+        
+        // If we have a target week, only count assignments for that week
+        if (targetWeekStart && inv.weekStartDate) {
+          return inv.weekStartDate === targetWeekStart;
+        }
+        
+        // Otherwise count all active assignments (including current week)
+        const weekEnd = inv.weekEndDate ? new Date(inv.weekEndDate) : null;
+        return weekEnd && now <= weekEnd;
+      })
       .reduce((sum, inv) => {
         const remaining = (inv.quantityGiven || 0) - (inv.quantitySold || 0) - (inv.quantityReturned || 0);
         return sum + remaining;
@@ -932,25 +1152,22 @@ export default function StaffInventoryManagementPage() {
 
   // Handle product selection from search modal
   const handleProductSelect = (product: Product) => {
-    // Check if product already exists in form items
     const existingIndex = form.items.findIndex(item => item.productId === product.id.toString());
     
     if (existingIndex >= 0) {
-      // Update quantity if product already exists
       const newItems = [...form.items];
       const newQty = parseInt(newItems[existingIndex].quantity) + 1;
       newItems[existingIndex].quantity = newQty.toString();
       setForm({ ...form, items: newItems });
       setSuccess(`Increased quantity for ${product.name}`);
     } else {
-      // Add new product
       const newItem: AssignmentItem = {
         productId: product.id.toString(),
         quantity: "1",
         product: product
       };
       setForm({ ...form, items: [...form.items, newItem] });
-      setSuccess(`Added ${product.name} to assignment`);
+      setSuccess(`Added ${product.name} to weekly assignment`);
     }
 
     setTimeout(() => setSuccess(null), 3000);
@@ -995,18 +1212,20 @@ export default function StaffInventoryManagementPage() {
     const errors: string[] = [];
 
     if (!form.staffId) errors.push("Please select a staff member");
+    if (!form.weekStartDate || !form.weekEndDate) errors.push("Please select week dates");
     
     let hasValidItems = false;
     let totalValue = 0;
+    
     form.items.forEach((item, index) => {
       if (item.productId && item.quantity) {
         const quantity = parseInt(item.quantity);
         if (isNaN(quantity) || quantity <= 0) {
           errors.push(`Item ${index + 1}: Quantity must be a positive number`);
         } else {
-          const availableStock = getRemainingStockAfterAssignments(parseInt(item.productId));
+          const availableStock = getRemainingStockAfterAssignments(parseInt(item.productId), form.weekStartDate);
           if (quantity > availableStock) {
-            errors.push(`Item ${index + 1}: Only ${availableStock} units available`);
+            errors.push(`Item ${index + 1}: Only ${availableStock} units available for this week`);
           } else {
             hasValidItems = true;
             totalValue += (item.product?.price || 0) * quantity;
@@ -1016,13 +1235,12 @@ export default function StaffInventoryManagementPage() {
     });
 
     if (!hasValidItems) errors.push("Please add at least one item with quantity");
-    if (!form.dueDate) errors.push("Please select a due date");
     if (totalValue === 0) errors.push("Total value must be greater than 0");
 
     return { isValid: errors.length === 0, errors };
   };
 
-  // Handle form submission - Assign inventory
+  // Handle form submission - Assign weekly inventory
   const handleAssignInventory = async () => {
     const validation = validateAssignment();
     if (!validation.isValid) {
@@ -1042,7 +1260,7 @@ export default function StaffInventoryManagementPage() {
           quantityGiven: parseInt(item.quantity)
         }));
 
-      // Send multiple individual requests
+      // Send assignments to weekly API
       const results = [];
       for (const item of validItems) {
         const response = await fetch("/api/staff-inventory", {
@@ -1052,8 +1270,8 @@ export default function StaffInventoryManagementPage() {
             staffId: parseInt(form.staffId),
             productId: item.productId,
             quantityGiven: item.quantityGiven,
-            assignmentDate: form.assignmentDate,
-            dueDate: form.dueDate,
+            weekStartDate: form.weekStartDate,
+            weekEndDate: form.weekEndDate,
             notes: form.notes,
             priority: form.priority
           })
@@ -1072,13 +1290,13 @@ export default function StaffInventoryManagementPage() {
       setForm({ 
         staffId: "", 
         items: [],
-        assignmentDate: new Date().toISOString().split('T')[0],
-        dueDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+        weekStartDate: currentWeek.weekStartDate,
+        weekEndDate: currentWeek.weekEndDate,
         notes: "",
         priority: 'MEDIUM'
       });
       setShowAssignModal(false);
-      setSuccess(`✅ Successfully assigned ${results.length} items to staff!`);
+      setSuccess(`✅ Successfully assigned ${results.length} items for the week!`);
 
       // Refresh data
       setTimeout(() => {
@@ -1095,7 +1313,7 @@ export default function StaffInventoryManagementPage() {
     }
   };
 
-  // Handle inventory return (FIXED: Added missing function)
+  // Handle inventory return
   const handleReturnInventory = async () => {
     const validItems = returnForm.items.filter(item => item.quantityReturned && parseInt(item.quantityReturned) > 0);
     
@@ -1111,12 +1329,10 @@ export default function StaffInventoryManagementPage() {
     try {
       // Send multiple individual return requests
       for (const item of validItems) {
-        const response = await fetch("/api/staff-inventory", {
+        const response = await fetch(`/api/staff-inventory/${item.assignmentId}/return`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            action: 'return',
-            inventoryId: item.assignmentId,
             quantityReturned: parseInt(item.quantityReturned)
           })
         });
@@ -1149,7 +1365,7 @@ export default function StaffInventoryManagementPage() {
 
   // Handle complete assignment (mark all as returned)
   const handleCompleteAssignment = async (assignmentId: number) => {
-    if (!confirm("Are you sure you want to complete this assignment? This will mark all remaining inventory as returned.")) return;
+    if (!confirm("Are you sure you want to complete this assignment? This will mark all remaining inventory as returned for this week.")) return;
 
     try {
       // First get the assignment details
@@ -1163,12 +1379,10 @@ export default function StaffInventoryManagementPage() {
       
       if (remaining > 0) {
         // Return all remaining items
-        const response = await fetch("/api/staff-inventory", {
+        const response = await fetch(`/api/staff-inventory/${assignmentId}/return`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            action: 'return',
-            inventoryId: assignmentId,
             quantityReturned: remaining
           })
         });
@@ -1185,6 +1399,47 @@ export default function StaffInventoryManagementPage() {
       }, 2000);
     } catch (err: any) {
       setError(err.message || "Failed to complete assignment");
+      setTimeout(() => setError(null), 5000);
+    }
+  };
+
+  // Handle close week for all assignments
+  const handleCloseWeek = async (staffId?: number) => {
+    let message = "Close current week?";
+    if (staffId) {
+      const staff = staffList.find(s => s.id === staffId);
+      message = `Close current week for ${staff?.name}?`;
+    } else {
+      message = "Close current week for all staff?";
+    }
+    
+    if (!confirm(`${message} This will mark all remaining inventory as returned for the current week.`)) return;
+
+    try {
+      let url = "/api/staff/close-week";
+      if (staffId) {
+        url = `/api/staff/${staffId}/close-week`;
+      }
+
+      const response = await fetch(url, {
+        method: 'POST',
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to close week');
+      }
+
+      const data = await response.json();
+      setSuccess(data.message || 'Week closed successfully!');
+      
+      setTimeout(() => {
+        fetchData();
+        setSuccess(null);
+      }, 2000);
+
+    } catch (error: any) {
+      setError(error.message || 'Failed to close week');
       setTimeout(() => setError(null), 5000);
     }
   };
@@ -1211,14 +1466,6 @@ export default function StaffInventoryManagementPage() {
     }
   };
 
-  // Calculate days remaining
-  const calculateDaysRemaining = (dueDate: string) => {
-    const now = new Date();
-    const due = new Date(dueDate);
-    const diffTime = due.getTime() - now.getTime();
-    return Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-  };
-
   // Calculate sales progress percentage
   const calculateSalesProgress = (assignment: StaffInventory) => {
     const total = assignment.quantityGiven || 0;
@@ -1232,9 +1479,10 @@ export default function StaffInventoryManagementPage() {
     setSelectedStaff(staff);
     
     const staffAssignments = inventoryAssignments.filter(
-      inv => inv.staffId === staff.id && inv.status !== 'COMPLETED'
+      inv => inv.staffId === staff.id && inv.status !== 'COMPLETED' && inv.isCurrentWeek
     );
     
+    // FIXED: Using nullish coalescing to convert null to undefined
     const returnItems = staffAssignments.map(assignment => {
       const remaining = (assignment.quantityGiven || 0) - 
                        (assignment.quantitySold || 0) - 
@@ -1245,19 +1493,21 @@ export default function StaffInventoryManagementPage() {
         quantityReturned: "0",
         productName: assignment.product?.name || 'Product',
         productId: assignment.productId,
-        maxReturnable: remaining
+        maxReturnable: remaining,
+        weekStartDate: assignment.weekStartDate ?? undefined,
+        weekEndDate: assignment.weekEndDate ?? undefined
       };
     }).filter(item => item.maxReturnable > 0);
     
     if (returnItems.length === 0) {
-      setError("No inventory to return for this staff");
+      setError("No inventory to return for this staff in the current week");
       setTimeout(() => setError(null), 3000);
       return;
     }
     
     setReturnForm({
       items: returnItems,
-      notes: `Return for ${staff.name}`
+      notes: `Return for ${staff.name} - Current Week`
     });
     setShowReturnModal(true);
   };
@@ -1267,9 +1517,32 @@ export default function StaffInventoryManagementPage() {
     return form.items.map(item => parseInt(item.productId)).filter(id => !isNaN(id));
   }, [form.items]);
 
+  // Group assignments by week
+  const getAssignmentsByWeek = () => {
+    const weekMap = new Map<string, StaffInventory[]>();
+    
+    filteredAssignments.forEach(assignment => {
+      if (!assignment.weekStartDate || !assignment.weekEndDate) return;
+      
+      const weekKey = `${assignment.weekStartDate}_${assignment.weekEndDate}`;
+      if (!weekMap.has(weekKey)) {
+        weekMap.set(weekKey, []);
+      }
+      weekMap.get(weekKey)!.push(assignment);
+    });
+    
+    return Array.from(weekMap.entries())
+      .map(([weekKey, assignments]) => {
+        const [weekStart, weekEnd] = weekKey.split('_');
+        return { weekStart, weekEnd, assignments };
+      })
+      .sort((a, b) => new Date(b.weekStart).getTime() - new Date(a.weekStart).getTime());
+  };
+
   // Stats calculation
   const stats = calculateStats();
   const staffAssignments = getStaffAssignments();
+  const assignmentsByWeek = getAssignmentsByWeek();
 
   // Mobile breakpoint
   const isMobile = typeof window !== 'undefined' && window.innerWidth < 768;
@@ -1287,8 +1560,8 @@ export default function StaffInventoryManagementPage() {
               <Menu className="w-5 h-5 text-slate-700" />
             </button>
             <div>
-              <h1 className="text-lg font-bold text-slate-900">Staff Inventory</h1>
-              <p className="text-xs text-slate-600">Manage product assignments</p>
+              <h1 className="text-lg font-bold text-slate-900">Weekly Staff Inventory</h1>
+              <p className="text-xs text-slate-600">Manage weekly product assignments</p>
             </div>
           </div>
           <div className="flex items-center gap-1">
@@ -1302,7 +1575,7 @@ export default function StaffInventoryManagementPage() {
             <button
               onClick={() => setShowAssignModal(true)}
               className="p-2 bg-gradient-to-r from-blue-600 to-blue-700 text-white rounded-xl shadow-sm hover:shadow transition-all hover:scale-105"
-              title="Assign Inventory"
+              title="Assign Weekly Inventory"
             >
               <Plus className="w-4 h-4" />
             </button>
@@ -1322,16 +1595,23 @@ export default function StaffInventoryManagementPage() {
           </Link>
           <div className="flex items-center gap-3">
             <div className="p-3 rounded-xl bg-gradient-to-br from-blue-600 to-purple-600 shadow-lg">
-              <Package className="w-6 h-6 text-white" />
+              <CalendarDays className="w-6 h-6 text-white" />
             </div>
             <div>
-              <h1 className="text-2xl font-bold text-slate-900">Staff Inventory Management</h1>
-              <p className="text-slate-600">Assign and track products with staff members</p>
+              <h1 className="text-2xl font-bold text-slate-900">Weekly Staff Inventory Management</h1>
+              <p className="text-slate-600">Assign and track products with staff members on a weekly basis</p>
             </div>
           </div>
         </div>
 
         <div className="flex items-center gap-3">
+          <button
+            onClick={() => handleCloseWeek()}
+            className="flex items-center gap-2 px-4 py-2.5 bg-gradient-to-r from-purple-600 to-purple-700 text-white rounded-xl hover:from-purple-700 hover:to-purple-800 transition-all shadow-sm"
+          >
+            <CheckSquare className="w-4 h-4" />
+            Close Current Week
+          </button>
           <button
             onClick={fetchData}
             className="flex items-center gap-2 px-4 py-2.5 border-2 border-slate-200 rounded-xl hover:border-blue-300 hover:bg-blue-50 transition-all text-slate-700 font-medium group"
@@ -1344,30 +1624,30 @@ export default function StaffInventoryManagementPage() {
             className="flex items-center gap-2 bg-gradient-to-r from-blue-600 to-purple-600 text-white px-5 py-2.5 rounded-xl hover:from-blue-700 hover:to-purple-700 transition-all shadow-lg hover:shadow-xl font-medium group hover:scale-[1.02]"
           >
             <Plus className="w-5 h-5 transition-transform group-hover:scale-110" />
-            <span>Assign Inventory</span>
+            <span>Assign Weekly Inventory</span>
           </button>
         </div>
       </div>
 
-      {/* Stats Dashboard */}
+      {/* Stats Dashboard with Weekly Focus */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
         <div className="bg-gradient-to-br from-blue-50 to-white rounded-2xl border border-blue-100 shadow-sm p-4">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-sm font-medium text-slate-600 mb-1">Active Assignments</p>
-              <p className="text-2xl font-bold text-blue-700">{stats.activeAssignments}</p>
+              <p className="text-sm font-medium text-slate-600 mb-1">Current Week</p>
+              <p className="text-2xl font-bold text-blue-700">{stats.currentWeekAssignments}</p>
               <p className="text-xs text-slate-500 mt-1">
-                {stats.staffWithInventory} staff members
+                Active assignments this week
               </p>
             </div>
             <div className="p-3 rounded-xl bg-gradient-to-br from-blue-100 to-blue-50">
-              <Users className="w-6 h-6 text-blue-600" />
+              <CalendarDays className="w-6 h-6 text-blue-600" />
             </div>
           </div>
           <div className="mt-3 h-1 bg-blue-100 rounded-full overflow-hidden">
             <div 
               className="h-full bg-gradient-to-r from-blue-500 to-blue-600 rounded-full"
-              style={{ width: `${(stats.activeAssignments / Math.max(stats.totalAssignments, 1)) * 100}%` }}
+              style={{ width: `${(stats.currentWeekAssignments / Math.max(stats.totalAssignments, 1)) * 100}%` }}
             ></div>
           </div>
         </div>
@@ -1375,10 +1655,10 @@ export default function StaffInventoryManagementPage() {
         <div className="bg-gradient-to-br from-emerald-50 to-white rounded-2xl border border-emerald-100 shadow-sm p-4">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-sm font-medium text-slate-600 mb-1">Stock with Staff</p>
-              <p className="text-2xl font-bold text-emerald-700">{stats.totalItemsRemaining}</p>
+              <p className="text-sm font-medium text-slate-600 mb-1">This Week Sales</p>
+              <p className="text-2xl font-bold text-emerald-700">{stats.currentWeekSales}</p>
               <p className="text-xs text-slate-500 mt-1">
-                {stats.totalProductsAssigned} products
+                Items sold this week
               </p>
             </div>
             <div className="p-3 rounded-xl bg-gradient-to-br from-emerald-100 to-emerald-50">
@@ -1388,7 +1668,7 @@ export default function StaffInventoryManagementPage() {
           <div className="mt-3 h-1 bg-emerald-100 rounded-full overflow-hidden">
             <div 
               className="h-full bg-gradient-to-r from-emerald-500 to-emerald-600 rounded-full"
-              style={{ width: `${Math.min((stats.totalItemsRemaining / 100) * 100, 100)}%` }}
+              style={{ width: `${Math.min((stats.currentWeekSales / 100) * 100, 100)}%` }}
             ></div>
           </div>
         </div>
@@ -1419,12 +1699,12 @@ export default function StaffInventoryManagementPage() {
         <div className="bg-gradient-to-br from-amber-50 to-white rounded-2xl border border-amber-100 shadow-sm p-4">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-sm font-medium text-slate-600 mb-1">Completion Rate</p>
+              <p className="text-sm font-medium text-slate-600 mb-1">Sell-through Rate</p>
               <p className="text-2xl font-bold text-amber-700">
                 {stats.averageCompletionRate.toFixed(1)}%
               </p>
               <p className="text-xs text-slate-500 mt-1">
-                {stats.completedAssignments} completed
+                Weekly performance average
               </p>
             </div>
             <div className="p-3 rounded-xl bg-gradient-to-br from-amber-100 to-amber-50">
@@ -1440,6 +1720,41 @@ export default function StaffInventoryManagementPage() {
         </div>
       </div>
 
+      {/* Weekly Performance Preview */}
+      {stats.weeklyPerformance.length > 0 && (
+        <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-4 mb-4">
+          <h3 className="font-semibold text-slate-900 mb-3">Weekly Performance History</h3>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+            {stats.weeklyPerformance.slice(0, 3).map((week, index) => (
+              <div key={index} className="border border-slate-200 rounded-xl p-3">
+                <div className="flex justify-between items-center mb-2">
+                  <span className="text-sm font-medium text-slate-900">
+                    {formatWeekRange(week.weekStart, week.weekEnd)}
+                  </span>
+                  <span className={`text-xs px-2 py-1 rounded-full ${week.sellThroughRate >= 70 ? 'bg-green-100 text-green-800' : week.sellThroughRate >= 50 ? 'bg-amber-100 text-amber-800' : 'bg-red-100 text-red-800'}`}>
+                    {week.sellThroughRate.toFixed(0)}%
+                  </span>
+                </div>
+                <div className="grid grid-cols-3 gap-2 text-xs">
+                  <div className="text-center">
+                    <div className="text-slate-600">Assigned</div>
+                    <div className="font-bold">{week.totalGiven}</div>
+                  </div>
+                  <div className="text-center">
+                    <div className="text-slate-600">Sold</div>
+                    <div className="font-bold text-green-600">{week.totalSold}</div>
+                  </div>
+                  <div className="text-center">
+                    <div className="text-slate-600">Returned</div>
+                    <div className="font-bold text-orange-600">{week.totalReturned}</div>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Search and Filter Section */}
       <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-4 mb-4">
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
@@ -1448,7 +1763,7 @@ export default function StaffInventoryManagementPage() {
               <Search className="absolute left-4 top-1/2 transform -translate-y-1/2 w-5 h-5 text-slate-400" />
               <input
                 type="text"
-                placeholder="Search staff, product, SKU, category, or phone..."
+                placeholder="Search staff, product, week, SKU, category, or phone..."
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
                 className="w-full pl-12 pr-4 py-3 border-2 border-slate-300 rounded-xl focus:border-blue-500 focus:ring-2 focus:ring-blue-200 text-sm placeholder-slate-500"
@@ -1478,7 +1793,7 @@ export default function StaffInventoryManagementPage() {
                 onChange={(e) => setSortBy(e.target.value as any)}
                 className="px-3 py-2 border-2 border-slate-300 rounded-xl bg-white text-sm focus:border-blue-500 focus:ring-2 focus:ring-blue-200"
               >
-                <option value="dueDate">Sort by Due Date</option>
+                <option value="week">Sort by Week</option>
                 <option value="staff">Sort by Staff</option>
                 <option value="totalValue">Sort by Value</option>
                 <option value="priority">Sort by Priority</option>
@@ -1486,6 +1801,13 @@ export default function StaffInventoryManagementPage() {
             </div>
 
             <div className="flex bg-slate-100 rounded-xl p-1">
+              <button
+                onClick={() => setViewMode('weeks')}
+                className={`p-2 rounded-lg ${viewMode === 'weeks' ? 'bg-white shadow-sm' : 'hover:bg-white/50'}`}
+                title="Week View"
+              >
+                <CalendarDays className="w-4 h-4" />
+              </button>
               <button
                 onClick={() => setViewMode('list')}
                 className={`p-2 rounded-lg ${viewMode === 'list' ? 'bg-white shadow-sm' : 'hover:bg-white/50'}`}
@@ -1581,19 +1903,19 @@ export default function StaffInventoryManagementPage() {
               <div className="absolute top-0 left-0 w-12 h-12 rounded-full border-4 border-blue-600 border-t-transparent animate-spin"></div>
             </div>
           </div>
-          <p className="mt-4 text-slate-600 font-medium">Loading inventory assignments...</p>
+          <p className="mt-4 text-slate-600 font-medium">Loading weekly inventory assignments...</p>
           <p className="text-sm text-slate-500">Fetching data from server</p>
         </div>
       ) : filteredAssignments.length === 0 ? (
         <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-12 text-center">
           <div className="w-20 h-20 mx-auto mb-6 rounded-full bg-gradient-to-br from-blue-100 to-blue-50 flex items-center justify-center">
-            <Users className="w-10 h-10 text-blue-400" />
+            <CalendarDays className="w-10 h-10 text-blue-400" />
           </div>
-          <h3 className="text-lg font-semibold text-slate-900 mb-2">No inventory assignments found</h3>
+          <h3 className="text-lg font-semibold text-slate-900 mb-2">No weekly inventory assignments found</h3>
           <p className="text-slate-600 mb-6 max-w-md mx-auto">
             {searchTerm 
               ? "No results match your search. Try different keywords or clear filters."
-              : "Get started by assigning products to your staff members."
+              : "Get started by assigning products to your staff members for the current week."
             }
           </p>
           {!searchTerm && (
@@ -1602,7 +1924,7 @@ export default function StaffInventoryManagementPage() {
               className="inline-flex items-center gap-2 bg-gradient-to-r from-blue-600 to-blue-700 text-white px-5 py-2.5 rounded-xl hover:from-blue-700 hover:to-blue-800 transition-all shadow-lg hover:shadow-xl font-medium"
             >
               <Plus className="w-5 h-5" />
-              Assign Your First Products
+              Assign Products for This Week
             </button>
           )}
         </div>
@@ -1612,6 +1934,9 @@ export default function StaffInventoryManagementPage() {
           <div className="mb-4 flex items-center justify-between text-sm text-slate-600">
             <div>
               Showing <span className="font-bold text-slate-900">{filteredAssignments.length}</span> assignments
+              <span className="ml-2">
+                across <span className="font-bold">{new Set(filteredAssignments.map(a => a.weekStartDate)).size}</span> weeks
+              </span>
             </div>
             <div className="flex items-center gap-4">
               <div className="flex items-center gap-2">
@@ -1629,13 +1954,35 @@ export default function StaffInventoryManagementPage() {
             </div>
           </div>
 
-          {/* Assignments Grid */}
-          {viewMode === 'grid' ? (
+          {/* Assignments Views */}
+          {viewMode === 'weeks' ? (
+            <div className="space-y-4">
+              {assignmentsByWeek.map((week) => (
+                <WeekViewComponent
+                  key={`${week.weekStart}_${week.weekEnd}`}
+                  weekStart={week.weekStart}
+                  weekEnd={week.weekEnd}
+                  assignments={week.assignments}
+                  onCloseWeek={() => {
+                    const staffIds = new Set(week.assignments.map(a => a.staffId));
+                    if (staffIds.size === 1) {
+                      handleCloseWeek(Array.from(staffIds)[0]);
+                    } else {
+                      handleCloseWeek();
+                    }
+                  }}
+                />
+              ))}
+            </div>
+          ) : viewMode === 'grid' ? (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
               {filteredAssignments.map((assignment) => {
                 const remaining = assignment.quantityGiven - assignment.quantitySold - assignment.quantityReturned;
-                const daysRemaining = calculateDaysRemaining(assignment.dueDate);
+                const daysRemaining = assignment.weekEndDate ? getDaysRemainingInWeek(assignment.weekEndDate) : 0;
                 const progress = calculateSalesProgress(assignment);
+                const weekRange = assignment.weekStartDate && assignment.weekEndDate 
+                  ? formatWeekRange(assignment.weekStartDate, assignment.weekEndDate)
+                  : 'No week assigned';
 
                 return (
                   <div key={assignment.id} className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden hover:shadow-lg transition-all duration-300 hover:border-blue-300 group">
@@ -1657,7 +2004,7 @@ export default function StaffInventoryManagementPage() {
 
                     <div className="p-5">
                       {/* Staff Info */}
-                      <div className="flex items-center gap-3 mb-4">
+                      <div className="flex items-center gap-3 mb-3">
                         <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-blue-100 to-blue-200 flex items-center justify-center">
                           <User className="w-6 h-6 text-blue-600" />
                         </div>
@@ -1666,6 +2013,14 @@ export default function StaffInventoryManagementPage() {
                           {assignment.staff?.phone && (
                             <p className="text-sm text-slate-600">{assignment.staff.phone}</p>
                           )}
+                        </div>
+                      </div>
+
+                      {/* Week Info */}
+                      <div className="mb-3">
+                        <div className="flex items-center gap-2 text-sm text-slate-600">
+                          <CalendarDays className="w-4 h-4" />
+                          <span>{weekRange}</span>
                         </div>
                       </div>
 
@@ -1715,23 +2070,25 @@ export default function StaffInventoryManagementPage() {
                           </div>
                         </div>
 
-                        {/* Value & Date */}
+                        {/* Value & Days */}
                         <div className="flex items-center justify-between text-sm">
                           <div className="text-slate-600">
                             Value: <span className="font-bold text-green-600">
                               KES {assignment.totalSalesAmount.toLocaleString()}
                             </span>
                           </div>
-                          <div className={`text-sm font-medium ${daysRemaining > 0 ? 'text-emerald-600' : 'text-red-600'}`}>
-                            {daysRemaining > 0 ? `${daysRemaining}d left` : `${Math.abs(daysRemaining)}d overdue`}
-                          </div>
+                          {daysRemaining > 0 && (
+                            <div className="text-sm font-medium text-emerald-600">
+                              {daysRemaining}d left in week
+                            </div>
+                          )}
                         </div>
                       </div>
 
                       {/* Actions */}
                       <div className="mt-5 pt-4 border-t border-slate-100">
                         <div className="flex gap-2">
-                          {remaining > 0 && (
+                          {remaining > 0 && assignment.isCurrentWeek && (
                             <button
                               onClick={() => {
                                 setSelectedStaff(assignment.staff);
@@ -1741,7 +2098,9 @@ export default function StaffInventoryManagementPage() {
                                     quantityReturned: "1",
                                     productName: assignment.product?.name || '',
                                     productId: assignment.productId,
-                                    maxReturnable: remaining
+                                    maxReturnable: remaining,
+                                    weekStartDate: assignment.weekStartDate ?? undefined,
+                                    weekEndDate: assignment.weekEndDate ?? undefined
                                   }],
                                   notes: ""
                                 });
@@ -1796,8 +2155,10 @@ export default function StaffInventoryManagementPage() {
                   <div className="p-5">
                     <div className="grid grid-cols-4 gap-3 mb-4">
                       <div className="bg-slate-50 rounded-xl p-3 text-center">
-                        <div className="text-xs text-slate-600 mb-1">Assignments</div>
-                        <div className="text-lg font-bold text-slate-900">{group.assignments.length}</div>
+                        <div className="text-xs text-slate-600 mb-1">Weeks</div>
+                        <div className="text-lg font-bold text-slate-900">
+                          {new Set(group.assignments.map(a => a.weekStartDate)).size}
+                        </div>
                       </div>
                       <div className="bg-emerald-50 rounded-xl p-3 text-center">
                         <div className="text-xs text-emerald-600 mb-1">Sold</div>
@@ -1821,39 +2182,46 @@ export default function StaffInventoryManagementPage() {
 
                     {/* Assignment List */}
                     <div className="space-y-3">
-                      {group.assignments.slice(0, 3).map((assignment) => (
-                        <div key={assignment.id} className="bg-gradient-to-r from-slate-50/50 to-white border border-slate-100 rounded-xl p-3">
-                          <div className="flex items-center justify-between mb-2">
-                            <div className="flex items-center gap-2">
-                              <Package className="w-4 h-4 text-slate-500" />
-                              <span className="font-medium text-slate-900 text-sm">{assignment.product?.name}</span>
+                      {group.assignments.slice(0, 3).map((assignment) => {
+                        const weekRange = assignment.weekStartDate && assignment.weekEndDate 
+                          ? formatWeekRange(assignment.weekStartDate, assignment.weekEndDate)
+                          : 'No week';
+                        
+                        return (
+                          <div key={assignment.id} className="bg-gradient-to-r from-slate-50/50 to-white border border-slate-100 rounded-xl p-3">
+                            <div className="flex items-center justify-between mb-2">
+                              <div className="flex items-center gap-2">
+                                <Package className="w-4 h-4 text-slate-500" />
+                                <span className="font-medium text-slate-900 text-sm">{assignment.product?.name}</span>
+                              </div>
+                              <span className={`px-2 py-1 rounded-full text-xs font-medium ${getStatusColor(assignment.status)}`}>
+                                {assignment.status}
+                              </span>
                             </div>
-                            <span className={`px-2 py-1 rounded-full text-xs font-medium ${getStatusColor(assignment.status)}`}>
-                              {assignment.status}
-                            </span>
-                          </div>
-                          <div className="grid grid-cols-3 gap-2 text-xs">
-                            <div className="text-center">
-                              <div className="text-slate-600">Given</div>
-                              <div className="font-bold">{assignment.quantityGiven}</div>
-                            </div>
-                            <div className="text-center">
-                              <div className="text-slate-600">Sold</div>
-                              <div className="font-bold text-emerald-600">{assignment.quantitySold}</div>
-                            </div>
-                            <div className="text-center">
-                              <div className="text-slate-600">Left</div>
-                              <div className="font-bold text-blue-600">
-                                {assignment.quantityGiven - assignment.quantitySold - assignment.quantityReturned}
+                            <div className="text-xs text-slate-500 mb-2">{weekRange}</div>
+                            <div className="grid grid-cols-3 gap-2 text-xs">
+                              <div className="text-center">
+                                <div className="text-slate-600">Given</div>
+                                <div className="font-bold">{assignment.quantityGiven}</div>
+                              </div>
+                              <div className="text-center">
+                                <div className="text-slate-600">Sold</div>
+                                <div className="font-bold text-emerald-600">{assignment.quantitySold}</div>
+                              </div>
+                              <div className="text-center">
+                                <div className="text-slate-600">Left</div>
+                                <div className="font-bold text-blue-600">
+                                  {assignment.quantityGiven - assignment.quantitySold - assignment.quantityReturned}
+                                </div>
                               </div>
                             </div>
                           </div>
-                        </div>
-                      ))}
+                        );
+                      })}
                       
                       {group.assignments.length > 3 && (
                         <div className="text-center text-sm text-blue-600 font-medium">
-                          +{group.assignments.length - 3} more assignments
+                          +{group.assignments.length - 3} more weekly assignments
                         </div>
                       )}
                     </div>
@@ -1872,6 +2240,9 @@ export default function StaffInventoryManagementPage() {
                         Staff
                       </th>
                       <th className="px-6 py-4 text-left text-xs font-semibold text-slate-700 uppercase tracking-wider">
+                        Week
+                      </th>
+                      <th className="px-6 py-4 text-left text-xs font-semibold text-slate-700 uppercase tracking-wider">
                         Product
                       </th>
                       <th className="px-6 py-4 text-left text-xs font-semibold text-slate-700 uppercase tracking-wider">
@@ -1881,9 +2252,6 @@ export default function StaffInventoryManagementPage() {
                         Status
                       </th>
                       <th className="px-6 py-4 text-left text-xs font-semibold text-slate-700 uppercase tracking-wider">
-                        Due Date
-                      </th>
-                      <th className="px-6 py-4 text-left text-xs font-semibold text-slate-700 uppercase tracking-wider">
                         Actions
                       </th>
                     </tr>
@@ -1891,8 +2259,9 @@ export default function StaffInventoryManagementPage() {
                   <tbody className="divide-y divide-slate-100">
                     {filteredAssignments.map((assignment) => {
                       const remaining = assignment.quantityGiven - assignment.quantitySold - assignment.quantityReturned;
-                      const daysRemaining = calculateDaysRemaining(assignment.dueDate);
-                      const progress = calculateSalesProgress(assignment);
+                      const weekRange = assignment.weekStartDate && assignment.weekEndDate 
+                        ? formatWeekRange(assignment.weekStartDate, assignment.weekEndDate)
+                        : 'No week';
 
                       return (
                         <tr key={assignment.id} className="hover:bg-slate-50/50 transition-colors">
@@ -1908,6 +2277,9 @@ export default function StaffInventoryManagementPage() {
                                 )}
                               </div>
                             </div>
+                          </td>
+                          <td className="px-6 py-4">
+                            <div className="text-sm font-medium text-slate-900">{weekRange}</div>
                           </td>
                           <td className="px-6 py-4">
                             <div className="font-medium text-slate-900">{assignment.product?.name}</div>
@@ -1944,14 +2316,8 @@ export default function StaffInventoryManagementPage() {
                             </div>
                           </td>
                           <td className="px-6 py-4">
-                            <div className="text-sm text-slate-900">{new Date(assignment.dueDate).toLocaleDateString()}</div>
-                            <div className={`text-xs font-medium ${daysRemaining > 0 ? 'text-emerald-600' : 'text-red-600'}`}>
-                              {daysRemaining > 0 ? `${daysRemaining}d left` : `${Math.abs(daysRemaining)}d overdue`}
-                            </div>
-                          </td>
-                          <td className="px-6 py-4">
                             <div className="flex items-center gap-2">
-                              {remaining > 0 && (
+                              {remaining > 0 && assignment.isCurrentWeek && (
                                 <button
                                   onClick={() => {
                                     setSelectedStaff(assignment.staff);
@@ -1961,7 +2327,9 @@ export default function StaffInventoryManagementPage() {
                                         quantityReturned: "1",
                                         productName: assignment.product?.name || '',
                                         productId: assignment.productId,
-                                        maxReturnable: remaining
+                                        maxReturnable: remaining,
+                                        weekStartDate: assignment.weekStartDate ?? undefined,
+                                        weekEndDate: assignment.weekEndDate ?? undefined
                                       }],
                                       notes: ""
                                     });
@@ -1995,8 +2363,8 @@ export default function StaffInventoryManagementPage() {
 
       {/* Footer */}
       <div className="mt-8 text-center text-slate-500 text-sm">
-        <p>© {new Date().getFullYear()} Swift Metals POS • Staff Inventory Management System v2.0</p>
-        <p className="text-xs mt-1">Total assignments: {stats.totalAssignments} • Last updated: {new Date().toLocaleTimeString()}</p>
+        <p>© {new Date().getFullYear()} Swift Metals POS • Weekly Staff Inventory Management System v2.0</p>
+        <p className="text-xs mt-1">Total weekly assignments: {stats.totalAssignments} • Current week: {formatWeekRange(currentWeek.weekStartDate, currentWeek.weekEndDate)}</p>
       </div>
 
       {/* Product Search Modal */}
@@ -2008,7 +2376,7 @@ export default function StaffInventoryManagementPage() {
         excludedIds={excludedProductIds}
       />
 
-      {/* Assign Inventory Modal */}
+      {/* Assign Weekly Inventory Modal */}
       {showAssignModal && (
         <div className="fixed inset-0 bg-black/70 flex items-center justify-center p-2 md:p-4 z-50">
           <div className="bg-white rounded-2xl w-full max-w-4xl shadow-2xl max-h-[90vh] flex flex-col">
@@ -2017,11 +2385,11 @@ export default function StaffInventoryManagementPage() {
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-3">
                   <div className="p-2 bg-white/20 rounded-lg">
-                    <Package className="w-5 h-5 md:w-6 md:h-6" />
+                    <CalendarDays className="w-5 h-5 md:w-6 md:h-6" />
                   </div>
                   <div>
-                    <h2 className="text-xl md:text-2xl font-bold">Assign Products to Staff</h2>
-                    <p className="text-blue-100 text-sm">Select products and assign to staff member</p>
+                    <h2 className="text-xl md:text-2xl font-bold">Assign Products for the Week</h2>
+                    <p className="text-blue-100 text-sm">Select products and assign to staff member for the week</p>
                   </div>
                 </div>
                 <button
@@ -2030,8 +2398,8 @@ export default function StaffInventoryManagementPage() {
                     setForm({ 
                       staffId: "", 
                       items: [],
-                      assignmentDate: new Date().toISOString().split('T')[0],
-                      dueDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+                      weekStartDate: currentWeek.weekStartDate,
+                      weekEndDate: currentWeek.weekEndDate,
                       notes: "",
                       priority: 'MEDIUM'
                     });
@@ -2065,10 +2433,52 @@ export default function StaffInventoryManagementPage() {
                 </select>
               </div>
 
+              {/* Week Selection */}
+              <div className="mb-6">
+                <label className="block text-sm font-semibold text-slate-900 mb-2">
+                  Week Dates *
+                </label>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <div className="text-xs text-slate-600 mb-1">Week Start (Monday)</div>
+                    <input
+                      type="date"
+                      value={form.weekStartDate}
+                      onChange={(e) => {
+                        const startDate = e.target.value;
+                        const endDate = new Date(startDate);
+                        endDate.setDate(endDate.getDate() + 6);
+                        setForm({ 
+                          ...form, 
+                          weekStartDate: startDate,
+                          weekEndDate: endDate.toISOString().split('T')[0]
+                        });
+                      }}
+                      className="w-full px-4 py-3 border-2 border-slate-300 rounded-xl focus:border-blue-500 focus:ring-2 focus:ring-blue-200 text-sm"
+                      disabled={submitting}
+                    />
+                  </div>
+                  <div>
+                    <div className="text-xs text-slate-600 mb-1">Week End (Sunday)</div>
+                    <input
+                      type="date"
+                      value={form.weekEndDate}
+                      onChange={(e) => setForm({ ...form, weekEndDate: e.target.value })}
+                      min={form.weekStartDate}
+                      className="w-full px-4 py-3 border-2 border-slate-300 rounded-xl focus:border-blue-500 focus:ring-2 focus:ring-blue-200 text-sm"
+                      disabled={submitting}
+                    />
+                  </div>
+                </div>
+                <div className="mt-2 text-xs text-slate-500">
+                  Week: {form.weekStartDate} to {form.weekEndDate}
+                </div>
+              </div>
+
               {/* Product Search Section */}
               <div className="mb-6">
                 <label className="block text-sm font-semibold text-slate-900 mb-2">
-                  Add Products
+                  Add Products for this Week
                 </label>
                 <ProductSearchInput
                   value=""
@@ -2103,41 +2513,12 @@ export default function StaffInventoryManagementPage() {
                         onRemove={() => removeItemFromForm(index)}
                         quantity={parseInt(item.quantity)}
                         onQuantityChange={(qty) => updateItemQuantity(index, qty)}
-                        availableStock={getRemainingStockAfterAssignments(parseInt(item.productId))}
+                        availableStock={getRemainingStockAfterAssignments(parseInt(item.productId), form.weekStartDate)}
                       />
                     ))}
                   </div>
                 </div>
               )}
-
-              {/* Assignment Details */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
-                <div>
-                  <label className="block text-sm font-semibold text-slate-900 mb-2">
-                    Assignment Date
-                  </label>
-                  <input
-                    type="date"
-                    value={form.assignmentDate}
-                    onChange={(e) => setForm({ ...form, assignmentDate: e.target.value })}
-                    className="w-full px-4 py-3 border-2 border-slate-300 rounded-xl focus:border-blue-500 focus:ring-2 focus:ring-blue-200 text-sm"
-                    disabled={submitting}
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-semibold text-slate-900 mb-2">
-                    Due Date *
-                  </label>
-                  <input
-                    type="date"
-                    value={form.dueDate}
-                    onChange={(e) => setForm({ ...form, dueDate: e.target.value })}
-                    min={form.assignmentDate}
-                    className="w-full px-4 py-3 border-2 border-slate-300 rounded-xl focus:border-blue-500 focus:ring-2 focus:ring-blue-200 text-sm"
-                    disabled={submitting}
-                  />
-                </div>
-              </div>
 
               {/* Priority */}
               <div className="mb-6">
@@ -2169,7 +2550,7 @@ export default function StaffInventoryManagementPage() {
                 <textarea
                   value={form.notes}
                   onChange={(e) => setForm({ ...form, notes: e.target.value })}
-                  placeholder="Add any special instructions, guidelines, or notes for this assignment..."
+                  placeholder="Add any special instructions, guidelines, or notes for this weekly assignment..."
                   rows={3}
                   className="w-full px-4 py-3 border-2 border-slate-300 rounded-xl focus:border-blue-500 focus:ring-2 focus:ring-blue-200 text-sm"
                   disabled={submitting}
@@ -2179,7 +2560,7 @@ export default function StaffInventoryManagementPage() {
               {/* Summary */}
               {form.items.length > 0 && (
                 <div className="mb-6 bg-gradient-to-r from-slate-50 to-blue-50/50 rounded-xl p-4">
-                  <h4 className="font-semibold text-slate-900 mb-3">Assignment Summary</h4>
+                  <h4 className="font-semibold text-slate-900 mb-3">Weekly Assignment Summary</h4>
                   <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                     <div className="text-center">
                       <div className="text-xs text-slate-600">Total Items</div>
@@ -2198,9 +2579,9 @@ export default function StaffInventoryManagementPage() {
                       </div>
                     </div>
                     <div className="text-center">
-                      <div className="text-xs text-slate-600">Staff Member</div>
+                      <div className="text-xs text-slate-600">Week</div>
                       <div className="text-xl font-bold text-blue-600">
-                        {staffList.find(s => s.id === parseInt(form.staffId))?.name || 'Not selected'}
+                        {new Date(form.weekStartDate).toLocaleDateString('en-KE', { day: '2-digit', month: 'short' })}
                       </div>
                     </div>
                   </div>
@@ -2217,8 +2598,8 @@ export default function StaffInventoryManagementPage() {
                     setForm({ 
                       staffId: "", 
                       items: [],
-                      assignmentDate: new Date().toISOString().split('T')[0],
-                      dueDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+                      weekStartDate: currentWeek.weekStartDate,
+                      weekEndDate: currentWeek.weekEndDate,
                       notes: "",
                       priority: 'MEDIUM'
                     });
@@ -2242,8 +2623,8 @@ export default function StaffInventoryManagementPage() {
                     </>
                   ) : (
                     <>
-                      <Package className="w-5 h-5" />
-                      Assign {form.items.length} Item{form.items.length !== 1 ? 's' : ''}
+                      <CalendarDays className="w-5 h-5" />
+                      Assign for the Week
                     </>
                   )}
                 </button>
@@ -2266,7 +2647,7 @@ export default function StaffInventoryManagementPage() {
                   </div>
                   <div>
                     <h2 className="text-xl md:text-2xl font-bold">Return Inventory</h2>
-                    <p className="text-amber-100 text-sm">Return items from {selectedStaff.name}</p>
+                    <p className="text-amber-100 text-sm">Return items from {selectedStaff.name} (Current Week)</p>
                   </div>
                 </div>
                 <button
@@ -2287,69 +2668,75 @@ export default function StaffInventoryManagementPage() {
               {/* Items to Return */}
               <div className="mb-6">
                 <label className="block text-sm font-semibold text-slate-900 mb-3">
-                  Select items to return from {selectedStaff.name}
+                  Select items to return from {selectedStaff.name} (Current Week)
                 </label>
                 
                 <div className="space-y-3">
-                  {returnForm.items.map((item, index) => (
-                    <div key={item.assignmentId} className="border-2 border-slate-200 rounded-xl p-4 bg-slate-50/50">
-                      <div className="flex justify-between items-start mb-3">
-                        <div>
-                          <div className="font-medium text-slate-900">{item.productName}</div>
-                          <div className="text-xs text-slate-500">Max returnable: {item.maxReturnable}</div>
+                  {returnForm.items.map((item, index) => {
+                    const weekRange = item.weekStartDate && item.weekEndDate 
+                      ? formatWeekRange(item.weekStartDate, item.weekEndDate)
+                      : 'Current Week';
+                    
+                    return (
+                      <div key={item.assignmentId} className="border-2 border-slate-200 rounded-xl p-4 bg-slate-50/50">
+                        <div className="flex justify-between items-start mb-3">
+                          <div>
+                            <div className="font-medium text-slate-900">{item.productName}</div>
+                            <div className="text-xs text-slate-500">{weekRange}</div>
+                          </div>
+                          <div className="text-sm font-semibold text-slate-700">
+                            Max: {item.maxReturnable}
+                          </div>
                         </div>
-                        <div className="text-sm font-semibold text-slate-700">
-                          ID: {item.assignmentId}
-                        </div>
-                      </div>
-                      
-                      <div className="flex items-center gap-3">
-                        <div className="flex-1">
-                          <div className="text-xs text-slate-600 mb-1">Quantity to Return</div>
-                          <input
-                            type="range"
-                            min="0"
-                            max={item.maxReturnable}
-                            value={parseInt(item.quantityReturned) || 0}
-                            onChange={(e) => {
+                        
+                        <div className="flex items-center gap-3">
+                          <div className="flex-1">
+                            <div className="text-xs text-slate-600 mb-1">Quantity to Return</div>
+                            <input
+                              type="range"
+                              min="0"
+                              max={item.maxReturnable}
+                              value={parseInt(item.quantityReturned) || 0}
+                              onChange={(e) => {
+                                const newItems = [...returnForm.items];
+                                newItems[index].quantityReturned = e.target.value;
+                                setReturnForm({ ...returnForm, items: newItems });
+                              }}
+                              className="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:h-5 [&::-webkit-slider-thumb]:w-5 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-amber-500"
+                              disabled={submitting}
+                            />
+                          </div>
+                          <div className="w-20">
+                            <input
+                              type="number"
+                              min="0"
+                              max={item.maxReturnable}
+                              value={item.quantityReturned}
+                              onChange={(e) => {
+                                const newItems = [...returnForm.items];
+                                newItems[index].quantityReturned = e.target.value;
+                                setReturnForm({ ...returnForm, items: newItems });
+                              }}
+                              className="w-full px-3 py-2 border-2 border-slate-300 rounded-lg focus:border-amber-500 focus:ring-2 focus:ring-amber-200 text-sm text-center"
+                              disabled={submitting}
+                            />
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => {
                               const newItems = [...returnForm.items];
-                              newItems[index].quantityReturned = e.target.value;
+                              newItems[index].quantityReturned = item.maxReturnable.toString();
                               setReturnForm({ ...returnForm, items: newItems });
                             }}
-                            className="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:h-5 [&::-webkit-slider-thumb]:w-5 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-amber-500"
+                            className="px-3 py-2 bg-amber-100 text-amber-700 rounded-lg hover:bg-amber-200 text-sm font-medium"
                             disabled={submitting}
-                          />
+                          >
+                            Max
+                          </button>
                         </div>
-                        <div className="w-20">
-                          <input
-                            type="number"
-                            min="0"
-                            max={item.maxReturnable}
-                            value={item.quantityReturned}
-                            onChange={(e) => {
-                              const newItems = [...returnForm.items];
-                              newItems[index].quantityReturned = e.target.value;
-                              setReturnForm({ ...returnForm, items: newItems });
-                            }}
-                            className="w-full px-3 py-2 border-2 border-slate-300 rounded-lg focus:border-amber-500 focus:ring-2 focus:ring-amber-200 text-sm text-center"
-                            disabled={submitting}
-                          />
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const newItems = [...returnForm.items];
-                            newItems[index].quantityReturned = item.maxReturnable.toString();
-                            setReturnForm({ ...returnForm, items: newItems });
-                          }}
-                          className="px-3 py-2 bg-amber-100 text-amber-700 rounded-lg hover:bg-amber-200 text-sm font-medium"
-                          disabled={submitting}
-                        >
-                          Max
-                        </button>
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
 

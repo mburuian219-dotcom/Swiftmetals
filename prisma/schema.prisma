@@ -319,21 +319,28 @@ model staff {
 }
 
 model staffInventory {
-  id              Int       @id @default(autoincrement())
-  staffId         Int
-  productId       Int
-  quantityGiven   Int
-  quantitySold    Int       @default(0)
-  quantityReturned Int      @default(0)
-  staff           staff     @relation(fields: [staffId], references: [id])
-  product         product   @relation(fields: [productId], references: [id])
-  saleItems       saleitem[]
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
+  id               Int       @id @default(autoincrement())
+  staffId          Int
+  productId        Int
+
+  weekStartDate    DateTime?  // TEMP
+  weekEndDate      DateTime?  // TEMP
+
+  quantityGiven    Int
+  quantitySold     Int       @default(0)
+  quantityReturned Int       @default(0)
+
+  staff            staff     @relation(fields: [staffId], references: [id])
+  product          product   @relation(fields: [productId], references: [id])
+  saleItems        saleitem[]
+
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
 
   @@index([staffId])
   @@index([productId])
 }
+
 
 model smsreminder {
   id          Int       @id @default(autoincrement())

@@ -28,7 +28,6 @@ async function findStaffByEmailCaseInsensitive(email: string) {
   
   const normalizedEmail = normalizeEmail(email);
   
-  // For MySQL, we need to handle case-insensitive search differently
   // First try exact match
   let staff = await prisma.staff.findFirst({
     where: { 
@@ -75,7 +74,7 @@ async function findOrCreateStaff(userEmail: string, userName?: string) {
       staff = await prisma.staff.create({
         data: {
           name,
-          email: normalizedEmail, // Always store normalized email
+          email: normalizedEmail,
           phone: null
         }
       });
@@ -88,6 +87,171 @@ async function findOrCreateStaff(userEmail: string, userName?: string) {
   } catch (error: any) {
     console.error("❌ Error in findOrCreateStaff:", error);
     return null;
+  }
+}
+
+// Helper function to deduct from staff inventory
+async function deductStaffInventory(saleId: number, staffId: number, items: Array<{productId: number, quantity: number}>) {
+  try {
+    console.log(`🔍 Processing staff inventory deductions for sale ${saleId}, staff ${staffId}`);
+    
+    // Get current week dates
+    const now = new Date();
+    const dayOfWeek = now.getDay();
+    let diffToMonday = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
+    
+    const weekStart = new Date(now);
+    weekStart.setDate(now.getDate() + diffToMonday);
+    weekStart.setHours(0, 0, 0, 0);
+    
+    const weekEnd = new Date(weekStart);
+    weekEnd.setDate(weekStart.getDate() + 6);
+    weekEnd.setHours(23, 59, 59, 999);
+    
+    console.log(`📅 Current week: ${weekStart.toLocaleDateString()} - ${weekEnd.toLocaleDateString()}`);
+    
+    const results = [];
+    
+    for (const item of items) {
+      console.log(`🛍️ Processing item: Product ${item.productId}, Quantity ${item.quantity}`);
+      
+      // Find staff's current week inventory for this product
+      const staffInventory = await prisma.staffInventory.findFirst({
+        where: {
+          staffId: staffId,
+          productId: item.productId,
+          weekStartDate: {
+            lte: weekEnd
+          },
+          weekEndDate: {
+            gte: weekStart
+          }
+        },
+        orderBy: {
+          createdAt: 'desc'
+        }
+      });
+      
+      if (staffInventory) {
+        console.log(`✅ Found staff inventory: ID ${staffInventory.id}, Given: ${staffInventory.quantityGiven}, Sold: ${staffInventory.quantitySold}, Returned: ${staffInventory.quantityReturned}`);
+        
+        // Calculate available quantity
+        const availableQuantity = staffInventory.quantityGiven - staffInventory.quantitySold - staffInventory.quantityReturned;
+        
+        if (availableQuantity >= item.quantity) {
+          // Update staff inventory quantity sold
+          const updatedInventory = await prisma.staffInventory.update({
+            where: { id: staffInventory.id },
+            data: {
+              quantitySold: staffInventory.quantitySold + item.quantity,
+              updatedAt: new Date()
+            }
+          });
+          
+          console.log(`📉 Updated staff inventory ${staffInventory.id}: Sold +${item.quantity} = ${updatedInventory.quantitySold} total sold`);
+          
+          // Find the specific sale item to link it
+          const saleItemRecord = await prisma.saleitem.findFirst({
+            where: {
+              saleId: saleId,
+              productId: item.productId
+            },
+            orderBy: { id: 'desc' }
+          });
+          
+          if (saleItemRecord) {
+            // Link sale item to staff inventory
+            await prisma.saleitem.update({
+              where: { id: saleItemRecord.id },
+              data: { 
+                staffInventoryId: staffInventory.id 
+              }
+            });
+            
+            console.log(`🔗 Linked sale item ${saleItemRecord.id} to staff inventory ${staffInventory.id}`);
+            
+            results.push({
+              productId: item.productId,
+              status: 'SUCCESS',
+              staffInventoryId: staffInventory.id,
+              quantityDeducted: item.quantity,
+              newTotalSold: updatedInventory.quantitySold
+            });
+          }
+        } else {
+          console.warn(`⚠️ Insufficient staff inventory for product ${item.productId}. Available: ${availableQuantity}, Requested: ${item.quantity}`);
+          
+          // Still try to use what's available
+          if (availableQuantity > 0) {
+            const updatedInventory = await prisma.staffInventory.update({
+              where: { id: staffInventory.id },
+              data: {
+                quantitySold: staffInventory.quantitySold + availableQuantity,
+                updatedAt: new Date()
+              }
+            });
+            
+            console.log(`📉 Used available staff inventory: ${availableQuantity} items (of ${item.quantity} requested)`);
+            
+            // Link sale item if found
+            const saleItemRecord = await prisma.saleitem.findFirst({
+              where: {
+                saleId: saleId,
+                productId: item.productId
+              },
+              orderBy: { id: 'desc' }
+            });
+            
+            if (saleItemRecord) {
+              await prisma.saleitem.update({
+                where: { id: saleItemRecord.id },
+                data: { 
+                  staffInventoryId: staffInventory.id 
+                }
+              });
+            }
+            
+            results.push({
+              productId: item.productId,
+              status: 'PARTIAL',
+              staffInventoryId: staffInventory.id,
+              quantityDeducted: availableQuantity,
+              quantityRequested: item.quantity,
+              newTotalSold: updatedInventory.quantitySold
+            });
+          } else {
+            results.push({
+              productId: item.productId,
+              status: 'NO_STOCK',
+              staffInventoryId: staffInventory.id,
+              quantityDeducted: 0,
+              quantityRequested: item.quantity
+            });
+          }
+        }
+      } else {
+        console.log(`ℹ️ No staff inventory found for product ${item.productId} in current week`);
+        
+        results.push({
+          productId: item.productId,
+          status: 'NO_INVENTORY',
+          quantityRequested: item.quantity
+        });
+      }
+    }
+    
+    console.log(`✅ Completed staff inventory deductions`);
+    return {
+      success: true,
+      results: results
+    };
+    
+  } catch (error: any) {
+    console.error("❌ Error in deductStaffInventory:", error);
+    return {
+      success: false,
+      error: error.message
+    };
   }
 }
 
@@ -112,10 +276,8 @@ function processSale(sale: any) {
     totalPaid,
     remainingAmount,
     status,
-    // Display user info (already normalized)
     createdBy: sale.createdBy || "SYSTEM",
     updatedBy: sale.updatedBy || "SYSTEM",
-    // Include staff info
     staff: sale.staff || null
   };
 }
@@ -138,7 +300,6 @@ export async function GET(req: NextRequest) {
     }
     
     if (createdBy && isValidEmail(createdBy)) {
-      // Search with normalized email
       const normalizedSearch = normalizeEmail(createdBy);
       where.createdBy = { contains: normalizedSearch };
     }
@@ -159,11 +320,12 @@ export async function GET(req: NextRequest) {
         customer: true,
         saleitem: { 
           include: { 
-            product: true 
+            product: true,
+            staffInventory: true
           } 
         },
         payment: true,
-        staff: true, // Include staff relation
+        staff: true,
       },
       orderBy: { createdAt: "desc" },
     });
@@ -175,20 +337,14 @@ export async function GET(req: NextRequest) {
   }
 }
 
-// ================== CREATE SALE (FIXED EMAIL HANDLING) ==================
+// ================== CREATE SALE (WITH STAFF INVENTORY DEDUCTION) ==================
 export async function POST(req: NextRequest) {
   try {
     const data = await req.json();
     
-    // Debug: Log raw request data
-    console.log("📨 Raw request data keys:", Object.keys(data));
-    if (data.authInfo) {
-      console.log("🔐 Auth info:", data.authInfo);
-    }
+    console.log("📨 Creating sale...");
     
-    console.log("📦 Creating sale...");
-    
-    // ✅ EXTRACT USER INFO CORRECTLY
+    // ✅ EXTRACT USER INFO
     let userId = "";
     let userEmail = "";
     let userName = "";
@@ -202,7 +358,6 @@ export async function POST(req: NextRequest) {
     
     // If no structured auth info, check individual fields
     if (!userEmail) {
-      // Check each possible field for email
       const possibleEmailFields = ['email', 'userEmail', 'createdBy', 'userName', 'user'];
       for (const field of possibleEmailFields) {
         if (data[field] && isValidEmail(data[field])) {
@@ -213,7 +368,6 @@ export async function POST(req: NextRequest) {
     }
     
     if (!userId) {
-      // Check for Firebase UID
       const possibleUidFields = ['userId', 'uid', 'userEmail', 'createdBy'];
       for (const field of possibleUidFields) {
         if (data[field] && isFirebaseUid(data[field])) {
@@ -245,7 +399,7 @@ export async function POST(req: NextRequest) {
       isValidEmail: isValidEmail(normalizedUserEmail)
     });
     
-    // ✅ CRITICAL: Find or create staff record ONLY for valid emails
+    // ✅ CRITICAL: Find or create staff record
     let staffRecord = null;
     let staffId = null;
     
@@ -306,10 +460,9 @@ export async function POST(req: NextRequest) {
         dueDate: data.dueDate ? new Date(data.dueDate) : null,
         paymentMethod: data.paymentMethod || "CASH",
         status: "UNPAID",
-        // Store PROPER email (not UID) and staff ID
-        createdBy: normalizedUserEmail, // This should now be actual email, not UID
+        createdBy: normalizedUserEmail,
         updatedBy: normalizedUserEmail,
-        createdById: staffId, // Link to staff
+        createdById: staffId,
         payment: { create: payments },
         saleitem: {
           create: data.saleItems.map((item: any) => ({
@@ -324,13 +477,13 @@ export async function POST(req: NextRequest) {
         customer: true,
         saleitem: { include: { product: true } },
         payment: true,
-        staff: true, // Include staff in response
+        staff: true,
       },
     });
 
     console.log("✅ Sale created successfully:", {
       saleId: newSale.id,
-      createdBy: newSale.createdBy, // Should show email now
+      createdBy: newSale.createdBy,
       createdById: newSale.createdById,
       customer: newSale.customer?.name,
       amount: newSale.amount,
@@ -338,7 +491,8 @@ export async function POST(req: NextRequest) {
       isEmail: isValidEmail(newSale.createdBy || '')
     });
 
-    // Deduct stock
+    // ✅ 1. DEDUCT FROM MAIN STOCK
+    console.log("📦 Deducting from main stock...");
     for (const item of data.saleItems) {
       const stockItem = await prisma.stock.findFirst({
         where: { productId: item.productId },
@@ -349,10 +503,53 @@ export async function POST(req: NextRequest) {
           where: { id: stockItem.id },
           data: { quantity: stockItem.quantity - item.quantity },
         });
+        console.log(`📉 Stock updated: Product ${item.productId} -${item.quantity} = ${stockItem.quantity - item.quantity}`);
       }
     }
 
-    return NextResponse.json(processSale(newSale), { status: 201 });
+    // ✅ 2. DEDUCT FROM STAFF INVENTORY (if staff exists)
+    let staffInventoryResult = null;
+    if (staffId) {
+      console.log("👷 Deducting from staff inventory...");
+      staffInventoryResult = await deductStaffInventory(
+        newSale.id, 
+        staffId, 
+        data.saleItems.map((item: any) => ({
+          productId: item.productId,
+          quantity: item.quantity
+        }))
+      );
+      
+      if (staffInventoryResult.success) {
+        console.log("✅ Staff inventory deductions completed:", staffInventoryResult.results);
+      } else {
+        console.error("❌ Staff inventory deduction failed:", staffInventoryResult.error);
+      }
+    } else {
+      console.log("ℹ️ No staff ID, skipping staff inventory deduction");
+    }
+
+    // Fetch the complete sale with updated staff inventory links
+    const completeSale = await prisma.sale.findUnique({
+      where: { id: newSale.id },
+      include: {
+        customer: true,
+        saleitem: { 
+          include: { 
+            product: true,
+            staffInventory: true 
+          } 
+        },
+        payment: true,
+        staff: true,
+      },
+    });
+
+    return NextResponse.json({
+      ...processSale(completeSale),
+      staffInventoryDeduction: staffInventoryResult
+    }, { status: 201 });
+    
   } catch (err: any) {
     console.error("❌ Sale creation error:", err);
     return NextResponse.json({ 
@@ -377,7 +574,8 @@ export async function GET_SINGLE(req: NextRequest, { params }: { params: { id: s
         customer: true,
         saleitem: { 
           include: { 
-            product: true 
+            product: true,
+            staffInventory: true
           } 
         },
         payment: true,
@@ -495,7 +693,31 @@ export async function PUT(req: NextRequest) {
 
     // Replace saleitems if provided
     if (data.saleItems) {
+      // Restore staff inventory from old items first
+      if (existingSale.createdById) {
+        console.log(`🔄 Restoring staff inventory for updated sale ${id}`);
+        for (const oldItem of existingSale.saleitem) {
+          if (oldItem.staffInventoryId) {
+            const staffInventory = await prisma.staffInventory.findUnique({
+              where: { id: oldItem.staffInventoryId }
+            });
+            
+            if (staffInventory) {
+              await prisma.staffInventory.update({
+                where: { id: oldItem.staffInventoryId },
+                data: {
+                  quantitySold: Math.max(0, staffInventory.quantitySold - oldItem.quantity)
+                }
+              });
+            }
+          }
+        }
+      }
+      
+      // Delete old items
       await prisma.saleitem.deleteMany({ where: { saleId: id } });
+      
+      // Create new items
       await prisma.saleitem.createMany({
         data: data.saleItems.map((item: any) => ({
           saleId: id,
@@ -505,28 +727,28 @@ export async function PUT(req: NextRequest) {
           total: item.price * item.quantity,
         })),
       });
-    }
-
-    // Append new payments
-    if (Array.isArray(data.payments) && data.payments.length > 0) {
-      await prisma.payment.createMany({
-        data: data.payments.map((p: any) => ({
-          saleId: id,
-          amount: Number(p.amount),
-          method: p.method,
-          status: p.method === "CHECK" && !p.checkDate ? "PENDING" : "CLEARED",
-          referenceId: p.referenceId || null,
-          checkDate: p.checkDate ? new Date(p.checkDate) : null,
-          paidAt: p.paidAt ? new Date(p.paidAt) : new Date(),
-        })),
-      });
+      
+      // Apply staff inventory deduction for new items
+      if (staffId || existingSale.createdById) {
+        const currentStaffId = staffId || existingSale.createdById;
+        console.log(`🔄 Applying staff inventory deduction for updated sale ${id}, staff ${currentStaffId}`);
+        
+        await deductStaffInventory(
+          id, 
+          currentStaffId!, 
+          data.saleItems.map((item: any) => ({
+            productId: item.productId,
+            quantity: item.quantity
+          }))
+        );
+      }
     }
 
     const updated = await prisma.sale.findUnique({
       where: { id },
       include: {
         customer: true,
-        saleitem: { include: { product: true } },
+        saleitem: { include: { product: true, staffInventory: true } },
         payment: true,
         staff: true,
       },
@@ -562,7 +784,11 @@ export async function DELETE(req: NextRequest) {
     const sale = await prisma.sale.findUnique({
       where: { id },
       include: { 
-        saleitem: true,
+        saleitem: {
+          include: {
+            staffInventory: true
+          }
+        },
         staff: true
       },
     });
@@ -600,7 +826,8 @@ export async function DELETE(req: NextRequest) {
     console.log(`   Sale was linked to staff: ${sale.staff?.name || 'None'} (ID: ${sale.createdById || 'None'})`);
     console.log(`   Original createdBy: ${sale.createdBy} (isEmail: ${isValidEmail(sale.createdBy || '')})`);
 
-    // Restore stock
+    // ✅ 1. RESTORE MAIN STOCK
+    console.log("🔄 Restoring main stock...");
     for (const item of sale.saleitem) {
       const stockItem = await prisma.stock.findFirst({
         where: { productId: item.productId },
@@ -611,10 +838,50 @@ export async function DELETE(req: NextRequest) {
           where: { id: stockItem.id },
           data: { quantity: stockItem.quantity + item.quantity },
         });
+        console.log(`📈 Stock restored: Product ${item.productId} +${item.quantity} = ${stockItem.quantity + item.quantity}`);
       }
     }
 
+    // ✅ 2. RESTORE STAFF INVENTORY (if staff exists)
+    if (sale.createdById) {
+      console.log(`🔄 Restoring staff inventory for staff ID: ${sale.createdById}`);
+      
+      try {
+        for (const item of sale.saleitem) {
+          if (item.staffInventoryId) {
+            // Find the staff inventory
+            const staffInventory = await prisma.staffInventory.findUnique({
+              where: { id: item.staffInventoryId }
+            });
+            
+            if (staffInventory) {
+              // Restore the sold quantity
+              const newQuantitySold = Math.max(0, staffInventory.quantitySold - item.quantity);
+              await prisma.staffInventory.update({
+                where: { id: item.staffInventoryId },
+                data: {
+                  quantitySold: newQuantitySold,
+                  updatedAt: new Date()
+                }
+              });
+              
+              console.log(`🔄 Restored ${item.quantity} items to staff inventory ${item.staffInventoryId}: ${staffInventory.quantitySold} -> ${newQuantitySold}`);
+            }
+          } else {
+            console.log(`ℹ️ Sale item ${item.id} not linked to staff inventory`);
+          }
+        }
+        console.log("✅ Staff inventory restoration completed");
+      } catch (restoreError: any) {
+        console.error("❌ Error restoring staff inventory:", restoreError);
+      }
+    } else {
+      console.log("ℹ️ No staff ID, skipping staff inventory restoration");
+    }
+
+    // Delete the sale
     await prisma.sale.delete({ where: { id } });
+    
     return NextResponse.json({ 
       success: true,
       message: `Sale deleted successfully`,
@@ -622,7 +889,8 @@ export async function DELETE(req: NextRequest) {
       staffLinked: sale.staff?.name || null,
       staffId: sale.createdById,
       saleCreatedBy: sale.createdBy,
-      saleCreatedById: sale.createdById
+      saleCreatedById: sale.createdById,
+      itemsRestored: sale.saleitem.length
     });
   } catch (err: any) {
     console.error("❌ Sale delete error:", err);
@@ -670,7 +938,7 @@ export async function PATCH(req: NextRequest) {
       data: updateData,
       include: {
         customer: true,
-        saleitem: { include: { product: true } },
+        saleitem: { include: { product: true, staffInventory: true } },
         payment: true,
         staff: true,
       },
@@ -681,6 +949,157 @@ export async function PATCH(req: NextRequest) {
     console.error("❌ Sale patch error:", err);
     return NextResponse.json({ 
       error: "Failed to update sale",
+      details: err.message 
+    }, { status: 500 });
+  }
+}
+
+// ================== SYNC STAFF INVENTORY (Manual sync endpoint) ==================
+export async function POST_SYNC(req: NextRequest) {
+  try {
+    const data = await req.json();
+    const staffId = data.staffId;
+    
+    if (!staffId) {
+      return NextResponse.json({ error: "Staff ID is required" }, { status: 400 });
+    }
+
+    console.log(`🔄 Syncing staff inventory for staff ID: ${staffId}`);
+    
+    // Get current week dates
+    const now = new Date();
+    const dayOfWeek = now.getDay();
+    let diffToMonday = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
+    
+    const weekStart = new Date(now);
+    weekStart.setDate(now.getDate() + diffToMonday);
+    weekStart.setHours(0, 0, 0, 0);
+    
+    const weekEnd = new Date(weekStart);
+    weekEnd.setDate(weekStart.getDate() + 6);
+    weekEnd.setHours(23, 59, 59, 999);
+    
+    // Get all staff inventory for current week
+    const staffInventories = await prisma.staffInventory.findMany({
+      where: {
+        staffId: staffId,
+        weekStartDate: { lte: weekEnd },
+        weekEndDate: { gte: weekStart }
+      },
+      include: {
+        product: true
+      }
+    });
+    
+    // Get all sales by this staff in current week
+    const staffSales = await prisma.sale.findMany({
+      where: {
+        createdById: staffId,
+        date: {
+          gte: weekStart,
+          lte: weekEnd
+        }
+      },
+      include: {
+        saleitem: {
+          include: {
+            product: true
+          }
+        }
+      }
+    });
+    
+    const results = [];
+    let itemsProcessed = 0;
+    let errors = 0;
+    
+    // Process each sale item
+    for (const sale of staffSales) {
+      for (const saleItem of sale.saleitem) {
+        itemsProcessed++;
+        
+        // Skip if already linked
+        if (saleItem.staffInventoryId) {
+          continue;
+        }
+        
+        // Find matching staff inventory
+        const matchingInventory = staffInventories.find(
+          inv => inv.productId === saleItem.productId
+        );
+        
+        if (matchingInventory) {
+          // Calculate available quantity
+          const availableQuantity = matchingInventory.quantityGiven - 
+                                   matchingInventory.quantitySold - 
+                                   matchingInventory.quantityReturned;
+          
+          if (availableQuantity >= saleItem.quantity) {
+            // Update staff inventory
+            await prisma.staffInventory.update({
+              where: { id: matchingInventory.id },
+              data: {
+                quantitySold: matchingInventory.quantitySold + saleItem.quantity
+              }
+            });
+            
+            // Link sale item
+            await prisma.saleitem.update({
+              where: { id: saleItem.id },
+              data: { staffInventoryId: matchingInventory.id }
+            });
+            
+            results.push({
+              saleId: sale.id,
+              saleItemId: saleItem.id,
+              productId: saleItem.productId,
+              status: 'SYNCED',
+              quantity: saleItem.quantity,
+              staffInventoryId: matchingInventory.id
+            });
+          } else {
+            errors++;
+            results.push({
+              saleId: sale.id,
+              saleItemId: saleItem.id,
+              productId: saleItem.productId,
+              status: 'INSUFFICIENT',
+              quantity: saleItem.quantity,
+              available: availableQuantity,
+              staffInventoryId: matchingInventory.id
+            });
+          }
+        } else {
+          errors++;
+          results.push({
+            saleId: sale.id,
+            saleItemId: saleItem.id,
+            productId: saleItem.productId,
+            status: 'NO_INVENTORY',
+            quantity: saleItem.quantity
+          });
+        }
+      }
+    }
+    
+    console.log(`✅ Sync completed: ${itemsProcessed} items processed, ${errors} errors`);
+    
+    return NextResponse.json({
+      success: true,
+      summary: {
+        staffId,
+        weekStart,
+        weekEnd,
+        itemsProcessed,
+        errors,
+        results
+      }
+    });
+    
+  } catch (err: any) {
+    console.error("❌ Sync error:", err);
+    return NextResponse.json({ 
+      error: "Failed to sync staff inventory",
       details: err.message 
     }, { status: 500 });
   }
