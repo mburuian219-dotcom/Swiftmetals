@@ -12,7 +12,6 @@ import {
   AlertCircle,
   X,
   Filter,
-  Download,
   CheckSquare,
   CalendarDays,
   ChevronDown,
@@ -91,7 +90,58 @@ import {
   BookUp,
   BookDown,
   BookHeart,
-  TrendingUp
+  TrendingUp,
+  Smartphone,
+  Tablet,
+  Home,
+  Briefcase,
+  Settings,
+  HelpCircle,
+  Info,
+  Star,
+  Award,
+  Crown,
+  Rocket,
+  TrendingDown,
+  Percent as PercentIcon,
+  PackageCheck,
+  PackageX,
+  PackageSearch,
+  PackagePlus,
+  PackageMinus,
+  ChevronRight,
+  ChevronLeft,
+  Maximize2,
+  Minimize2,
+  Columns,
+  Rows,
+  Layout,
+  Grid3x3,
+  Table,
+  Database,
+  HardDrive as HardDriveIcon,
+  Cpu as CpuIcon,
+  MemoryStick as MemoryStickIcon,
+  Monitor,
+  Printer as PrinterIcon,
+  Network,
+  Wifi as WifiIcon,
+  Bluetooth as BluetoothIcon,
+  Smartphone as SmartphoneIcon,
+  Tablet as TabletIcon2,
+  Laptop as LaptopIcon,
+  
+  Server as ServerIcon,
+  Router as RouterIcon,
+  Camera as CameraIcon,
+  Video as VideoIcon,
+  Mic as MicIcon,
+  Gamepad as GamepadIcon,
+  Watch as WatchIcon,
+  Headphones as HeadphonesIcon,
+  Speaker as SpeakerIcon,
+  Keyboard as KeyboardIcon,
+  Mouse as MouseIcon
 } from "lucide-react";
 import Link from "next/link";
 
@@ -142,7 +192,6 @@ interface Staff {
   avatar?: string;
 }
 
-// UPDATED: Added weekly fields to StaffInventory
 interface StaffInventory {
   id: number;
   staffId: number;
@@ -160,7 +209,6 @@ interface StaffInventory {
   totalSalesAmount: number;
   notes?: string;
   priority?: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
-  // Weekly specific fields
   weekIdentifier?: string;
   isCurrentWeek?: boolean;
   remainingQuantity?: number;
@@ -173,7 +221,6 @@ interface AssignmentItem {
   product?: Product;
 }
 
-// UPDATED: Added weekly date fields to AssignmentForm
 interface AssignmentForm {
   staffId: string;
   items: AssignmentItem[];
@@ -183,7 +230,6 @@ interface AssignmentForm {
   priority?: 'LOW' | 'MEDIUM' | 'HIGH';
 }
 
-// FIXED: Updated to accept string | null
 interface ReturnForm {
   items: {
     assignmentId: number;
@@ -213,7 +259,6 @@ interface AssignmentStats {
   averageCompletionRate: number;
   totalCostValue: number;
   totalProfit: number;
-  // Weekly stats
   currentWeekAssignments: number;
   currentWeekSales: number;
   currentWeekReturns: number;
@@ -298,6 +343,7 @@ const ProductSearchModal: React.FC<ProductSearchModalProps> = ({
   const [sortBy, setSortBy] = useState<'name' | 'price' | 'stock' | 'category'>('name');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
   const [filteredProducts, setFilteredProducts] = useState<Product[]>([]);
+  const [selectedProducts, setSelectedProducts] = useState<Product[]>([]);
   const searchInputRef = useRef<HTMLInputElement>(null);
 
   const categories = useMemo(() => {
@@ -372,18 +418,32 @@ const ProductSearchModal: React.FC<ProductSearchModalProps> = ({
     if (!category) return <Package className="w-4 h-4" />;
     
     const cat = category.toLowerCase();
-    if (cat.includes('phone') || cat.includes('mobile')) return <PhoneIcon className="w-4 h-4" />;
-    if (cat.includes('laptop') || cat.includes('computer')) return <Laptop className="w-4 h-4" />;
-    if (cat.includes('tablet')) return <TabletIcon className="w-4 h-4" />;
-    if (cat.includes('monitor') || cat.includes('screen')) return <MonitorIcon className="w-4 h-4" />;
-    if (cat.includes('headphone') || cat.includes('earphone')) return <Headphones className="w-4 h-4" />;
-    if (cat.includes('speaker')) return <Speaker className="w-4 h-4" />;
-    if (cat.includes('keyboard')) return <Keyboard className="w-4 h-4" />;
-    if (cat.includes('mouse')) return <Mouse className="w-4 h-4" />;
-    if (cat.includes('printer')) return <Printer className="w-4 h-4" />;
-    if (cat.includes('camera')) return <Camera className="w-4 h-4" />;
+    if (cat.includes('phone') || cat.includes('mobile')) return <SmartphoneIcon className="w-4 h-4" />;
+    if (cat.includes('laptop') || cat.includes('computer')) return <LaptopIcon className="w-4 h-4" />;
+    if (cat.includes('tablet')) return <TabletIcon2 className="w-4 h-4" />;
+    if (cat.includes('monitor') || cat.includes('screen')) return <Monitor className="w-4 h-4" />;
+    if (cat.includes('headphone') || cat.includes('earphone')) return <HeadphonesIcon className="w-4 h-4" />;
+    if (cat.includes('speaker')) return <SpeakerIcon className="w-4 h-4" />;
+    if (cat.includes('keyboard')) return <KeyboardIcon className="w-4 h-4" />;
+    if (cat.includes('mouse')) return <MouseIcon className="w-4 h-4" />;
+    if (cat.includes('printer')) return <PrinterIcon className="w-4 h-4" />;
+    if (cat.includes('camera')) return <CameraIcon className="w-4 h-4" />;
     if (cat.includes('book')) return <Book className="w-4 h-4" />;
     return <Package className="w-4 h-4" />;
+  };
+
+  const handleProductSelect = (product: Product) => {
+    if (selectedProducts.some(p => p.id === product.id)) {
+      setSelectedProducts(selectedProducts.filter(p => p.id !== product.id));
+    } else {
+      setSelectedProducts([...selectedProducts, product]);
+    }
+  };
+
+  const handleBulkAdd = () => {
+    selectedProducts.forEach(product => onSelect(product));
+    setSelectedProducts([]);
+    onClose();
   };
 
   if (!isOpen) return null;
@@ -399,8 +459,10 @@ const ProductSearchModal: React.FC<ProductSearchModalProps> = ({
                 <Search className="w-5 h-5 md:w-6 md:h-6" />
               </div>
               <div>
-                <h2 className="text-xl md:text-2xl font-bold">Search Products</h2>
-                <p className="text-blue-100 text-sm">Select products to assign for the week</p>
+                <h2 className="text-xl md:text-2xl font-bold">Add Products to Weekly Assignment</h2>
+                <p className="text-blue-100 text-sm">
+                  {selectedProducts.length} product{selectedProducts.length !== 1 ? 's' : ''} selected
+                </p>
               </div>
             </div>
             <button
@@ -430,11 +492,11 @@ const ProductSearchModal: React.FC<ProductSearchModalProps> = ({
           {/* Filters */}
           <div className="flex flex-wrap items-center gap-3 mt-3">
             <div className="flex items-center gap-2">
-              <Filter className="w-4 h-4 text-slate-500" />
+              <Filter className="w-4 h-4 text-slate-600" />
               <select
                 value={selectedCategory}
                 onChange={(e) => setSelectedCategory(e.target.value)}
-                className="px-3 py-1.5 border border-slate-300 rounded-lg bg-white text-sm"
+                className="px-3 py-1.5 border border-slate-300 rounded-lg bg-white text-sm text-slate-800"
               >
                 <option value="all">All Categories</option>
                 {categories.map(category => (
@@ -444,13 +506,13 @@ const ProductSearchModal: React.FC<ProductSearchModalProps> = ({
             </div>
 
             <div className="flex items-center gap-2">
-              {sortBy === 'name' && <SortAsc className="w-4 h-4 text-slate-500" />}
-              {sortBy === 'price' && <DollarSign className="w-4 h-4 text-slate-500" />}
-              {sortBy === 'stock' && <Package className="w-4 h-4 text-slate-500" />}
+              {sortBy === 'name' && <SortAsc className="w-4 h-4 text-slate-600" />}
+              {sortBy === 'price' && <DollarSign className="w-4 h-4 text-slate-600" />}
+              {sortBy === 'stock' && <Package className="w-4 h-4 text-slate-600" />}
               <select
                 value={sortBy}
                 onChange={(e) => setSortBy(e.target.value as any)}
-                className="px-3 py-1.5 border border-slate-300 rounded-lg bg-white text-sm"
+                className="px-3 py-1.5 border border-slate-300 rounded-lg bg-white text-sm text-slate-800"
               >
                 <option value="name">Sort by Name</option>
                 <option value="price">Sort by Price</option>
@@ -464,9 +526,9 @@ const ProductSearchModal: React.FC<ProductSearchModalProps> = ({
               className="p-1.5 border border-slate-300 rounded-lg hover:bg-slate-50"
             >
               {sortOrder === 'asc' ? (
-                <SortAsc className="w-4 h-4 text-slate-600" />
+                <SortAsc className="w-4 h-4 text-slate-800" />
               ) : (
-                <SortDesc className="w-4 h-4 text-slate-600" />
+                <SortDesc className="w-4 h-4 text-slate-800" />
               )}
             </button>
 
@@ -490,8 +552,8 @@ const ProductSearchModal: React.FC<ProductSearchModalProps> = ({
           {filteredProducts.length === 0 ? (
             <div className="text-center py-12">
               <Package className="w-16 h-16 text-slate-300 mx-auto mb-4" />
-              <h3 className="text-lg font-semibold text-slate-700 mb-2">No products found</h3>
-              <p className="text-slate-500 mb-4">Try a different search term or category</p>
+              <h3 className="text-lg font-semibold text-slate-900 mb-2">No products found</h3>
+              <p className="text-slate-700 mb-4">Try a different search term or category</p>
               {searchTerm && (
                 <button
                   onClick={() => setSearchTerm("")}
@@ -503,162 +565,135 @@ const ProductSearchModal: React.FC<ProductSearchModalProps> = ({
             </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {filteredProducts.map(product => (
-                <div
-                  key={product.id}
-                  onClick={() => {
-                    onSelect(product);
-                    onClose();
-                  }}
-                  className="group cursor-pointer border-2 border-slate-200 rounded-xl p-4 hover:border-blue-500 hover:shadow-lg transition-all duration-200 bg-white hover:bg-blue-50/50"
-                >
-                  <div className="flex items-start gap-3 mb-3">
-                    <div className="flex-shrink-0">
-                      <div className="w-12 h-12 rounded-lg bg-gradient-to-br from-blue-100 to-blue-200 flex items-center justify-center">
-                        {getProductIcon(product.category)}
+              {filteredProducts.map(product => {
+                const isSelected = selectedProducts.some(p => p.id === product.id);
+                return (
+                  <div
+                    key={product.id}
+                    onClick={() => handleProductSelect(product)}
+                    className={`group cursor-pointer border-2 rounded-xl p-4 transition-all duration-200 ${
+                      isSelected 
+                        ? 'border-blue-500 bg-blue-50 shadow-lg' 
+                        : 'border-slate-200 hover:border-blue-500 hover:shadow-lg bg-white'
+                    }`}
+                  >
+                    <div className="flex items-start gap-3 mb-3">
+                      <div className="flex-shrink-0 relative">
+                        <div className={`w-12 h-12 rounded-lg flex items-center justify-center ${
+                          isSelected ? 'bg-gradient-to-br from-blue-200 to-blue-300' : 'bg-gradient-to-br from-blue-100 to-blue-200'
+                        }`}>
+                          {getProductIcon(product.category)}
+                        </div>
+                        {isSelected && (
+                          <div className="absolute -top-2 -right-2 w-6 h-6 bg-blue-500 rounded-full flex items-center justify-center">
+                            <Check className="w-3 h-3 text-white" />
+                          </div>
+                        )}
                       </div>
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <h4 className="font-bold text-slate-900 text-sm truncate group-hover:text-blue-700">
-                        {product.name}
-                      </h4>
-                      {product.category && (
-                        <div className="inline-flex items-center gap-1 px-2 py-0.5 bg-slate-100 rounded text-xs text-slate-600 mt-1">
-                          {product.category}
-                        </div>
-                      )}
-                      {product.sku && (
-                        <div className="text-xs text-slate-500 font-mono mt-1">
-                          SKU: {product.sku}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between">
-                      <span className="text-slate-600 text-sm">Price:</span>
-                      <span className="font-bold text-green-600">
-                        KES {product.price.toLocaleString()}
-                      </span>
-                    </div>
-                    
-                    <div className="flex items-center justify-between">
-                      <span className="text-slate-600 text-sm">Stock:</span>
-                      <div className="flex items-center gap-2">
-                        <span className={`font-bold ${product.stockQuantity > 10 ? 'text-green-600' : product.stockQuantity > 0 ? 'text-orange-600' : 'text-red-600'}`}>
-                          {product.stockQuantity || 0}
-                        </span>
-                        <div className={`w-2 h-2 rounded-full ${product.stockQuantity > 10 ? 'bg-green-500' : product.stockQuantity > 0 ? 'bg-orange-500' : 'bg-red-500'}`}></div>
+                      <div className="flex-1 min-w-0">
+                        <h4 className={`font-bold text-sm truncate ${
+                          isSelected ? 'text-blue-800' : 'text-slate-900 group-hover:text-blue-700'
+                        }`}>
+                          {product.name}
+                        </h4>
+                        {product.category && (
+                          <div className="inline-flex items-center gap-1 px-2 py-0.5 bg-slate-100 rounded text-xs text-slate-700 mt-1">
+                            {product.category}
+                          </div>
+                        )}
+                        {product.sku && (
+                          <div className="text-xs text-slate-600 font-mono mt-1">
+                            SKU: {product.sku}
+                          </div>
+                        )}
                       </div>
                     </div>
 
-                    {product.brand && (
+                    <div className="space-y-2">
                       <div className="flex items-center justify-between">
-                        <span className="text-slate-600 text-sm">Brand:</span>
-                        <span className="font-medium text-slate-700">{product.brand}</span>
+                        <span className="text-slate-700 text-sm">Price:</span>
+                        <span className="font-bold text-green-700">
+                          KES {product.price.toLocaleString()}
+                        </span>
                       </div>
-                    )}
-                  </div>
+                      
+                      <div className="flex items-center justify-between">
+                        <span className="text-slate-700 text-sm">Stock:</span>
+                        <div className="flex items-center gap-2">
+                          <span className={`font-bold ${
+                            product.stockQuantity > 10 ? 'text-green-700' : 
+                            product.stockQuantity > 0 ? 'text-orange-700' : 'text-red-700'
+                          }`}>
+                            {product.stockQuantity || 0}
+                          </span>
+                          <div className={`w-2 h-2 rounded-full ${
+                            product.stockQuantity > 10 ? 'bg-green-600' : 
+                            product.stockQuantity > 0 ? 'bg-orange-600' : 'bg-red-600'
+                          }`}></div>
+                        </div>
+                      </div>
 
-                  <div className="mt-4 pt-3 border-t border-slate-100">
-                    <button className="w-full py-2 bg-gradient-to-r from-blue-600 to-blue-700 text-white rounded-lg font-medium hover:from-blue-700 hover:to-blue-800 transition-all flex items-center justify-center gap-2 text-sm">
-                      <Plus className="w-4 h-4" />
-                      Add to Weekly Assignment
-                    </button>
+                      {product.brand && (
+                        <div className="flex items-center justify-between">
+                          <span className="text-slate-700 text-sm">Brand:</span>
+                          <span className="font-medium text-slate-800">{product.brand}</span>
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="mt-4 pt-3 border-t border-slate-100">
+                      <button className={`w-full py-2 rounded-lg font-medium transition-all flex items-center justify-center gap-2 text-sm ${
+                        isSelected
+                          ? 'bg-gradient-to-r from-green-600 to-green-700 text-white'
+                          : 'bg-gradient-to-r from-blue-600 to-blue-700 text-white hover:from-blue-700 hover:to-blue-800'
+                      }`}>
+                        {isSelected ? (
+                          <>
+                            <Check className="w-4 h-4" />
+                            Selected
+                          </>
+                        ) : (
+                          <>
+                            <Plus className="w-4 h-4" />
+                            Select Product
+                          </>
+                        )}
+                      </button>
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>
 
         {/* Footer */}
         <div className="border-t border-slate-200 p-4 bg-slate-50 rounded-b-2xl">
-          <div className="flex items-center justify-between text-sm text-slate-600">
-            <div>
+          <div className="flex items-center justify-between">
+            <div className="text-sm text-slate-800">
               Showing <span className="font-bold">{filteredProducts.length}</span> of{" "}
-              <span className="font-bold">{products.length}</span> products
+              <span className="font-bold">{products.length}</span> products •{" "}
+              <span className="font-bold text-blue-700">{selectedProducts.length}</span> selected
             </div>
             <div className="flex items-center gap-2">
               <button
                 onClick={onClose}
-                className="px-4 py-2 border border-slate-300 text-slate-700 rounded-lg hover:bg-white font-medium"
+                className="px-4 py-2 border border-slate-300 text-slate-800 rounded-lg hover:bg-white font-medium"
               >
                 Cancel
               </button>
+              {selectedProducts.length > 0 && (
+                <button
+                  onClick={handleBulkAdd}
+                  className="px-4 py-2 bg-gradient-to-r from-blue-600 to-blue-700 text-white rounded-lg hover:from-blue-700 hover:to-blue-800 font-medium"
+                >
+                  Add {selectedProducts.length} Product{selectedProducts.length !== 1 ? 's' : ''}
+                </button>
+              )}
             </div>
           </div>
         </div>
       </div>
-    </div>
-  );
-};
-
-// Enhanced Product Search Input Component
-const ProductSearchInput: React.FC<{
-  value: string;
-  onChange: (value: string) => void;
-  onSearchClick: () => void;
-  placeholder?: string;
-  disabled?: boolean;
-  showAvailableStock?: boolean;
-  availableStock?: number;
-}> = ({ 
-  value, 
-  onChange, 
-  onSearchClick, 
-  placeholder = "Select product...", 
-  disabled = false,
-  showAvailableStock = false,
-  availableStock = 0
-}) => {
-  return (
-    <div className="relative">
-      <div className="flex items-center gap-2">
-        <div className="relative flex-1">
-          <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-slate-400" />
-          <input
-            type="text"
-            value={value}
-            onChange={(e) => onChange(e.target.value)}
-            placeholder={placeholder}
-            disabled={disabled}
-            className="w-full pl-10 pr-3 py-2.5 border-2 border-slate-300 rounded-lg focus:border-blue-500 focus:ring-2 focus:ring-blue-200 text-sm bg-white disabled:bg-slate-50 disabled:cursor-not-allowed"
-          />
-        </div>
-        <button
-          type="button"
-          onClick={onSearchClick}
-          disabled={disabled}
-          className="px-3 py-2.5 bg-gradient-to-r from-blue-600 to-blue-700 text-white rounded-lg hover:from-blue-700 hover:to-blue-800 transition-all shadow-sm disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
-        >
-          <Search className="w-4 h-4" />
-          <span className="hidden sm:inline">Browse</span>
-        </button>
-      </div>
-      
-      {showAvailableStock && availableStock > 0 && (
-        <div className="mt-1 flex items-center gap-2 text-xs">
-          <div className="flex items-center gap-1 text-green-600">
-            <CheckCircle className="w-3 h-3" />
-            <span>Available: {availableStock}</span>
-          </div>
-          <div className="flex-1 bg-slate-200 rounded-full h-1.5 overflow-hidden">
-            <div 
-              className="h-full bg-green-500 rounded-full"
-              style={{ width: `${Math.min((availableStock / 50) * 100, 100)}%` }}
-            ></div>
-          </div>
-        </div>
-      )}
-      
-      {showAvailableStock && availableStock === 0 && (
-        <div className="mt-1 flex items-center gap-1 text-xs text-red-600">
-          <AlertCircle className="w-3 h-3" />
-          <span>Out of stock</span>
-        </div>
-      )}
     </div>
   );
 };
@@ -688,12 +723,12 @@ const ProductSelectionCard: React.FC<{
             <h4 className="font-bold text-slate-900 text-sm truncate">{product.name}</h4>
             <div className="flex flex-wrap items-center gap-2 mt-1">
               {product.category && (
-                <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-slate-100 rounded text-xs text-slate-600">
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-slate-100 rounded text-xs text-slate-700">
                   {product.category}
                 </span>
               )}
               {product.sku && (
-                <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-blue-100 rounded text-xs text-blue-700 font-mono">
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-blue-100 rounded text-xs text-blue-800 font-mono">
                   <Hash className="w-3 h-3" />
                   {product.sku}
                 </span>
@@ -705,7 +740,7 @@ const ProductSelectionCard: React.FC<{
         {onRemove && (
           <button
             onClick={onRemove}
-            className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+            className="p-1.5 text-slate-500 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
           >
             <X className="w-4 h-4" />
           </button>
@@ -714,19 +749,19 @@ const ProductSelectionCard: React.FC<{
 
       <div className="grid grid-cols-2 gap-4">
         <div>
-          <div className="text-sm text-slate-600 mb-1">Price</div>
-          <div className="text-lg font-bold text-green-600">
+          <div className="text-sm text-slate-700 mb-1">Price</div>
+          <div className="text-lg font-bold text-green-700">
             KES {product.price.toLocaleString()}
           </div>
         </div>
         
         <div>
-          <div className="text-sm text-slate-600 mb-1">Quantity</div>
+          <div className="text-sm text-slate-700 mb-1">Quantity</div>
           <div className="flex items-center gap-2">
             <button
               onClick={() => handleQuantityChange(quantity - 1)}
               disabled={quantity <= 1}
-              className="w-8 h-8 flex items-center justify-center border border-slate-300 rounded-lg hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed"
+              className="w-8 h-8 flex items-center justify-center border border-slate-300 rounded-lg hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed text-slate-800"
             >
               <span className="text-lg">-</span>
             </button>
@@ -736,12 +771,12 @@ const ProductSelectionCard: React.FC<{
               max={availableStock}
               value={quantity}
               onChange={(e) => handleQuantityChange(parseInt(e.target.value) || 1)}
-              className="w-16 text-center py-1 border border-slate-300 rounded-lg focus:border-blue-500 focus:ring-1 focus:ring-blue-200"
+              className="w-16 text-center py-1 border border-slate-300 rounded-lg focus:border-blue-500 focus:ring-1 focus:ring-blue-200 text-slate-800"
             />
             <button
               onClick={() => handleQuantityChange(quantity + 1)}
               disabled={quantity >= availableStock}
-              className="w-8 h-8 flex items-center justify-center border border-slate-300 rounded-lg hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed"
+              className="w-8 h-8 flex items-center justify-center border border-slate-300 rounded-lg hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed text-slate-800"
             >
               <span className="text-lg">+</span>
             </button>
@@ -751,14 +786,14 @@ const ProductSelectionCard: React.FC<{
 
       <div className="mt-3 pt-3 border-t border-slate-100">
         <div className="flex items-center justify-between text-sm">
-          <span className="text-slate-600">Total:</span>
+          <span className="text-slate-700">Total:</span>
           <span className="font-bold text-slate-900">
             KES {(product.price * quantity).toLocaleString()}
           </span>
         </div>
         <div className="flex items-center justify-between text-xs mt-1">
-          <span className="text-slate-500">Available stock:</span>
-          <span className={`font-medium ${availableStock > 10 ? 'text-green-600' : 'text-orange-600'}`}>
+          <span className="text-slate-600">Available stock:</span>
+          <span className={`font-medium ${availableStock > 10 ? 'text-green-700' : 'text-orange-700'}`}>
             {availableStock} units
           </span>
         </div>
@@ -767,78 +802,68 @@ const ProductSelectionCard: React.FC<{
   );
 };
 
-// NEW: Week View Component
-const WeekViewComponent: React.FC<{
-  weekStart: string;
-  weekEnd: string;
-  assignments: StaffInventory[];
-  onCloseWeek?: (staffId?: number) => void;
-}> = ({ weekStart, weekEnd, assignments, onCloseWeek }) => {
-  if (!weekStart || !weekEnd) return null;
+// NEW: Auto-fill Suggestions Component
+const AutoFillSuggestions: React.FC<{
+  products: Product[];
+  staffId: number;
+  onApply: (items: AssignmentItem[]) => void;
+}> = ({ products, staffId, onApply }) => {
+  const [suggestions, setSuggestions] = useState<AssignmentItem[]>([]);
   
-  const formattedWeek = formatWeekRange(weekStart, weekEnd);
-  const now = new Date();
-  const endDate = new Date(weekEnd);
-  const isCurrentWeek = now >= new Date(weekStart) && now <= endDate;
-  const isPastWeek = now > endDate;
-  
-  const totalGiven = assignments.reduce((sum, a) => sum + a.quantityGiven, 0);
-  const totalSold = assignments.reduce((sum, a) => sum + a.quantitySold, 0);
-  const totalReturned = assignments.reduce((sum, a) => sum + a.quantityReturned, 0);
-  const remaining = totalGiven - totalSold - totalReturned;
-  const sellThroughRate = totalGiven > 0 ? (totalSold / totalGiven) * 100 : 0;
-  
+  useEffect(() => {
+    // Auto-fill with products that have stock and are popular
+    const popularProducts = products
+      .filter(p => p.stockQuantity > 0)
+      .sort((a, b) => (b.stockQuantity || 0) - (a.stockQuantity || 0))
+      .slice(0, 5) // Top 5 products with stock
+      .map(product => ({
+        productId: product.id.toString(),
+        quantity: "1", // Default to 1
+        product
+      }));
+    
+    setSuggestions(popularProducts);
+  }, [products]);
+
+  if (suggestions.length === 0) return null;
+
   return (
-    <div className={`border rounded-xl p-4 mb-4 ${isCurrentWeek ? 'border-blue-300 bg-blue-50/30' : 'border-slate-200'}`}>
-      <div className="flex items-center justify-between mb-4">
-        <div>
-          <h3 className="font-bold text-slate-900">{formattedWeek}</h3>
-          <p className="text-sm text-slate-600">
-            {isCurrentWeek ? 'Current Week' : isPastWeek ? 'Past Week' : 'Upcoming Week'}
-          </p>
+    <div className="mb-6 bg-gradient-to-r from-blue-50 to-indigo-50/50 rounded-xl p-4 border border-blue-200">
+      <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center gap-2">
+          <Zap className="w-5 h-5 text-blue-600" />
+          <h4 className="font-semibold text-slate-900">Quick Add Suggestions</h4>
         </div>
-        {isCurrentWeek && remaining > 0 && onCloseWeek && (
+        <button
+          onClick={() => onApply(suggestions)}
+          className="px-4 py-2 bg-gradient-to-r from-blue-600 to-blue-700 text-white rounded-lg hover:from-blue-700 hover:to-blue-800 text-sm font-medium"
+        >
+          Add All
+        </button>
+      </div>
+      <p className="text-sm text-slate-700 mb-3">
+        Based on available stock. Click to add products quickly.
+      </p>
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
+        {suggestions.map((item) => (
           <button
-            onClick={() => onCloseWeek()}
-            className="px-4 py-2 bg-gradient-to-r from-purple-600 to-purple-700 text-white rounded-lg hover:from-purple-700 hover:to-purple-800 transition-all text-sm font-medium"
+            key={item.productId}
+            onClick={() => onApply([item])}
+            className="bg-white border border-slate-200 rounded-lg p-2 hover:border-blue-500 hover:bg-blue-50 transition-colors text-left"
           >
-            Close Week
+            <div className="text-xs font-medium text-slate-900 truncate">{item.product?.name}</div>
+            <div className="text-xs text-slate-600 mt-1">Stock: {item.product?.stockQuantity}</div>
+            <div className="text-xs font-bold text-green-700 mt-1">
+              KES {item.product?.price.toLocaleString()}
+            </div>
           </button>
-        )}
-      </div>
-      
-      <div className="grid grid-cols-4 gap-4 mb-4">
-        <div className="text-center">
-          <div className="text-sm text-slate-600">Assigned</div>
-          <div className="text-xl font-bold text-slate-900">{totalGiven}</div>
-        </div>
-        <div className="text-center">
-          <div className="text-sm text-slate-600">Sold</div>
-          <div className="text-xl font-bold text-green-600">{totalSold}</div>
-        </div>
-        <div className="text-center">
-          <div className="text-sm text-slate-600">Returned</div>
-          <div className="text-xl font-bold text-orange-600">{totalReturned}</div>
-        </div>
-        <div className="text-center">
-          <div className="text-sm text-slate-600">Rate</div>
-          <div className={`text-xl font-bold ${sellThroughRate >= 70 ? 'text-green-600' : sellThroughRate >= 50 ? 'text-amber-600' : 'text-red-600'}`}>
-            {sellThroughRate.toFixed(1)}%
-          </div>
-        </div>
-      </div>
-      
-      <div className="text-sm text-slate-600">
-        <span className="font-medium">{assignments.length}</span> assignments • 
-        <span className={`ml-2 font-medium ${remaining > 0 ? 'text-blue-600' : 'text-slate-600'}`}>
-          {remaining} items remaining
-        </span>
+        ))}
       </div>
     </div>
   );
 };
 
-// Main Enhanced Component
+// Main Enhanced Component - SINGLE ASSIGNMENT FLOW
 export default function StaffInventoryManagementPage() {
   // States
   const [staffList, setStaffList] = useState<Staff[]>([]);
@@ -852,7 +877,6 @@ export default function StaffInventoryManagementPage() {
   const [showProductSearch, setShowProductSearch] = useState(false);
   const [selectedStaff, setSelectedStaff] = useState<Staff | null>(null);
   
-  // UPDATED: Using weekly dates
   const currentWeek = getCurrentWeekDates();
   const [form, setForm] = useState<AssignmentForm>({
     staffId: "",
@@ -875,10 +899,6 @@ export default function StaffInventoryManagementPage() {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [sortBy, setSortBy] = useState<'staff' | 'week' | 'totalValue' | 'priority'>('week');
   const [viewMode, setViewMode] = useState<'list' | 'cards' | 'grid' | 'weeks'>('weeks');
-  const [selectedAssignment, setSelectedAssignment] = useState<StaffInventory | null>(null);
-  const [quickActions, setQuickActions] = useState<number[]>([]);
-  const [bulkSelect, setBulkSelect] = useState<number[]>([]);
-  const [statsTimeRange, setStatsTimeRange] = useState<'day' | 'week' | 'month' | 'year'>('week');
 
   // Fetch all data
   const fetchData = useCallback(async () => {
@@ -966,6 +986,24 @@ export default function StaffInventoryManagementPage() {
   useEffect(() => {
     fetchData();
   }, [fetchData]);
+
+  // Auto-fill form with available products when staff is selected
+  useEffect(() => {
+    if (form.staffId && showAssignModal) {
+      const availableProducts = products
+        .filter(p => p.stockQuantity > 0)
+        .slice(0, 3); // Pre-fill with 3 products
+      
+      if (availableProducts.length > 0 && form.items.length === 0) {
+        const newItems: AssignmentItem[] = availableProducts.map(product => ({
+          productId: product.id.toString(),
+          quantity: "1", // Default to 1
+          product
+        }));
+        setForm(prev => ({ ...prev, items: newItems }));
+      }
+    }
+  }, [form.staffId, products, showAssignModal]);
 
   // Filter and sort assignments
   useEffect(() => {
@@ -1163,13 +1201,31 @@ export default function StaffInventoryManagementPage() {
     } else {
       const newItem: AssignmentItem = {
         productId: product.id.toString(),
-        quantity: "1",
+        quantity: "1", // Always default to 1
         product: product
       };
       setForm({ ...form, items: [...form.items, newItem] });
       setSuccess(`Added ${product.name} to weekly assignment`);
     }
 
+    setTimeout(() => setSuccess(null), 3000);
+  };
+
+  // Apply auto-fill suggestions
+  const applyAutoFill = (items: AssignmentItem[]) => {
+    const newItems = [...form.items];
+    
+    items.forEach(item => {
+      const existingIndex = newItems.findIndex(i => i.productId === item.productId);
+      if (existingIndex >= 0) {
+        newItems[existingIndex].quantity = item.quantity;
+      } else {
+        newItems.push(item);
+      }
+    });
+    
+    setForm({ ...form, items: newItems });
+    setSuccess(`Added ${items.length} product${items.length !== 1 ? 's' : ''}`);
     setTimeout(() => setSuccess(null), 3000);
   };
 
@@ -1184,27 +1240,6 @@ export default function StaffInventoryManagementPage() {
   const removeItemFromForm = (index: number) => {
     const newItems = form.items.filter((_, i) => i !== index);
     setForm({ ...form, items: newItems });
-  };
-
-  // Get staff assignments grouped by staff
-  const getStaffAssignments = () => {
-    const grouped = new Map<number, { staff: Staff, assignments: StaffInventory[], totalValue: number }>();
-    
-    inventoryAssignments.forEach(assignment => {
-      if (!grouped.has(assignment.staffId)) {
-        grouped.set(assignment.staffId, {
-          staff: assignment.staff,
-          assignments: [],
-          totalValue: 0
-        });
-      }
-      
-      const group = grouped.get(assignment.staffId)!;
-      group.assignments.push(assignment);
-      group.totalValue += assignment.totalSalesAmount;
-    });
-    
-    return Array.from(grouped.values());
   };
 
   // Validate assignment form
@@ -1466,14 +1501,6 @@ export default function StaffInventoryManagementPage() {
     }
   };
 
-  // Calculate sales progress percentage
-  const calculateSalesProgress = (assignment: StaffInventory) => {
-    const total = assignment.quantityGiven || 0;
-    const sold = assignment.quantitySold || 0;
-    if (total === 0) return 0;
-    return (sold / total) * 100;
-  };
-
   // Open return modal for a staff
   const openReturnModal = (staff: Staff) => {
     setSelectedStaff(staff);
@@ -1517,32 +1544,8 @@ export default function StaffInventoryManagementPage() {
     return form.items.map(item => parseInt(item.productId)).filter(id => !isNaN(id));
   }, [form.items]);
 
-  // Group assignments by week
-  const getAssignmentsByWeek = () => {
-    const weekMap = new Map<string, StaffInventory[]>();
-    
-    filteredAssignments.forEach(assignment => {
-      if (!assignment.weekStartDate || !assignment.weekEndDate) return;
-      
-      const weekKey = `${assignment.weekStartDate}_${assignment.weekEndDate}`;
-      if (!weekMap.has(weekKey)) {
-        weekMap.set(weekKey, []);
-      }
-      weekMap.get(weekKey)!.push(assignment);
-    });
-    
-    return Array.from(weekMap.entries())
-      .map(([weekKey, assignments]) => {
-        const [weekStart, weekEnd] = weekKey.split('_');
-        return { weekStart, weekEnd, assignments };
-      })
-      .sort((a, b) => new Date(b.weekStart).getTime() - new Date(a.weekStart).getTime());
-  };
-
   // Stats calculation
   const stats = calculateStats();
-  const staffAssignments = getStaffAssignments();
-  const assignmentsByWeek = getAssignmentsByWeek();
 
   // Mobile breakpoint
   const isMobile = typeof window !== 'undefined' && window.innerWidth < 768;
@@ -1557,11 +1560,11 @@ export default function StaffInventoryManagementPage() {
               onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
               className="p-2 rounded-xl bg-white shadow-sm hover:shadow transition-shadow"
             >
-              <Menu className="w-5 h-5 text-slate-700" />
+              <Menu className="w-5 h-5 text-slate-800" />
             </button>
             <div>
               <h1 className="text-lg font-bold text-slate-900">Weekly Staff Inventory</h1>
-              <p className="text-xs text-slate-600">Manage weekly product assignments</p>
+              <p className="text-xs text-slate-700">Manage weekly product assignments</p>
             </div>
           </div>
           <div className="flex items-center gap-1">
@@ -1570,7 +1573,7 @@ export default function StaffInventoryManagementPage() {
               className="p-2 rounded-xl bg-white shadow-sm hover:shadow transition-shadow"
               title="Refresh"
             >
-              <RefreshCw className="w-4 h-4" />
+              <RefreshCw className="w-4 h-4 text-slate-800" />
             </button>
             <button
               onClick={() => setShowAssignModal(true)}
@@ -1599,7 +1602,7 @@ export default function StaffInventoryManagementPage() {
             </div>
             <div>
               <h1 className="text-2xl font-bold text-slate-900">Weekly Staff Inventory Management</h1>
-              <p className="text-slate-600">Assign and track products with staff members on a weekly basis</p>
+              <p className="text-slate-700">Assign and track products with staff members on a weekly basis</p>
             </div>
           </div>
         </div>
@@ -1614,7 +1617,7 @@ export default function StaffInventoryManagementPage() {
           </button>
           <button
             onClick={fetchData}
-            className="flex items-center gap-2 px-4 py-2.5 border-2 border-slate-200 rounded-xl hover:border-blue-300 hover:bg-blue-50 transition-all text-slate-700 font-medium group"
+            className="flex items-center gap-2 px-4 py-2.5 border-2 border-slate-200 rounded-xl hover:border-blue-300 hover:bg-blue-50 transition-all text-slate-800 font-medium group"
           >
             <RefreshCw className="w-4 h-4 transition-transform group-hover:rotate-180" />
             Refresh Data
@@ -1624,7 +1627,7 @@ export default function StaffInventoryManagementPage() {
             className="flex items-center gap-2 bg-gradient-to-r from-blue-600 to-purple-600 text-white px-5 py-2.5 rounded-xl hover:from-blue-700 hover:to-purple-700 transition-all shadow-lg hover:shadow-xl font-medium group hover:scale-[1.02]"
           >
             <Plus className="w-5 h-5 transition-transform group-hover:scale-110" />
-            <span>Assign Weekly Inventory</span>
+            <span>Assign Inventory</span>
           </button>
         </div>
       </div>
@@ -1634,9 +1637,9 @@ export default function StaffInventoryManagementPage() {
         <div className="bg-gradient-to-br from-blue-50 to-white rounded-2xl border border-blue-100 shadow-sm p-4">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-sm font-medium text-slate-600 mb-1">Current Week</p>
+              <p className="text-sm font-medium text-slate-700 mb-1">Current Week</p>
               <p className="text-2xl font-bold text-blue-700">{stats.currentWeekAssignments}</p>
-              <p className="text-xs text-slate-500 mt-1">
+              <p className="text-xs text-slate-700 mt-1">
                 Active assignments this week
               </p>
             </div>
@@ -1655,9 +1658,9 @@ export default function StaffInventoryManagementPage() {
         <div className="bg-gradient-to-br from-emerald-50 to-white rounded-2xl border border-emerald-100 shadow-sm p-4">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-sm font-medium text-slate-600 mb-1">This Week Sales</p>
+              <p className="text-sm font-medium text-slate-700 mb-1">This Week Sales</p>
               <p className="text-2xl font-bold text-emerald-700">{stats.currentWeekSales}</p>
-              <p className="text-xs text-slate-500 mt-1">
+              <p className="text-xs text-slate-700 mt-1">
                 Items sold this week
               </p>
             </div>
@@ -1676,11 +1679,11 @@ export default function StaffInventoryManagementPage() {
         <div className="bg-gradient-to-br from-green-50 to-white rounded-2xl border border-green-100 shadow-sm p-4">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-sm font-medium text-slate-600 mb-1">Total Sales Value</p>
+              <p className="text-sm font-medium text-slate-700 mb-1">Total Sales Value</p>
               <p className="text-2xl font-bold text-green-700">
                 KES {stats.totalSalesValue.toLocaleString()}
               </p>
-              <p className="text-xs text-slate-500 mt-1">
+              <p className="text-xs text-slate-700 mt-1">
                 Profit: KES {stats.totalProfit.toLocaleString()}
               </p>
             </div>
@@ -1699,11 +1702,11 @@ export default function StaffInventoryManagementPage() {
         <div className="bg-gradient-to-br from-amber-50 to-white rounded-2xl border border-amber-100 shadow-sm p-4">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-sm font-medium text-slate-600 mb-1">Sell-through Rate</p>
+              <p className="text-sm font-medium text-slate-700 mb-1">Sell-through Rate</p>
               <p className="text-2xl font-bold text-amber-700">
                 {stats.averageCompletionRate.toFixed(1)}%
               </p>
-              <p className="text-xs text-slate-500 mt-1">
+              <p className="text-xs text-slate-700 mt-1">
                 Weekly performance average
               </p>
             </div>
@@ -1720,64 +1723,29 @@ export default function StaffInventoryManagementPage() {
         </div>
       </div>
 
-      {/* Weekly Performance Preview */}
-      {stats.weeklyPerformance.length > 0 && (
-        <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-4 mb-4">
-          <h3 className="font-semibold text-slate-900 mb-3">Weekly Performance History</h3>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-            {stats.weeklyPerformance.slice(0, 3).map((week, index) => (
-              <div key={index} className="border border-slate-200 rounded-xl p-3">
-                <div className="flex justify-between items-center mb-2">
-                  <span className="text-sm font-medium text-slate-900">
-                    {formatWeekRange(week.weekStart, week.weekEnd)}
-                  </span>
-                  <span className={`text-xs px-2 py-1 rounded-full ${week.sellThroughRate >= 70 ? 'bg-green-100 text-green-800' : week.sellThroughRate >= 50 ? 'bg-amber-100 text-amber-800' : 'bg-red-100 text-red-800'}`}>
-                    {week.sellThroughRate.toFixed(0)}%
-                  </span>
-                </div>
-                <div className="grid grid-cols-3 gap-2 text-xs">
-                  <div className="text-center">
-                    <div className="text-slate-600">Assigned</div>
-                    <div className="font-bold">{week.totalGiven}</div>
-                  </div>
-                  <div className="text-center">
-                    <div className="text-slate-600">Sold</div>
-                    <div className="font-bold text-green-600">{week.totalSold}</div>
-                  </div>
-                  <div className="text-center">
-                    <div className="text-slate-600">Returned</div>
-                    <div className="font-bold text-orange-600">{week.totalReturned}</div>
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
       {/* Search and Filter Section */}
       <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-4 mb-4">
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
           <div className="flex-1 max-w-2xl">
             <div className="relative">
-              <Search className="absolute left-4 top-1/2 transform -translate-y-1/2 w-5 h-5 text-slate-400" />
+              <Search className="absolute left-4 top-1/2 transform -translate-y-1/2 w-5 h-5 text-slate-500" />
               <input
                 type="text"
                 placeholder="Search staff, product, week, SKU, category, or phone..."
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
-                className="w-full pl-12 pr-4 py-3 border-2 border-slate-300 rounded-xl focus:border-blue-500 focus:ring-2 focus:ring-blue-200 text-sm placeholder-slate-500"
+                className="w-full pl-12 pr-4 py-3 border-2 border-slate-300 rounded-xl focus:border-blue-500 focus:ring-2 focus:ring-blue-200 text-sm placeholder-slate-600 text-slate-800"
               />
             </div>
           </div>
 
           <div className="flex flex-wrap items-center gap-3">
             <div className="flex items-center gap-2">
-              <Filter className="w-4 h-4 text-slate-500" />
+              <Filter className="w-4 h-4 text-slate-600" />
               <select
                 value={activeFilter}
                 onChange={(e) => setActiveFilter(e.target.value as any)}
-                className="px-3 py-2 border-2 border-slate-300 rounded-xl bg-white text-sm focus:border-blue-500 focus:ring-2 focus:ring-blue-200"
+                className="px-3 py-2 border-2 border-slate-300 rounded-xl bg-white text-sm focus:border-blue-500 focus:ring-2 focus:ring-blue-200 text-slate-800"
               >
                 <option value="all">All Status</option>
                 <option value="active">Active</option>
@@ -1791,7 +1759,7 @@ export default function StaffInventoryManagementPage() {
               <select
                 value={sortBy}
                 onChange={(e) => setSortBy(e.target.value as any)}
-                className="px-3 py-2 border-2 border-slate-300 rounded-xl bg-white text-sm focus:border-blue-500 focus:ring-2 focus:ring-blue-200"
+                className="px-3 py-2 border-2 border-slate-300 rounded-xl bg-white text-sm focus:border-blue-500 focus:ring-2 focus:ring-blue-200 text-slate-800"
               >
                 <option value="week">Sort by Week</option>
                 <option value="staff">Sort by Staff</option>
@@ -1803,28 +1771,28 @@ export default function StaffInventoryManagementPage() {
             <div className="flex bg-slate-100 rounded-xl p-1">
               <button
                 onClick={() => setViewMode('weeks')}
-                className={`p-2 rounded-lg ${viewMode === 'weeks' ? 'bg-white shadow-sm' : 'hover:bg-white/50'}`}
+                className={`p-2 rounded-lg ${viewMode === 'weeks' ? 'bg-white shadow-sm' : 'hover:bg-white/50'} text-slate-700`}
                 title="Week View"
               >
                 <CalendarDays className="w-4 h-4" />
               </button>
               <button
                 onClick={() => setViewMode('list')}
-                className={`p-2 rounded-lg ${viewMode === 'list' ? 'bg-white shadow-sm' : 'hover:bg-white/50'}`}
+                className={`p-2 rounded-lg ${viewMode === 'list' ? 'bg-white shadow-sm' : 'hover:bg-white/50'} text-slate-700`}
                 title="List View"
               >
                 <List className="w-4 h-4" />
               </button>
               <button
                 onClick={() => setViewMode('cards')}
-                className={`p-2 rounded-lg ${viewMode === 'cards' ? 'bg-white shadow-sm' : 'hover:bg-white/50'}`}
+                className={`p-2 rounded-lg ${viewMode === 'cards' ? 'bg-white shadow-sm' : 'hover:bg-white/50'} text-slate-700`}
                 title="Cards View"
               >
                 <Users className="w-4 h-4" />
               </button>
               <button
                 onClick={() => setViewMode('grid')}
-                className={`p-2 rounded-lg ${viewMode === 'grid' ? 'bg-white shadow-sm' : 'hover:bg-white/50'}`}
+                className={`p-2 rounded-lg ${viewMode === 'grid' ? 'bg-white shadow-sm' : 'hover:bg-white/50'} text-slate-700`}
                 title="Grid View"
               >
                 <Grid className="w-4 h-4" />
@@ -1836,10 +1804,10 @@ export default function StaffInventoryManagementPage() {
         {/* Filter Chips */}
         {searchTerm && (
           <div className="mt-3 flex items-center gap-2">
-            <div className="text-sm text-slate-600">Active filters:</div>
+            <div className="text-sm text-slate-700">Active filters:</div>
             <div className="flex flex-wrap gap-2">
               {searchTerm && (
-                <div className="inline-flex items-center gap-1 px-3 py-1.5 bg-blue-100 text-blue-700 rounded-lg text-sm">
+                <div className="inline-flex items-center gap-1 px-3 py-1.5 bg-blue-100 text-blue-800 rounded-lg text-sm">
                   <Search className="w-3 h-3" />
                   {searchTerm}
                   <button
@@ -1851,7 +1819,7 @@ export default function StaffInventoryManagementPage() {
                 </div>
               )}
               {activeFilter !== 'all' && (
-                <div className="inline-flex items-center gap-1 px-3 py-1.5 bg-slate-100 text-slate-700 rounded-lg text-sm">
+                <div className="inline-flex items-center gap-1 px-3 py-1.5 bg-slate-100 text-slate-800 rounded-lg text-sm">
                   <Filter className="w-3 h-3" />
                   {activeFilter}
                   <button
@@ -1869,32 +1837,32 @@ export default function StaffInventoryManagementPage() {
 
       {/* Alerts */}
       {error && (
-        <div className="mb-4 bg-gradient-to-r from-red-50 to-red-50/50 border-l-4 border-red-500 text-red-700 p-4 rounded-xl shadow-sm flex items-start gap-3">
+        <div className="mb-4 bg-gradient-to-r from-red-50 to-red-50/50 border-l-4 border-red-500 text-red-800 p-4 rounded-xl shadow-sm flex items-start gap-3">
           <AlertCircle className="w-5 h-5 flex-shrink-0 mt-0.5 text-red-600" />
           <div className="flex-1">
             <div className="font-medium">Error</div>
             <div className="text-sm">{error}</div>
           </div>
-          <button onClick={() => setError(null)} className="text-red-700 hover:text-red-900">
+          <button onClick={() => setError(null)} className="text-red-800 hover:text-red-900">
             <X size={16} />
           </button>
         </div>
       )}
 
       {success && (
-        <div className="mb-4 bg-gradient-to-r from-emerald-50 to-emerald-50/50 border-l-4 border-emerald-500 text-emerald-700 p-4 rounded-xl shadow-sm flex items-start gap-3">
+        <div className="mb-4 bg-gradient-to-r from-emerald-50 to-emerald-50/50 border-l-4 border-emerald-500 text-emerald-800 p-4 rounded-xl shadow-sm flex items-start gap-3">
           <CheckCircle className="w-5 h-5 flex-shrink-0 mt-0.5 text-emerald-600" />
           <div className="flex-1">
             <div className="font-medium">Success</div>
             <div className="text-sm">{success}</div>
           </div>
-          <button onClick={() => setSuccess(null)} className="text-emerald-700 hover:text-emerald-900">
+          <button onClick={() => setSuccess(null)} className="text-emerald-800 hover:text-emerald-900">
             <X size={16} />
           </button>
         </div>
       )}
 
-      {/* Main Content */}
+      {/* Main Content - Loading State */}
       {loading ? (
         <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-12 text-center">
           <div className="inline-flex items-center justify-center">
@@ -1903,8 +1871,8 @@ export default function StaffInventoryManagementPage() {
               <div className="absolute top-0 left-0 w-12 h-12 rounded-full border-4 border-blue-600 border-t-transparent animate-spin"></div>
             </div>
           </div>
-          <p className="mt-4 text-slate-600 font-medium">Loading weekly inventory assignments...</p>
-          <p className="text-sm text-slate-500">Fetching data from server</p>
+          <p className="mt-4 text-slate-700 font-medium">Loading weekly inventory assignments...</p>
+          <p className="text-sm text-slate-600">Fetching data from server</p>
         </div>
       ) : filteredAssignments.length === 0 ? (
         <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-12 text-center">
@@ -1912,7 +1880,7 @@ export default function StaffInventoryManagementPage() {
             <CalendarDays className="w-10 h-10 text-blue-400" />
           </div>
           <h3 className="text-lg font-semibold text-slate-900 mb-2">No weekly inventory assignments found</h3>
-          <p className="text-slate-600 mb-6 max-w-md mx-auto">
+          <p className="text-slate-700 mb-6 max-w-md mx-auto">
             {searchTerm 
               ? "No results match your search. Try different keywords or clear filters."
               : "Get started by assigning products to your staff members for the current week."
@@ -1924,445 +1892,126 @@ export default function StaffInventoryManagementPage() {
               className="inline-flex items-center gap-2 bg-gradient-to-r from-blue-600 to-blue-700 text-white px-5 py-2.5 rounded-xl hover:from-blue-700 hover:to-blue-800 transition-all shadow-lg hover:shadow-xl font-medium"
             >
               <Plus className="w-5 h-5" />
-              Assign Products for This Week
+              Start Assigning Products
             </button>
           )}
         </div>
       ) : (
-        <>
-          {/* Summary Bar */}
-          <div className="mb-4 flex items-center justify-between text-sm text-slate-600">
-            <div>
-              Showing <span className="font-bold text-slate-900">{filteredAssignments.length}</span> assignments
-              <span className="ml-2">
-                across <span className="font-bold">{new Set(filteredAssignments.map(a => a.weekStartDate)).size}</span> weeks
-              </span>
-            </div>
-            <div className="flex items-center gap-4">
-              <div className="flex items-center gap-2">
-                <div className="w-3 h-3 rounded-full bg-emerald-500"></div>
-                <span>Active ({filteredAssignments.filter(a => a.status === 'ACTIVE').length})</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <div className="w-3 h-3 rounded-full bg-amber-500"></div>
-                <span>Pending ({filteredAssignments.filter(a => a.status === 'PENDING').length})</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <div className="w-3 h-3 rounded-full bg-red-500"></div>
-                <span>Overdue ({filteredAssignments.filter(a => a.status === 'OVERDUE').length})</span>
-              </div>
-            </div>
-          </div>
+        <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-4">
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead className="bg-gradient-to-r from-slate-50 to-slate-100/50">
+                <tr>
+                  <th className="px-6 py-4 text-left text-xs font-semibold text-slate-800 uppercase tracking-wider">
+                    Staff
+                  </th>
+                  <th className="px-6 py-4 text-left text-xs font-semibold text-slate-800 uppercase tracking-wider">
+                    Week
+                  </th>
+                  <th className="px-6 py-4 text-left text-xs font-semibold text-slate-800 uppercase tracking-wider">
+                    Product
+                  </th>
+                  <th className="px-6 py-4 text-left text-xs font-semibold text-slate-800 uppercase tracking-wider">
+                    Quantity
+                  </th>
+                  <th className="px-6 py-4 text-left text-xs font-semibold text-slate-800 uppercase tracking-wider">
+                    Status
+                  </th>
+                  <th className="px-6 py-4 text-left text-xs font-semibold text-slate-800 uppercase tracking-wider">
+                    Actions
+                  </th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {filteredAssignments.map((assignment) => {
+                  const remaining = assignment.quantityGiven - assignment.quantitySold - assignment.quantityReturned;
+                  const weekRange = assignment.weekStartDate && assignment.weekEndDate 
+                    ? formatWeekRange(assignment.weekStartDate, assignment.weekEndDate)
+                    : 'No week';
 
-          {/* Assignments Views */}
-          {viewMode === 'weeks' ? (
-            <div className="space-y-4">
-              {assignmentsByWeek.map((week) => (
-                <WeekViewComponent
-                  key={`${week.weekStart}_${week.weekEnd}`}
-                  weekStart={week.weekStart}
-                  weekEnd={week.weekEnd}
-                  assignments={week.assignments}
-                  onCloseWeek={() => {
-                    const staffIds = new Set(week.assignments.map(a => a.staffId));
-                    if (staffIds.size === 1) {
-                      handleCloseWeek(Array.from(staffIds)[0]);
-                    } else {
-                      handleCloseWeek();
-                    }
-                  }}
-                />
-              ))}
-            </div>
-          ) : viewMode === 'grid' ? (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {filteredAssignments.map((assignment) => {
-                const remaining = assignment.quantityGiven - assignment.quantitySold - assignment.quantityReturned;
-                const daysRemaining = assignment.weekEndDate ? getDaysRemainingInWeek(assignment.weekEndDate) : 0;
-                const progress = calculateSalesProgress(assignment);
-                const weekRange = assignment.weekStartDate && assignment.weekEndDate 
-                  ? formatWeekRange(assignment.weekStartDate, assignment.weekEndDate)
-                  : 'No week assigned';
-
-                return (
-                  <div key={assignment.id} className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden hover:shadow-lg transition-all duration-300 hover:border-blue-300 group">
-                    {/* Status Badge */}
-                    <div className="absolute top-4 right-4 z-10">
-                      <span className={`inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-medium ${getStatusColor(assignment.status)}`}>
-                        {assignment.status}
-                      </span>
-                    </div>
-
-                    {/* Priority Badge */}
-                    {assignment.priority && (
-                      <div className="absolute top-4 left-4 z-10">
-                        <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium ${getPriorityColor(assignment.priority)}`}>
-                          {assignment.priority}
-                        </span>
-                      </div>
-                    )}
-
-                    <div className="p-5">
-                      {/* Staff Info */}
-                      <div className="flex items-center gap-3 mb-3">
-                        <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-blue-100 to-blue-200 flex items-center justify-center">
-                          <User className="w-6 h-6 text-blue-600" />
-                        </div>
-                        <div className="flex-1">
-                          <h3 className="font-bold text-slate-900 group-hover:text-blue-700">{assignment.staff?.name}</h3>
-                          {assignment.staff?.phone && (
-                            <p className="text-sm text-slate-600">{assignment.staff.phone}</p>
-                          )}
-                        </div>
-                      </div>
-
-                      {/* Week Info */}
-                      <div className="mb-3">
-                        <div className="flex items-center gap-2 text-sm text-slate-600">
-                          <CalendarDays className="w-4 h-4" />
-                          <span>{weekRange}</span>
-                        </div>
-                      </div>
-
-                      {/* Product Info */}
-                      <div className="mb-4">
-                        <div className="flex items-center gap-2 mb-2">
-                          <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-slate-100 to-slate-50 flex items-center justify-center">
-                            <Package className="w-4 h-4 text-slate-600" />
+                  return (
+                    <tr key={assignment.id} className="hover:bg-slate-50/50 transition-colors">
+                      <td className="px-6 py-4">
+                        <div className="flex items-center gap-3">
+                          <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-blue-100 to-blue-50 flex items-center justify-center">
+                            <User className="w-5 h-5 text-blue-600" />
                           </div>
-                          <div className="flex-1">
-                            <h4 className="font-semibold text-slate-900 text-sm">{assignment.product?.name}</h4>
-                            {assignment.product?.category && (
-                              <p className="text-xs text-slate-500">{assignment.product.category}</p>
+                          <div>
+                            <div className="font-medium text-slate-900">{assignment.staff?.name}</div>
+                            {assignment.staff?.phone && (
+                              <div className="text-sm text-slate-700">{assignment.staff.phone}</div>
                             )}
                           </div>
                         </div>
-                      </div>
-
-                      {/* Quantity Progress */}
-                      <div className="space-y-3">
-                        <div className="grid grid-cols-3 gap-2 text-center">
-                          <div className="bg-slate-50 rounded-lg p-2">
-                            <div className="text-xs text-slate-600 mb-1">Given</div>
+                      </td>
+                      <td className="px-6 py-4">
+                        <div className="text-sm font-medium text-slate-900">{weekRange}</div>
+                      </td>
+                      <td className="px-6 py-4">
+                        <div className="font-medium text-slate-900">{assignment.product?.name}</div>
+                        {assignment.product?.sku && (
+                          <div className="text-xs text-slate-600 font-mono">{assignment.product.sku}</div>
+                        )}
+                      </td>
+                      <td className="px-6 py-4">
+                        <div className="flex items-center gap-6">
+                          <div className="text-center">
+                            <div className="text-xs text-slate-700">Given</div>
                             <div className="font-bold text-slate-900">{assignment.quantityGiven}</div>
                           </div>
-                          <div className="bg-emerald-50 rounded-lg p-2">
-                            <div className="text-xs text-emerald-600 mb-1">Sold</div>
+                          <div className="text-center">
+                            <div className="text-xs text-slate-700">Sold</div>
                             <div className="font-bold text-emerald-700">{assignment.quantitySold}</div>
                           </div>
-                          <div className="bg-blue-50 rounded-lg p-2">
-                            <div className="text-xs text-blue-600 mb-1">Left</div>
+                          <div className="text-center">
+                            <div className="text-xs text-slate-700">Left</div>
                             <div className="font-bold text-blue-700">{remaining}</div>
                           </div>
                         </div>
-
-                        {/* Progress Bar */}
-                        <div>
-                          <div className="flex justify-between text-xs text-slate-600 mb-1">
-                            <span>Sales Progress</span>
-                            <span>{progress.toFixed(0)}%</span>
-                          </div>
-                          <div className="w-full bg-slate-200 rounded-full h-2">
-                            <div 
-                              className="h-2 rounded-full bg-gradient-to-r from-blue-500 to-emerald-500"
-                              style={{ width: `${progress}%` }}
-                            ></div>
-                          </div>
-                        </div>
-
-                        {/* Value & Days */}
-                        <div className="flex items-center justify-between text-sm">
-                          <div className="text-slate-600">
-                            Value: <span className="font-bold text-green-600">
-                              KES {assignment.totalSalesAmount.toLocaleString()}
+                      </td>
+                      <td className="px-6 py-4">
+                        <div className="flex flex-col gap-2">
+                          <span className={`inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-medium ${getStatusColor(assignment.status)}`}>
+                            {assignment.status}
+                          </span>
+                          {assignment.priority && (
+                            <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium ${getPriorityColor(assignment.priority)}`}>
+                              {assignment.priority}
                             </span>
-                          </div>
-                          {daysRemaining > 0 && (
-                            <div className="text-sm font-medium text-emerald-600">
-                              {daysRemaining}d left in week
-                            </div>
                           )}
                         </div>
-                      </div>
-
-                      {/* Actions */}
-                      <div className="mt-5 pt-4 border-t border-slate-100">
-                        <div className="flex gap-2">
+                      </td>
+                      <td className="px-6 py-4">
+                        <div className="flex items-center gap-2">
                           {remaining > 0 && assignment.isCurrentWeek && (
                             <button
-                              onClick={() => {
-                                setSelectedStaff(assignment.staff);
-                                setReturnForm({
-                                  items: [{
-                                    assignmentId: assignment.id,
-                                    quantityReturned: "1",
-                                    productName: assignment.product?.name || '',
-                                    productId: assignment.productId,
-                                    maxReturnable: remaining,
-                                    weekStartDate: assignment.weekStartDate ?? undefined,
-                                    weekEndDate: assignment.weekEndDate ?? undefined
-                                  }],
-                                  notes: ""
-                                });
-                                setShowReturnModal(true);
-                              }}
-                              className="flex-1 py-2 bg-gradient-to-r from-amber-500 to-amber-600 text-white rounded-lg hover:from-amber-600 hover:to-amber-700 transition-all text-sm font-medium"
+                              onClick={() => openReturnModal(assignment.staff)}
+                              className="p-2 text-amber-600 hover:bg-amber-50 rounded-lg transition-colors"
+                              title="Return"
                             >
-                              Return
+                              <Package className="w-4 h-4" />
                             </button>
                           )}
                           <button
                             onClick={() => handleCompleteAssignment(assignment.id)}
-                            className="flex-1 py-2 bg-gradient-to-r from-emerald-500 to-emerald-600 text-white rounded-lg hover:from-emerald-600 hover:to-emerald-700 transition-all text-sm font-medium"
+                            className="p-2 text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors"
+                            title="Complete"
                           >
-                            Complete
+                            <CheckSquare className="w-4 h-4" />
                           </button>
                         </div>
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          ) : viewMode === 'cards' ? (
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-              {staffAssignments.map((group) => (
-                <div key={group.staff.id} className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden hover:shadow-lg transition-all duration-300">
-                  {/* Header */}
-                  <div className="p-5 border-b border-slate-100 bg-gradient-to-r from-slate-50 to-white">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-3">
-                        <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-blue-100 to-blue-200 flex items-center justify-center">
-                          <User className="w-6 h-6 text-blue-600" />
-                        </div>
-                        <div>
-                          <h3 className="font-bold text-slate-900">{group.staff.name}</h3>
-                          {group.staff.phone && (
-                            <p className="text-sm text-slate-600">{group.staff.phone}</p>
-                          )}
-                        </div>
-                      </div>
-                      <button
-                        onClick={() => openReturnModal(group.staff)}
-                        className="px-4 py-2 bg-gradient-to-r from-amber-500 to-amber-600 text-white rounded-lg hover:from-amber-600 hover:to-amber-700 transition-all shadow-sm font-medium text-sm"
-                      >
-                        Return Items
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Stats */}
-                  <div className="p-5">
-                    <div className="grid grid-cols-4 gap-3 mb-4">
-                      <div className="bg-slate-50 rounded-xl p-3 text-center">
-                        <div className="text-xs text-slate-600 mb-1">Weeks</div>
-                        <div className="text-lg font-bold text-slate-900">
-                          {new Set(group.assignments.map(a => a.weekStartDate)).size}
-                        </div>
-                      </div>
-                      <div className="bg-emerald-50 rounded-xl p-3 text-center">
-                        <div className="text-xs text-emerald-600 mb-1">Sold</div>
-                        <div className="text-lg font-bold text-emerald-700">
-                          {group.assignments.reduce((sum, a) => sum + a.quantitySold, 0)}
-                        </div>
-                      </div>
-                      <div className="bg-blue-50 rounded-xl p-3 text-center">
-                        <div className="text-xs text-blue-600 mb-1">Remaining</div>
-                        <div className="text-lg font-bold text-blue-700">
-                          {group.assignments.reduce((sum, a) => sum + (a.quantityGiven - a.quantitySold - a.quantityReturned), 0)}
-                        </div>
-                      </div>
-                      <div className="bg-green-50 rounded-xl p-3 text-center">
-                        <div className="text-xs text-green-600 mb-1">Value</div>
-                        <div className="text-lg font-bold text-green-700">
-                          KES {group.totalValue.toLocaleString()}
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Assignment List */}
-                    <div className="space-y-3">
-                      {group.assignments.slice(0, 3).map((assignment) => {
-                        const weekRange = assignment.weekStartDate && assignment.weekEndDate 
-                          ? formatWeekRange(assignment.weekStartDate, assignment.weekEndDate)
-                          : 'No week';
-                        
-                        return (
-                          <div key={assignment.id} className="bg-gradient-to-r from-slate-50/50 to-white border border-slate-100 rounded-xl p-3">
-                            <div className="flex items-center justify-between mb-2">
-                              <div className="flex items-center gap-2">
-                                <Package className="w-4 h-4 text-slate-500" />
-                                <span className="font-medium text-slate-900 text-sm">{assignment.product?.name}</span>
-                              </div>
-                              <span className={`px-2 py-1 rounded-full text-xs font-medium ${getStatusColor(assignment.status)}`}>
-                                {assignment.status}
-                              </span>
-                            </div>
-                            <div className="text-xs text-slate-500 mb-2">{weekRange}</div>
-                            <div className="grid grid-cols-3 gap-2 text-xs">
-                              <div className="text-center">
-                                <div className="text-slate-600">Given</div>
-                                <div className="font-bold">{assignment.quantityGiven}</div>
-                              </div>
-                              <div className="text-center">
-                                <div className="text-slate-600">Sold</div>
-                                <div className="font-bold text-emerald-600">{assignment.quantitySold}</div>
-                              </div>
-                              <div className="text-center">
-                                <div className="text-slate-600">Left</div>
-                                <div className="font-bold text-blue-600">
-                                  {assignment.quantityGiven - assignment.quantitySold - assignment.quantityReturned}
-                                </div>
-                              </div>
-                            </div>
-                          </div>
-                        );
-                      })}
-                      
-                      {group.assignments.length > 3 && (
-                        <div className="text-center text-sm text-blue-600 font-medium">
-                          +{group.assignments.length - 3} more weekly assignments
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          ) : (
-            /* List View */
-            <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
-              <div className="overflow-x-auto">
-                <table className="w-full">
-                  <thead className="bg-gradient-to-r from-slate-50 to-slate-100/50">
-                    <tr>
-                      <th className="px-6 py-4 text-left text-xs font-semibold text-slate-700 uppercase tracking-wider">
-                        Staff
-                      </th>
-                      <th className="px-6 py-4 text-left text-xs font-semibold text-slate-700 uppercase tracking-wider">
-                        Week
-                      </th>
-                      <th className="px-6 py-4 text-left text-xs font-semibold text-slate-700 uppercase tracking-wider">
-                        Product
-                      </th>
-                      <th className="px-6 py-4 text-left text-xs font-semibold text-slate-700 uppercase tracking-wider">
-                        Quantity
-                      </th>
-                      <th className="px-6 py-4 text-left text-xs font-semibold text-slate-700 uppercase tracking-wider">
-                        Status
-                      </th>
-                      <th className="px-6 py-4 text-left text-xs font-semibold text-slate-700 uppercase tracking-wider">
-                        Actions
-                      </th>
+                      </td>
                     </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {filteredAssignments.map((assignment) => {
-                      const remaining = assignment.quantityGiven - assignment.quantitySold - assignment.quantityReturned;
-                      const weekRange = assignment.weekStartDate && assignment.weekEndDate 
-                        ? formatWeekRange(assignment.weekStartDate, assignment.weekEndDate)
-                        : 'No week';
-
-                      return (
-                        <tr key={assignment.id} className="hover:bg-slate-50/50 transition-colors">
-                          <td className="px-6 py-4">
-                            <div className="flex items-center gap-3">
-                              <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-blue-100 to-blue-50 flex items-center justify-center">
-                                <User className="w-5 h-5 text-blue-600" />
-                              </div>
-                              <div>
-                                <div className="font-medium text-slate-900">{assignment.staff?.name}</div>
-                                {assignment.staff?.phone && (
-                                  <div className="text-sm text-slate-600">{assignment.staff.phone}</div>
-                                )}
-                              </div>
-                            </div>
-                          </td>
-                          <td className="px-6 py-4">
-                            <div className="text-sm font-medium text-slate-900">{weekRange}</div>
-                          </td>
-                          <td className="px-6 py-4">
-                            <div className="font-medium text-slate-900">{assignment.product?.name}</div>
-                            {assignment.product?.sku && (
-                              <div className="text-xs text-slate-500 font-mono">{assignment.product.sku}</div>
-                            )}
-                          </td>
-                          <td className="px-6 py-4">
-                            <div className="flex items-center gap-6">
-                              <div className="text-center">
-                                <div className="text-xs text-slate-600">Given</div>
-                                <div className="font-bold text-slate-900">{assignment.quantityGiven}</div>
-                              </div>
-                              <div className="text-center">
-                                <div className="text-xs text-slate-600">Sold</div>
-                                <div className="font-bold text-emerald-600">{assignment.quantitySold}</div>
-                              </div>
-                              <div className="text-center">
-                                <div className="text-xs text-slate-600">Left</div>
-                                <div className="font-bold text-blue-600">{remaining}</div>
-                              </div>
-                            </div>
-                          </td>
-                          <td className="px-6 py-4">
-                            <div className="flex flex-col gap-2">
-                              <span className={`inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-medium ${getStatusColor(assignment.status)}`}>
-                                {assignment.status}
-                              </span>
-                              {assignment.priority && (
-                                <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium ${getPriorityColor(assignment.priority)}`}>
-                                  {assignment.priority}
-                                </span>
-                              )}
-                            </div>
-                          </td>
-                          <td className="px-6 py-4">
-                            <div className="flex items-center gap-2">
-                              {remaining > 0 && assignment.isCurrentWeek && (
-                                <button
-                                  onClick={() => {
-                                    setSelectedStaff(assignment.staff);
-                                    setReturnForm({
-                                      items: [{
-                                        assignmentId: assignment.id,
-                                        quantityReturned: "1",
-                                        productName: assignment.product?.name || '',
-                                        productId: assignment.productId,
-                                        maxReturnable: remaining,
-                                        weekStartDate: assignment.weekStartDate ?? undefined,
-                                        weekEndDate: assignment.weekEndDate ?? undefined
-                                      }],
-                                      notes: ""
-                                    });
-                                    setShowReturnModal(true);
-                                  }}
-                                  className="p-2 text-amber-600 hover:bg-amber-50 rounded-lg transition-colors"
-                                  title="Return"
-                                >
-                                  <Package className="w-4 h-4" />
-                                </button>
-                              )}
-                              <button
-                                onClick={() => handleCompleteAssignment(assignment.id)}
-                                className="p-2 text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors"
-                                title="Complete"
-                              >
-                                <CheckSquare className="w-4 h-4" />
-                              </button>
-                            </div>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          )}
-        </>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
       )}
 
       {/* Footer */}
-      <div className="mt-8 text-center text-slate-500 text-sm">
+      <div className="mt-8 text-center text-slate-700 text-sm">
         <p>© {new Date().getFullYear()} Swift Metals POS • Weekly Staff Inventory Management System v2.0</p>
         <p className="text-xs mt-1">Total weekly assignments: {stats.totalAssignments} • Current week: {formatWeekRange(currentWeek.weekStartDate, currentWeek.weekEndDate)}</p>
       </div>
@@ -2376,7 +2025,7 @@ export default function StaffInventoryManagementPage() {
         excludedIds={excludedProductIds}
       />
 
-      {/* Assign Weekly Inventory Modal */}
+      {/* SINGLE Assign Inventory Modal */}
       {showAssignModal && (
         <div className="fixed inset-0 bg-black/70 flex items-center justify-center p-2 md:p-4 z-50">
           <div className="bg-white rounded-2xl w-full max-w-4xl shadow-2xl max-h-[90vh] flex flex-col">
@@ -2389,7 +2038,7 @@ export default function StaffInventoryManagementPage() {
                   </div>
                   <div>
                     <h2 className="text-xl md:text-2xl font-bold">Assign Products for the Week</h2>
-                    <p className="text-blue-100 text-sm">Select products and assign to staff member for the week</p>
+                    <p className="text-blue-100 text-sm">Assign products to staff member for the week</p>
                   </div>
                 </div>
                 <button
@@ -2421,7 +2070,7 @@ export default function StaffInventoryManagementPage() {
                 <select
                   value={form.staffId}
                   onChange={(e) => setForm({ ...form, staffId: e.target.value })}
-                  className="w-full px-4 py-3 border-2 border-slate-300 rounded-xl focus:border-blue-500 focus:ring-2 focus:ring-blue-200 text-sm"
+                  className="w-full px-4 py-3 border-2 border-slate-300 rounded-xl focus:border-blue-500 focus:ring-2 focus:ring-blue-200 text-sm text-slate-800"
                   disabled={submitting}
                 >
                   <option value="">Choose staff member...</option>
@@ -2440,7 +2089,7 @@ export default function StaffInventoryManagementPage() {
                 </label>
                 <div className="grid grid-cols-2 gap-4">
                   <div>
-                    <div className="text-xs text-slate-600 mb-1">Week Start (Monday)</div>
+                    <div className="text-xs text-slate-700 mb-1">Week Start (Monday)</div>
                     <input
                       type="date"
                       value={form.weekStartDate}
@@ -2454,43 +2103,59 @@ export default function StaffInventoryManagementPage() {
                           weekEndDate: endDate.toISOString().split('T')[0]
                         });
                       }}
-                      className="w-full px-4 py-3 border-2 border-slate-300 rounded-xl focus:border-blue-500 focus:ring-2 focus:ring-blue-200 text-sm"
+                      className="w-full px-4 py-3 border-2 border-slate-300 rounded-xl focus:border-blue-500 focus:ring-2 focus:ring-blue-200 text-sm text-slate-800"
                       disabled={submitting}
                     />
                   </div>
                   <div>
-                    <div className="text-xs text-slate-600 mb-1">Week End (Sunday)</div>
+                    <div className="text-xs text-slate-700 mb-1">Week End (Sunday)</div>
                     <input
                       type="date"
                       value={form.weekEndDate}
                       onChange={(e) => setForm({ ...form, weekEndDate: e.target.value })}
                       min={form.weekStartDate}
-                      className="w-full px-4 py-3 border-2 border-slate-300 rounded-xl focus:border-blue-500 focus:ring-2 focus:ring-blue-200 text-sm"
+                      className="w-full px-4 py-3 border-2 border-slate-300 rounded-xl focus:border-blue-500 focus:ring-2 focus:ring-blue-200 text-sm text-slate-800"
                       disabled={submitting}
                     />
                   </div>
                 </div>
-                <div className="mt-2 text-xs text-slate-500">
+                <div className="mt-2 text-xs text-slate-700">
                   Week: {form.weekStartDate} to {form.weekEndDate}
                 </div>
               </div>
 
+              {/* Auto-fill Suggestions */}
+              {form.staffId && (
+                <AutoFillSuggestions
+                  products={products}
+                  staffId={parseInt(form.staffId)}
+                  onApply={applyAutoFill}
+                />
+              )}
+
               {/* Product Search Section */}
               <div className="mb-6">
                 <label className="block text-sm font-semibold text-slate-900 mb-2">
-                  Add Products for this Week
+                  Add Products
                 </label>
-                <ProductSearchInput
-                  value=""
-                  onChange={() => {}}
-                  onSearchClick={() => setShowProductSearch(true)}
-                  placeholder="Click browse to search products..."
-                  disabled={submitting}
-                />
+                <div className="flex gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setShowProductSearch(true)}
+                    disabled={submitting}
+                    className="flex-1 px-4 py-3 bg-gradient-to-r from-blue-600 to-blue-700 text-white rounded-xl hover:from-blue-700 hover:to-blue-800 transition-all shadow-sm text-sm font-medium disabled:opacity-50 flex items-center justify-center gap-2"
+                  >
+                    <Search className="w-4 h-4" />
+                    Browse Products
+                  </button>
+                </div>
+                <p className="text-xs text-slate-600 mt-2">
+                  Products are automatically added with quantity 1. Adjust quantities below.
+                </p>
               </div>
 
               {/* Selected Products */}
-              {form.items.length > 0 && (
+              {form.items.length > 0 ? (
                 <div className="mb-6">
                   <div className="flex items-center justify-between mb-3">
                     <label className="block text-sm font-semibold text-slate-900">
@@ -2518,6 +2183,22 @@ export default function StaffInventoryManagementPage() {
                     ))}
                   </div>
                 </div>
+              ) : (
+                <div className="mb-6 bg-gradient-to-r from-slate-50 to-blue-50/50 rounded-xl p-6 text-center border border-slate-200">
+                  <Package className="w-12 h-12 text-slate-300 mx-auto mb-3" />
+                  <h4 className="font-medium text-slate-700 mb-2">No products selected</h4>
+                  <p className="text-sm text-slate-600 mb-4">
+                    Click "Browse Products" to search and add products, or use the Quick Add suggestions above.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => setShowProductSearch(true)}
+                    className="px-4 py-2 bg-gradient-to-r from-blue-600 to-blue-700 text-white rounded-lg hover:from-blue-700 hover:to-blue-800 text-sm font-medium"
+                  >
+                    <Search className="w-4 h-4 inline mr-2" />
+                    Start Browsing Products
+                  </button>
+                </div>
               )}
 
               {/* Priority */}
@@ -2531,9 +2212,11 @@ export default function StaffInventoryManagementPage() {
                       key={priority}
                       type="button"
                       onClick={() => setForm({ ...form, priority: priority as any })}
-                      className={`px-4 py-3 rounded-xl border-2 transition-all ${form.priority === priority 
+                      className={`px-4 py-3 rounded-xl border-2 transition-all text-slate-800 ${
+                        form.priority === priority 
                         ? getPriorityColor(priority) + ' border-blue-500 scale-[1.02]' 
-                        : 'border-slate-200 hover:border-slate-300'}`}
+                        : 'border-slate-200 hover:border-slate-300'
+                      }`}
                       disabled={submitting}
                     >
                       <div className="text-sm font-medium">{priority}</div>
@@ -2552,7 +2235,7 @@ export default function StaffInventoryManagementPage() {
                   onChange={(e) => setForm({ ...form, notes: e.target.value })}
                   placeholder="Add any special instructions, guidelines, or notes for this weekly assignment..."
                   rows={3}
-                  className="w-full px-4 py-3 border-2 border-slate-300 rounded-xl focus:border-blue-500 focus:ring-2 focus:ring-blue-200 text-sm"
+                  className="w-full px-4 py-3 border-2 border-slate-300 rounded-xl focus:border-blue-500 focus:ring-2 focus:ring-blue-200 text-sm text-slate-800"
                   disabled={submitting}
                 />
               </div>
@@ -2560,27 +2243,27 @@ export default function StaffInventoryManagementPage() {
               {/* Summary */}
               {form.items.length > 0 && (
                 <div className="mb-6 bg-gradient-to-r from-slate-50 to-blue-50/50 rounded-xl p-4">
-                  <h4 className="font-semibold text-slate-900 mb-3">Weekly Assignment Summary</h4>
+                  <h4 className="font-semibold text-slate-900 mb-3">Assignment Summary</h4>
                   <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                     <div className="text-center">
-                      <div className="text-xs text-slate-600">Total Items</div>
+                      <div className="text-xs text-slate-700">Total Items</div>
                       <div className="text-xl font-bold text-slate-900">
                         {form.items.reduce((sum, item) => sum + parseInt(item.quantity), 0)}
                       </div>
                     </div>
                     <div className="text-center">
-                      <div className="text-xs text-slate-600">Unique Products</div>
+                      <div className="text-xs text-slate-700">Unique Products</div>
                       <div className="text-xl font-bold text-slate-900">{form.items.length}</div>
                     </div>
                     <div className="text-center">
-                      <div className="text-xs text-slate-600">Total Value</div>
-                      <div className="text-xl font-bold text-green-600">
+                      <div className="text-xs text-slate-700">Total Value</div>
+                      <div className="text-xl font-bold text-green-700">
                         KES {form.items.reduce((sum, item) => sum + ((item.product?.price || 0) * parseInt(item.quantity)), 0).toLocaleString()}
                       </div>
                     </div>
                     <div className="text-center">
-                      <div className="text-xs text-slate-600">Week</div>
-                      <div className="text-xl font-bold text-blue-600">
+                      <div className="text-xs text-slate-700">Week</div>
+                      <div className="text-xl font-bold text-blue-700">
                         {new Date(form.weekStartDate).toLocaleDateString('en-KE', { day: '2-digit', month: 'short' })}
                       </div>
                     </div>
@@ -2606,7 +2289,7 @@ export default function StaffInventoryManagementPage() {
                   }}
                   type="button"
                   disabled={submitting}
-                  className="flex-1 px-4 py-3 border-2 border-slate-300 text-slate-700 rounded-xl hover:bg-slate-50 font-medium text-sm disabled:opacity-50"
+                  className="flex-1 px-4 py-3 border-2 border-slate-300 text-slate-800 rounded-xl hover:bg-slate-50 font-medium text-sm disabled:opacity-50"
                 >
                   Cancel
                 </button>
@@ -2682,16 +2365,16 @@ export default function StaffInventoryManagementPage() {
                         <div className="flex justify-between items-start mb-3">
                           <div>
                             <div className="font-medium text-slate-900">{item.productName}</div>
-                            <div className="text-xs text-slate-500">{weekRange}</div>
+                            <div className="text-xs text-slate-700">{weekRange}</div>
                           </div>
-                          <div className="text-sm font-semibold text-slate-700">
+                          <div className="text-sm font-semibold text-slate-800">
                             Max: {item.maxReturnable}
                           </div>
                         </div>
                         
                         <div className="flex items-center gap-3">
                           <div className="flex-1">
-                            <div className="text-xs text-slate-600 mb-1">Quantity to Return</div>
+                            <div className="text-xs text-slate-700 mb-1">Quantity to Return</div>
                             <input
                               type="range"
                               min="0"
@@ -2717,7 +2400,7 @@ export default function StaffInventoryManagementPage() {
                                 newItems[index].quantityReturned = e.target.value;
                                 setReturnForm({ ...returnForm, items: newItems });
                               }}
-                              className="w-full px-3 py-2 border-2 border-slate-300 rounded-lg focus:border-amber-500 focus:ring-2 focus:ring-amber-200 text-sm text-center"
+                              className="w-full px-3 py-2 border-2 border-slate-300 rounded-lg focus:border-amber-500 focus:ring-2 focus:ring-amber-200 text-sm text-center text-slate-800"
                               disabled={submitting}
                             />
                           </div>
@@ -2728,7 +2411,7 @@ export default function StaffInventoryManagementPage() {
                               newItems[index].quantityReturned = item.maxReturnable.toString();
                               setReturnForm({ ...returnForm, items: newItems });
                             }}
-                            className="px-3 py-2 bg-amber-100 text-amber-700 rounded-lg hover:bg-amber-200 text-sm font-medium"
+                            className="px-3 py-2 bg-amber-100 text-amber-800 rounded-lg hover:bg-amber-200 text-sm font-medium"
                             disabled={submitting}
                           >
                             Max
@@ -2746,11 +2429,11 @@ export default function StaffInventoryManagementPage() {
                   <div className="flex items-center justify-between">
                     <div>
                       <div className="text-sm font-semibold text-slate-900">Total Items to Return</div>
-                      <div className="text-xs text-slate-600">
+                      <div className="text-xs text-slate-700">
                         {returnForm.items.filter(item => parseInt(item.quantityReturned) > 0).length} items selected
                       </div>
                     </div>
-                    <div className="text-2xl font-bold text-amber-600">
+                    <div className="text-2xl font-bold text-amber-700">
                       {returnForm.items.reduce((sum, item) => sum + parseInt(item.quantityReturned), 0)}
                     </div>
                   </div>
@@ -2767,7 +2450,7 @@ export default function StaffInventoryManagementPage() {
                   onChange={(e) => setReturnForm({ ...returnForm, notes: e.target.value })}
                   placeholder="Add notes about why items are being returned..."
                   rows={2}
-                  className="w-full px-4 py-3 border-2 border-slate-300 rounded-xl focus:border-amber-500 focus:ring-2 focus:ring-amber-200 text-sm"
+                  className="w-full px-4 py-3 border-2 border-slate-300 rounded-xl focus:border-amber-500 focus:ring-2 focus:ring-amber-200 text-sm text-slate-800"
                   disabled={submitting}
                 />
               </div>
@@ -2784,7 +2467,7 @@ export default function StaffInventoryManagementPage() {
                   }}
                   type="button"
                   disabled={submitting}
-                  className="flex-1 px-4 py-3 border-2 border-slate-300 text-slate-700 rounded-xl hover:bg-slate-50 font-medium text-sm disabled:opacity-50"
+                  className="flex-1 px-4 py-3 border-2 border-slate-300 text-slate-800 rounded-xl hover:bg-slate-50 font-medium text-sm disabled:opacity-50"
                 >
                   Cancel
                 </button>

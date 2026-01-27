@@ -1,7 +1,12 @@
 "use client";
 
 import { useState, useEffect, useMemo } from 'react';
-import { Download, Search, Filter, RefreshCw, Calendar, TrendingUp, TrendingDown, Wallet, ChevronRight, Menu, X, Smartphone, Monitor } from 'lucide-react';
+import { 
+  Download, Search, Filter, RefreshCw, Calendar, 
+  TrendingUp, TrendingDown, Wallet, ChevronRight, 
+  Menu, X, Smartphone, Monitor, Trash2, AlertTriangle,
+  Check, XCircle, Eye, MoreVertical, Edit
+} from 'lucide-react';
 
 interface MoneyRecord {
   id: string;
@@ -14,6 +19,8 @@ interface MoneyRecord {
   referenceId: string;
   runningBalance?: number;
   timestamp?: string;
+  originalType?: 'sale' | 'restock' | 'expense';
+  originalId?: number;
 }
 
 type TimeFilter = 'ALL' | 'TODAY' | 'WEEK' | 'MONTH';
@@ -31,6 +38,15 @@ export default function MoneyTracker() {
   const [viewMode, setViewMode] = useState<ViewMode>('desktop');
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [selectedRecord, setSelectedRecord] = useState<MoneyRecord | null>(null);
+  
+  // Delete modal states
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [recordToDelete, setRecordToDelete] = useState<MoneyRecord | null>(null);
+  const [deleteReason, setDeleteReason] = useState('');
+  const [deleteLoading, setDeleteLoading] = useState(false);
+  
+  // Mobile action menu states
+  const [mobileActionMenu, setMobileActionMenu] = useState<string | null>(null);
 
   // Detect mobile on mount
   useEffect(() => {
@@ -65,7 +81,7 @@ export default function MoneyTracker() {
       const errors: string[] = [];
       if (!salesRes.ok) errors.push(`Sales API: ${salesRes.status}`);
       if (!restocksRes.ok) errors.push(`Restock API: ${restocksRes.status}`);
-      if (!expensesRes.ok) errors.push(`Expenses API: ${expensesRes.status}`);
+      if (!expensesRes.ok) errors.push(`Expenses API: ${expensesRes.ok}`);
       
       if (errors.length > 0) {
         throw new Error(`Failed to fetch: ${errors.join(', ')}`);
@@ -118,14 +134,16 @@ export default function MoneyTracker() {
           allRecords.push({
             id: `sale-${sale.id}`,
             date: sale.date?.split('T')[0] || new Date().toISOString().split('T')[0],
-            timestamp: sale.date, // Use the timestamp field
+            timestamp: sale.date,
             description: description,
             amount: amountReceived,
             type: 'INFLOW',
             category: 'Sales',
             referenceSource: 'Sales',
             referenceId: `SALE-${String(sale.id).padStart(8, '0')}`,
-            runningBalance: sale.runningBalance
+            runningBalance: sale.runningBalance,
+            originalType: 'sale',
+            originalId: sale.id
           });
         }
       });
@@ -143,16 +161,17 @@ export default function MoneyTracker() {
       
       allRecords.push({
         id: `restock-${restock.id}`,
-        // Use createdAt from restock data (which contains the actual timestamp)
         date: restock.createdAt?.split('T')[0] || new Date().toISOString().split('T')[0],
-        timestamp: restock.createdAt, // This contains the actual time
+        timestamp: restock.createdAt,
         description: description,
         amount: restock.totalCost || 0,
         type: 'OUTFLOW',
         category: 'Restock',
         referenceSource: 'Restock',
         referenceId: `RSTK-${String(restock.id).padStart(8, '0')}`,
-        runningBalance: restock.runningBalance
+        runningBalance: restock.runningBalance,
+        originalType: 'restock',
+        originalId: restock.id
       });
     });
 
@@ -174,7 +193,9 @@ export default function MoneyTracker() {
         category: expense.category || 'Expense',
         referenceSource: 'Expense',
         referenceId: `EXP-${String(expense.id).padStart(8, '0')}`,
-        runningBalance: expense.runningBalance
+        runningBalance: expense.runningBalance,
+        originalType: 'expense',
+        originalId: expense.id
       });
     });
 
@@ -236,9 +257,7 @@ export default function MoneyTracker() {
   // Date formatting functions for Kenyan timezone
   const formatDate = (dateString: string) => {
     try {
-      // Convert UTC to East Africa Time (EAT)
       const date = new Date(dateString);
-      // Format with Kenyan locale and timezone
       return date.toLocaleDateString('en-KE', {
         timeZone: 'Africa/Nairobi',
         year: 'numeric',
@@ -253,7 +272,6 @@ export default function MoneyTracker() {
   const formatFullDate = (dateString: string) => {
     try {
       const date = new Date(dateString);
-      // Format with Kenyan timezone including time
       return date.toLocaleDateString('en-KE', {
         timeZone: 'Africa/Nairobi',
         weekday: 'long',
@@ -287,7 +305,6 @@ export default function MoneyTracker() {
   const getLocalDate = (dateString: string) => {
     try {
       const date = new Date(dateString);
-      // Return date adjusted to Kenyan timezone
       return new Date(date.toLocaleString('en-US', { timeZone: 'Africa/Nairobi' }));
     } catch {
       return new Date();
@@ -319,7 +336,6 @@ export default function MoneyTracker() {
     // Apply time filter using Kenyan timezone
     if (timeFilter !== 'ALL') {
       const now = new Date();
-      // Convert to Kenyan timezone for accurate filtering
       const kenyaNow = new Date(now.toLocaleString('en-US', { timeZone: 'Africa/Nairobi' }));
       
       const startOfToday = new Date(kenyaNow.getFullYear(), kenyaNow.getMonth(), kenyaNow.getDate());
@@ -430,7 +446,81 @@ export default function MoneyTracker() {
     window.URL.revokeObjectURL(url);
   };
 
-  // Mobile transaction detail view
+  // Handle delete transaction
+  const handleDeleteClick = (record: MoneyRecord) => {
+    setRecordToDelete(record);
+    setDeleteReason('');
+    setShowDeleteModal(true);
+  };
+
+  const confirmDelete = async () => {
+    if (!recordToDelete) return;
+
+    setDeleteLoading(true);
+    try {
+      let endpoint = '';
+      let body = {};
+
+      // Determine which API to call based on record type
+      switch (recordToDelete.originalType) {
+        case 'sale':
+          endpoint = `/api/sales/${recordToDelete.originalId}/void`;
+          body = { 
+            reason: deleteReason || "Transaction deleted from cash flow tracker",
+            voidAmount: recordToDelete.amount
+          };
+          break;
+        case 'restock':
+          endpoint = `/api/restock/${recordToDelete.originalId}/void`;
+          body = { 
+            reason: deleteReason || "Transaction deleted from cash flow tracker",
+            voidAmount: recordToDelete.amount
+          };
+          break;
+        case 'expense':
+          endpoint = `/api/expenses/${recordToDelete.originalId}/delete`;
+          body = { reason: deleteReason || "Transaction deleted from cash flow tracker" };
+          break;
+        default:
+          throw new Error('Unknown transaction type');
+      }
+
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(body),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to delete transaction');
+      }
+
+      // Remove record from local state
+      setRecords(prev => prev.filter(r => r.id !== recordToDelete.id));
+      
+      // Close modal and refresh data
+      setShowDeleteModal(false);
+      setRecordToDelete(null);
+      setDeleteReason('');
+      
+      // Show success message
+      setError(null);
+      alert('Transaction deleted successfully!');
+      
+      // Refresh data to ensure consistency
+      fetchData();
+
+    } catch (error: any) {
+      setError(error.message || 'Failed to delete transaction');
+    } finally {
+      setDeleteLoading(false);
+    }
+  };
+
+  // Mobile transaction detail view with delete option
   const renderMobileDetailView = () => {
     if (!selectedRecord) return null;
 
@@ -445,7 +535,16 @@ export default function MoneyTracker() {
             <ChevronRight className="rotate-180" size={20} />
           </button>
           <h2 className="text-lg font-semibold">Transaction Details</h2>
-          <div className="w-10"></div>
+          <button
+            onClick={() => {
+              setSelectedRecord(null);
+              handleDeleteClick(selectedRecord);
+            }}
+            className="p-2 rounded-lg bg-red-50 text-red-600"
+            title="Delete"
+          >
+            <Trash2 size={20} />
+          </button>
         </div>
 
         {/* Details */}
@@ -490,6 +589,31 @@ export default function MoneyTracker() {
               </code>
             } />
             <DetailItem label="Source" value={selectedRecord.referenceSource} />
+            
+            {/* Transaction Type Info */}
+            <div className="bg-gray-50 rounded-xl p-4">
+              <p className="text-gray-500 text-sm mb-1">Transaction Type</p>
+              <div className="text-gray-900 font-medium capitalize">
+                {selectedRecord.originalType || 'Unknown'}
+              </div>
+            </div>
+          </div>
+
+          {/* Delete Button */}
+          <div className="mt-8 pt-6 border-t border-gray-200">
+            <button
+              onClick={() => {
+                setSelectedRecord(null);
+                handleDeleteClick(selectedRecord);
+              }}
+              className="w-full py-3 bg-red-600 text-white rounded-xl font-medium flex items-center justify-center gap-2 hover:bg-red-700 transition-colors"
+            >
+              <Trash2 size={20} />
+              Delete Transaction
+            </button>
+            <p className="text-xs text-gray-500 mt-2 text-center">
+              This will void/delete the original transaction and update all records
+            </p>
           </div>
         </div>
       </div>
@@ -558,6 +682,113 @@ export default function MoneyTracker() {
     </div>
   );
 
+  // Delete Confirmation Modal
+  const renderDeleteModal = () => {
+    if (!showDeleteModal || !recordToDelete) return null;
+
+    return (
+      <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+        <div className="bg-white rounded-2xl shadow-xl w-full max-w-md">
+          {/* Modal Header */}
+          <div className="p-6 border-b border-gray-200">
+            <div className="flex items-start gap-3">
+              <div className="p-2 bg-red-100 rounded-lg">
+                <AlertTriangle className="text-red-600" size={24} />
+              </div>
+              <div>
+                <h3 className="text-lg font-semibold text-gray-900">Delete Transaction</h3>
+                <p className="text-gray-600 text-sm mt-1">
+                  This action cannot be undone. All related records will be updated.
+                </p>
+              </div>
+            </div>
+          </div>
+
+          {/* Modal Content */}
+          <div className="p-6">
+            {/* Transaction Info */}
+            <div className="bg-gray-50 rounded-xl p-4 mb-4">
+              <div className="flex justify-between items-start mb-2">
+                <div>
+                  <p className="font-medium text-gray-900">{recordToDelete.description}</p>
+                  <p className="text-sm text-gray-600">{formatDate(recordToDelete.timestamp || recordToDelete.date)}</p>
+                </div>
+                <span className={`px-3 py-1 rounded-full text-sm font-medium ${
+                  recordToDelete.type === 'INFLOW' 
+                    ? 'bg-green-100 text-green-800' 
+                    : 'bg-red-100 text-red-800'
+                }`}>
+                  {recordToDelete.type}
+                </span>
+              </div>
+              <div className="text-center">
+                <p className={`text-2xl font-bold ${
+                  recordToDelete.type === 'INFLOW' ? 'text-green-700' : 'text-red-700'
+                }`}>
+                  {recordToDelete.type === 'INFLOW' ? '+' : '-'}{formatCurrency(recordToDelete.amount)}
+                </p>
+              </div>
+            </div>
+
+            {/* Reason Input */}
+            <div className="mb-6">
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Reason for deletion (optional)
+              </label>
+              <textarea
+                value={deleteReason}
+                onChange={(e) => setDeleteReason(e.target.value)}
+                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-transparent"
+                placeholder="Enter reason for deleting this transaction..."
+                rows={3}
+              />
+            </div>
+
+            {/* Impact Warning */}
+            <div className="bg-red-50 border border-red-200 rounded-lg p-4 mb-6">
+              <p className="text-sm text-red-700">
+                <span className="font-semibold">Warning:</span> This will void the original {recordToDelete.originalType} 
+                and update all financial records. Running balances will be recalculated.
+              </p>
+            </div>
+          </div>
+
+          {/* Modal Footer */}
+          <div className="px-6 py-4 border-t border-gray-200 flex justify-end gap-3">
+            <button
+              onClick={() => {
+                setShowDeleteModal(false);
+                setRecordToDelete(null);
+                setDeleteReason('');
+              }}
+              className="px-6 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors font-medium"
+              disabled={deleteLoading}
+            >
+              Cancel
+            </button>
+            <button
+              onClick={confirmDelete}
+              disabled={deleteLoading}
+              className="px-6 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors font-medium flex items-center gap-2 disabled:opacity-50"
+            >
+              {deleteLoading ? (
+                <>
+                  <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
+                  Deleting...
+                </>
+              ) : (
+                <>
+                  <Trash2 size={18} />
+                  Delete Permanently
+                </>
+              )}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   if (loading) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 flex items-center justify-center p-4">
@@ -574,6 +805,9 @@ export default function MoneyTracker() {
     <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100">
       {/* Mobile Detail View */}
       {selectedRecord && renderMobileDetailView()}
+
+      {/* Delete Modal */}
+      {renderDeleteModal()}
 
       <div className="p-3 md:p-6 max-w-7xl mx-auto">
         {/* Mobile Header */}
@@ -770,6 +1004,12 @@ export default function MoneyTracker() {
               <div className="w-2 h-2 bg-red-500 rounded-full"></div>
               <p className="text-red-700 font-medium">{error}</p>
             </div>
+            <button
+              onClick={() => setError(null)}
+              className="mt-2 text-sm text-red-600 hover:text-red-800"
+            >
+              Dismiss
+            </button>
           </div>
         )}
 
@@ -853,11 +1093,50 @@ export default function MoneyTracker() {
                   {filteredRecords.map((record) => (
                     <div
                       key={record.id}
-                      className="p-4 active:bg-gray-50 transition-colors"
+                      className="p-4 active:bg-gray-50 transition-colors relative"
                       onClick={() => setSelectedRecord(record)}
                     >
+                      {/* Action Menu Button */}
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setMobileActionMenu(mobileActionMenu === record.id ? null : record.id);
+                        }}
+                        className="absolute right-4 top-4 p-1.5 text-gray-400 hover:text-gray-600"
+                      >
+                        <MoreVertical size={18} />
+                      </button>
+
+                      {/* Action Menu */}
+                      {mobileActionMenu === record.id && (
+                        <div className="absolute right-12 top-4 bg-white border border-gray-200 rounded-lg shadow-lg z-10 min-w-[120px]">
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setSelectedRecord(record);
+                              setMobileActionMenu(null);
+                            }}
+                            className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2"
+                          >
+                            <Eye size={14} />
+                            View Details
+                          </button>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleDeleteClick(record);
+                              setMobileActionMenu(null);
+                            }}
+                            className="w-full px-4 py-2 text-left text-sm text-red-600 hover:bg-red-50 flex items-center gap-2"
+                          >
+                            <Trash2 size={14} />
+                            Delete
+                          </button>
+                        </div>
+                      )}
+
                       <div className="flex items-start justify-between mb-2">
-                        <div>
+                        <div className="pr-8">
                           <p className="text-sm font-medium text-gray-900 line-clamp-2">
                             {record.description}
                           </p>
@@ -1053,12 +1332,13 @@ export default function MoneyTracker() {
                       <th className="py-4 px-6 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">Type</th>
                       <th className="py-4 px-6 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">Category</th>
                       <th className="py-4 px-6 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">Reference</th>
+                      <th className="py-4 px-6 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">Actions</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-200">
                     {filteredRecords.length === 0 ? (
                       <tr>
-                        <td colSpan={6} className="py-12 text-center">
+                        <td colSpan={7} className="py-12 text-center">
                           <div className="text-gray-400">
                             <Search size={48} className="mx-auto mb-4 opacity-30" />
                             <p className="text-gray-500 font-medium">No transactions found</p>
@@ -1123,6 +1403,27 @@ export default function MoneyTracker() {
                               {record.referenceId}
                             </div>
                           </td>
+                          <td className="py-4 px-6">
+                            <div className="flex items-center gap-2">
+                              <button
+                                onClick={() => handleDeleteClick(record)}
+                                className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                                title="Delete transaction"
+                              >
+                                <Trash2 size={16} />
+                              </button>
+                              <button
+                                onClick={() => {
+                                  // Optional: Add edit functionality here
+                                  // handleEditClick(record);
+                                }}
+                                className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                                title="Edit transaction"
+                              >
+                                <Edit size={16} />
+                              </button>
+                            </div>
+                          </td>
                         </tr>
                       ))
                     )}
@@ -1183,9 +1484,9 @@ export default function MoneyTracker() {
               <div className="p-4 bg-gray-50 rounded-lg">
                 <div className="flex items-center gap-2 mb-2">
                   <div className="w-3 h-3 rounded-full bg-blue-500"></div>
-                  <span className="font-medium text-gray-900">Timezone</span>
+                  <span className="font-medium text-gray-900">Delete Transactions</span>
                 </div>
-                <p className="text-xs">All times shown in East Africa Time (EAT, UTC+3). Times are converted from server UTC.</p>
+                <p className="text-xs">Deleting a transaction will void the original record and update all financial calculations.</p>
               </div>
             </div>
             <div className="mt-4 pt-4 border-t border-gray-200">

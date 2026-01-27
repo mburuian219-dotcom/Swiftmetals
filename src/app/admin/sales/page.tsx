@@ -1,6 +1,6 @@
 "use client";
 import React, { useEffect, useState, useCallback, useMemo } from "react";
-import { Download, MessageSquare, Send, Clock, CreditCard, AlertTriangle, CheckCircle, Plus, X, Edit, Trash2, Calculator, Save, Menu, ChevronDown, ChevronUp, Filter, Calendar, Search, XCircle, User } from "lucide-react";
+import { Download, MessageSquare, Send, Clock, CreditCard, AlertTriangle, CheckCircle, Plus, X, Edit, Trash2, Calculator, Save, Menu, ChevronDown, ChevronUp, Filter, Calendar, Search, XCircle, User, DollarSign, Banknote, Smartphone, Landmark, CreditCard as CardIcon } from "lucide-react";
 import { auth } from "@/lib/firebase";
 import { onAuthStateChanged } from "firebase/auth";
 
@@ -82,7 +82,7 @@ interface UserDetail {
   photoURL?: string;
 }
 
-const EnhancedSalesPage = () => {
+export default function EnhancedSalesPage() {
   const [sales, setSales] = useState<Sale[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
@@ -117,13 +117,13 @@ const EnhancedSalesPage = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<"messaging" | "overview" | "paid" | "partial" | "unpaid">("overview");
+  const [activeTab, setActiveTab] = useState<"messaging" | "overview" | "paid" | "partial" | "unpaid" | "recentlyUpdated">("overview");
   const [selectedSales, setSelectedSales] = useState<number[]>([]);
   const [selectedMessageType, setSelectedMessageType] = useState("delivery");
 
   // Filter state variables
   const [customerFilter, setCustomerFilter] = useState("");
-  const [dateFilter, setDateFilter] = useState<"all" | "today" | "week" | "month" | "custom">("all");
+  const [dateFilter, setDateFilter] = useState<"all" | "today" | "week" | "month" | "custom">("today"); // Default to today
   const [customStartDate, setCustomStartDate] = useState("");
   const [customEndDate, setCustomEndDate] = useState("");
   const [showDateFilter, setShowDateFilter] = useState(false);
@@ -138,6 +138,9 @@ const EnhancedSalesPage = () => {
   // Mobile states
   const [showMobileFilters, setShowMobileFilters] = useState(false);
   const [expandedSaleId, setExpandedSaleId] = useState<number | null>(null);
+
+  // Debug state
+  const [debugInfo, setDebugInfo] = useState<string>("");
 
   const formatPhoneNumber = (phone: string) => {
     if (!phone) return phone;
@@ -184,6 +187,39 @@ const EnhancedSalesPage = () => {
     }).format(amount);
   };
 
+  // Helper function to check if sale was recently updated
+  const isRecentlyUpdated = useCallback((sale: Sale): boolean => {
+    if (!sale.updatedAt) {
+      return false;
+    }
+    
+    try {
+      const updatedDate = new Date(sale.updatedAt);
+      const now = new Date();
+      const sevenDaysAgo = new Date(now.getTime() - (7 * 24 * 60 * 60 * 1000));
+      return updatedDate >= sevenDaysAgo;
+    } catch (error) {
+      console.error("Error parsing updatedAt date:", error);
+      return false;
+    }
+  }, []);
+
+  // Helper to check if sale was modified (not just created)
+  const isSaleModified = useCallback((sale: Sale): boolean => {
+    if (!sale.updatedAt || !sale.createdAt) {
+      return false;
+    }
+    
+    try {
+      const updatedDate = new Date(sale.updatedAt);
+      const createdDate = new Date(sale.createdAt);
+      const oneMinute = 60 * 1000;
+      return (updatedDate.getTime() - createdDate.getTime()) > oneMinute;
+    } catch (error) {
+      return false;
+    }
+  }, []);
+
   // Corrected message templates
   const messageTypes = [
     { 
@@ -196,15 +232,11 @@ const EnhancedSalesPage = () => {
       value: "payment", 
       label: "Payment Reminder",
       getTemplate: (sale: Sale) => {
-        // Get items list
         const itemsList = sale.saleitems?.map(item => 
           `${item.product.name} (${item.quantity} units)`
         ).join(', ') || 'Various items';
         
-        // Calculate outstanding balance
         const outstandingBalance = sale.remainingAmount > 0.01 ? sale.remainingAmount : sale.amount;
-        
-        // Construct the receipt URL
         const receiptLink = typeof window !== 'undefined' ? 
           `${window.location.origin}/api/receipt/${sale.id}` : 
           `/api/receipt/${sale.id}`;
@@ -233,7 +265,6 @@ Swiftmetals`;
       value: "check", 
       label: "Check Reminder",
       getTemplate: (sale: Sale) => {
-        // Find check payment if any
         const checkPayment = sale.payments?.find(p => p.method === "CHECK");
         
         if (checkPayment?.checkDepositDate) {
@@ -384,6 +415,12 @@ Swiftmetals`;
         setCustomers(validCustomers);
         setProducts(validProducts);
 
+        console.log("Total sales loaded:", processedSales.length);
+        const salesWithUpdatedAt = processedSales.filter(s => s.updatedAt);
+        console.log("Sales with updatedAt:", salesWithUpdatedAt.length);
+
+        setDebugInfo(`Total sales: ${processedSales.length}, With updatedAt: ${salesWithUpdatedAt.length}`);
+
         if (validCustomers.length === 0) {
           console.warn("⚠️ No customers found");
           setError("No customers found. Please add customers first.");
@@ -436,12 +473,12 @@ Swiftmetals`;
   }, []);
 
   const paymentMethods = [
-    { value: "CASH", label: "Cash", color: "bg-green-100 text-green-800" },
-    { value: "MPESA", label: "M-Pesa", color: "bg-blue-100 text-blue-800" },
-    { value: "BANK", label: "Bank", color: "bg-purple-100 text-purple-800" },
-    { value: "CHECK", label: "Check", color: "bg-orange-100 text-orange-800" },
-    { value: "CARD", label: "Card", color: "bg-pink-100 text-pink-800" },
-    { value: "CREDIT", label: "Credit", color: "bg-yellow-100 text-yellow-800" }
+    { value: "CASH", label: "Cash", color: "bg-green-100 text-green-800", icon: Banknote },
+    { value: "MPESA", label: "M-Pesa", color: "bg-blue-100 text-blue-800", icon: Smartphone },
+    { value: "BANK", label: "Bank", color: "bg-purple-100 text-purple-800", icon: Landmark },
+    { value: "CHECK", label: "Check", color: "bg-orange-100 text-orange-800", icon: DollarSign },
+    { value: "CARD", label: "Card", color: "bg-pink-100 text-pink-800", icon: CardIcon },
+    { value: "CREDIT", label: "Credit", color: "bg-yellow-100 text-yellow-800", icon: CreditCard }
   ];
 
   const handleAddItemToEditSale = () => {
@@ -763,26 +800,150 @@ Swiftmetals`;
 
   const clearFilters = () => {
     setCustomerFilter("");
-    setDateFilter("all");
+    setDateFilter("today"); // Reset to today
     setCustomStartDate("");
     setCustomEndDate("");
     setExpandedSaleId(null);
   };
 
   const isFilterActive = useMemo(() => {
-    return customerFilter.trim() !== "" || dateFilter !== "all";
+    return customerFilter.trim() !== "" || dateFilter !== "today"; // Changed from "all" to "today"
   }, [customerFilter, dateFilter]);
 
-  const stats = useMemo(() => ({
-    totalSales: sales.reduce((acc, s) => acc + Number(s.amount), 0),
-    paidSales: sales.filter(s => s.status === "PAID").reduce((acc, s) => acc + Number(s.amount), 0),
-    partialSales: sales.filter(s => s.status === "PARTIAL").reduce((acc, s) => acc + Number(s.amount), 0),
-    unpaidSales: sales.filter(s => s.status === "UNPAID").reduce((acc, s) => acc + Number(s.amount), 0),
-    totalOutstanding: sales.reduce((acc, s) => acc + Number(s.remainingAmount), 0),
-    paidCount: sales.filter(s => s.status === "PAID").length,
-    partialCount: sales.filter(s => s.status === "PARTIAL").length,
-    unpaidCount: sales.filter(s => s.status === "UNPAID").length
-  }), [sales]);
+  // Calculate statistics including payment breakdown
+  const stats = useMemo(() => {
+    const recentlyUpdatedSales = sales.filter(sale => {
+      return isRecentlyUpdated(sale) && isSaleModified(sale);
+    });
+    
+    // Get today's date for filtering
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const tomorrow = new Date(today);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    
+    // Filter today's sales
+    const todaySales = sales.filter(sale => {
+      const saleDate = new Date(sale.date);
+      return saleDate >= today && saleDate < tomorrow;
+    });
+    
+    // Calculate payment method breakdown
+    let cashAmount = 0;
+    let mpesaAmount = 0;
+    let bankAmount = 0;
+    let checkAmount = 0;
+    let cardAmount = 0;
+    let creditAmount = 0;
+    
+    // For ALL sales
+    sales.forEach(sale => {
+      sale.payments?.forEach(payment => {
+        const amount = Number(payment.amount) || 0;
+        switch(payment.method) {
+          case "CASH":
+            cashAmount += amount;
+            break;
+          case "MPESA":
+            mpesaAmount += amount;
+            break;
+          case "BANK":
+            bankAmount += amount;
+            break;
+          case "CHECK":
+            checkAmount += amount;
+            break;
+          case "CARD":
+            cardAmount += amount;
+            break;
+          case "CREDIT":
+            creditAmount += amount;
+            break;
+        }
+      });
+    });
+    
+    // Calculate today's statistics
+    const todayPaid = todaySales.filter(s => s.status === "PAID").reduce((acc, s) => acc + Number(s.amount), 0);
+    const todayPartial = todaySales.filter(s => s.status === "PARTIAL").reduce((acc, s) => acc + Number(s.amount), 0);
+    const todayUnpaid = todaySales.filter(s => s.status === "UNPAID").reduce((acc, s) => acc + Number(s.amount), 0);
+    const todayOutstanding = todaySales.reduce((acc, s) => acc + Number(s.remainingAmount), 0);
+    
+    // Calculate today's payment breakdown
+    let todayCash = 0;
+    let todayMpesa = 0;
+    let todayBank = 0;
+    let todayCheck = 0;
+    let todayCard = 0;
+    let todayCredit = 0;
+    
+    todaySales.forEach(sale => {
+      sale.payments?.forEach(payment => {
+        const amount = Number(payment.amount) || 0;
+        switch(payment.method) {
+          case "CASH":
+            todayCash += amount;
+            break;
+          case "MPESA":
+            todayMpesa += amount;
+            break;
+          case "BANK":
+            todayBank += amount;
+            break;
+          case "CHECK":
+            todayCheck += amount;
+            break;
+          case "CARD":
+            todayCard += amount;
+            break;
+          case "CREDIT":
+            todayCredit += amount;
+            break;
+        }
+      });
+    });
+    
+    return {
+      // Overall stats
+      totalSales: sales.reduce((acc, s) => acc + Number(s.amount), 0),
+      paidSales: sales.filter(s => s.status === "PAID").reduce((acc, s) => acc + Number(s.amount), 0),
+      partialSales: sales.filter(s => s.status === "PARTIAL").reduce((acc, s) => acc + Number(s.amount), 0),
+      unpaidSales: sales.filter(s => s.status === "UNPAID").reduce((acc, s) => acc + Number(s.amount), 0),
+      totalOutstanding: sales.reduce((acc, s) => acc + Number(s.remainingAmount), 0),
+      paidCount: sales.filter(s => s.status === "PAID").length,
+      partialCount: sales.filter(s => s.status === "PARTIAL").length,
+      unpaidCount: sales.filter(s => s.status === "UNPAID").length,
+      recentlyUpdatedCount: recentlyUpdatedSales.length,
+      recentlyUpdatedAmount: recentlyUpdatedSales.reduce((acc, s) => acc + Number(s.amount), 0),
+      
+      // Overall payment breakdown
+      cashAmount,
+      mpesaAmount,
+      bankAmount,
+      checkAmount,
+      cardAmount,
+      creditAmount,
+      
+      // Today's stats
+      todaySales: todaySales.reduce((acc, s) => acc + Number(s.amount), 0),
+      todayPaid,
+      todayPartial,
+      todayUnpaid,
+      todayOutstanding,
+      todayCount: todaySales.length,
+      todayPaidCount: todaySales.filter(s => s.status === "PAID").length,
+      todayPartialCount: todaySales.filter(s => s.status === "PARTIAL").length,
+      todayUnpaidCount: todaySales.filter(s => s.status === "UNPAID").length,
+      
+      // Today's payment breakdown
+      todayCash,
+      todayMpesa,
+      todayBank,
+      todayCheck,
+      todayCard,
+      todayCredit,
+    };
+  }, [sales, isRecentlyUpdated, isSaleModified]);
 
   const filteredSales = useMemo(() => {
     switch (activeTab) {
@@ -792,11 +953,17 @@ Swiftmetals`;
         return sales.filter(s => s.status === "PARTIAL");
       case "unpaid":
         return sales.filter(s => s.status === "UNPAID");
+      case "recentlyUpdated":
+        return sales.filter(sale => {
+          const isRecent = isRecentlyUpdated(sale);
+          const isModified = isSaleModified(sale);
+          return isRecent && isModified;
+        });
       case "overview":
       default:
         return sales;
     }
-  }, [sales, activeTab]);
+  }, [sales, activeTab, isRecentlyUpdated, isSaleModified]);
 
   const fullyFilteredSales = useMemo(() => {
     let filtered = filteredSales;
@@ -813,13 +980,15 @@ Swiftmetals`;
     if (dateFilter !== "all") {
       const now = new Date();
       const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      const tomorrow = new Date(today);
+      tomorrow.setDate(tomorrow.getDate() + 1);
       
       filtered = filtered.filter(sale => {
         const saleDate = new Date(sale.date);
         
         switch (dateFilter) {
           case "today":
-            return saleDate.toDateString() === today.toDateString();
+            return saleDate >= today && saleDate < tomorrow;
           
           case "week": {
             const weekAgo = new Date(today);
@@ -850,6 +1019,22 @@ Swiftmetals`;
 
     return filtered;
   }, [filteredSales, customerFilter, dateFilter, customStartDate, customEndDate]);
+
+  // Add sorting for recently updated sales (most recent first)
+  const getSortedSales = (salesList: Sale[]) => {
+    if (activeTab === "recentlyUpdated") {
+      return [...salesList].sort((a, b) => {
+        const dateA = a.updatedAt ? new Date(a.updatedAt).getTime() : 0;
+        const dateB = b.updatedAt ? new Date(b.updatedAt).getTime() : 0;
+        return dateB - dateA;
+      });
+    }
+    return salesList;
+  };
+
+  const sortedFilteredSales = useMemo(() => {
+    return getSortedSales(fullyFilteredSales);
+  }, [fullyFilteredSales, activeTab]);
 
   const filteredCustomers = useMemo(() => {
     if (!customerSearch.trim()) return customers;
@@ -949,6 +1134,12 @@ Swiftmetals`;
           <div>
             <h1 className="text-lg sm:text-xl font-bold text-black">Sales Management</h1>
             <p className="text-xs text-gray-600">Dashboard</p>
+            {/* Debug info */}
+            {debugInfo && (
+              <div className="text-xs text-gray-500 mt-1">
+                {debugInfo} | Recently Updated: {stats.recentlyUpdatedCount}
+              </div>
+            )}
           </div>
           <button
             onClick={() => {
@@ -965,7 +1156,8 @@ Swiftmetals`;
                 'Due Date': sale.dueDate ? new Date(sale.dueDate).toLocaleDateString() : '-',
                 'Payment Methods': sale.payments?.map(p => p.method).join('; ') || '-',
                 'Created By': sale.createdBy || '-',
-                'Updated By': sale.updatedBy || '-'
+                'Updated By': sale.updatedBy || '-',
+                'Last Updated': sale.updatedAt ? new Date(sale.updatedAt).toLocaleDateString() : '-'
               }));
 
               const headers = Object.keys(csvData[0] || {});
@@ -1047,7 +1239,7 @@ Swiftmetals`;
               <label className="block text-xs font-medium text-gray-700 mb-1">Date Range</label>
               <div className="space-y-2">
                 <div className="flex gap-1 flex-wrap">
-                  {["all", "today", "week", "month"].map((filter) => (
+                  {["today", "week", "month", "all", "custom"].map((filter) => (
                     <button
                       key={filter}
                       onClick={() => setDateFilter(filter as any)}
@@ -1059,38 +1251,39 @@ Swiftmetals`;
                     >
                       {filter === "all" ? "All" : 
                        filter === "today" ? "Today" : 
-                       filter === "week" ? "Week" : "Month"}
+                       filter === "week" ? "Week" : 
+                       filter === "month" ? "Month" : "Custom"}
                     </button>
                   ))}
                 </div>
                 
-                <div className="grid grid-cols-2 gap-2">
-                  <div>
-                    <input
-                      type="date"
-                      value={customStartDate}
-                      onChange={(e) => {
-                        setCustomStartDate(e.target.value);
-                        setDateFilter("custom");
-                      }}
-                      className="w-full p-1.5 text-xs border rounded text-black"
-                      max={customEndDate || new Date().toISOString().split('T')[0]}
-                    />
+                {dateFilter === "custom" && (
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <input
+                        type="date"
+                        value={customStartDate}
+                        onChange={(e) => {
+                          setCustomStartDate(e.target.value);
+                        }}
+                        className="w-full p-1.5 text-xs border rounded text-black"
+                        max={customEndDate || new Date().toISOString().split('T')[0]}
+                      />
+                    </div>
+                    <div>
+                      <input
+                        type="date"
+                        value={customEndDate}
+                        onChange={(e) => {
+                          setCustomEndDate(e.target.value);
+                        }}
+                        className="w-full p-1.5 text-xs border rounded text-black"
+                        min={customStartDate}
+                        max={new Date().toISOString().split('T')[0]}
+                      />
+                    </div>
                   </div>
-                  <div>
-                    <input
-                      type="date"
-                      value={customEndDate}
-                      onChange={(e) => {
-                        setCustomEndDate(e.target.value);
-                        setDateFilter("custom");
-                      }}
-                      className="w-full p-1.5 text-xs border rounded text-black"
-                      min={customStartDate}
-                      max={new Date().toISOString().split('T')[0]}
-                    />
-                  </div>
-                </div>
+                )}
               </div>
             </div>
           </div>
@@ -1107,16 +1300,16 @@ Swiftmetals`;
                 </button>
               </span>
             )}
-            {dateFilter !== "all" && (
-              <span className="inline-flex items-center gap-1 px-2 py-1 bg-green-100 text-green-800 rounded-full text-xs">
-                {dateFilter === "today" ? "Today" :
-                 dateFilter === "week" ? "Week" :
-                 dateFilter === "month" ? "Month" : "Custom"}
-                <button onClick={() => setDateFilter("all")} className="text-green-600 hover:text-green-800">
-                  <X size={10} />
-                </button>
-              </span>
-            )}
+            {dateFilter !== "today" && (
+  <span className="inline-flex items-center gap-1 px-2 py-1 bg-green-100 text-green-800 rounded-full text-xs">
+    {  // FIXED: Removed the space after "today"
+     dateFilter === "week" ? "Week" :
+     dateFilter === "month" ? "Month" : "Custom"}
+    <button onClick={() => setDateFilter("today")} className="text-green-600 hover:text-green-800">
+      <X size={10} />
+    </button>
+  </span>
+)}
           </div>
         )}
       </div>
@@ -1141,6 +1334,111 @@ Swiftmetals`;
         </div>
       )}
 
+      {/* Payment Method Breakdown - Mobile Optimized */}
+      <div className="bg-white rounded-lg shadow mb-3 p-3">
+        <h2 className="text-base font-bold text-black mb-2">Payment Method Breakdown</h2>
+        <div className="space-y-2">
+          {/* Show today's breakdown when viewing today's sales */}
+          {dateFilter === "today" ? (
+            <>
+              <h3 className="text-sm font-semibold text-green-600">Today's Payments</h3>
+              <div className="grid grid-cols-3 gap-2">
+                <div className="bg-green-50 p-2 rounded border border-green-200">
+                  <div className="flex items-center gap-1 mb-1">
+                    <Banknote className="text-green-600" size={12} />
+                    <span className="text-xs font-medium text-green-800">Cash</span>
+                  </div>
+                  <div className="text-sm font-bold text-green-700">Ksh {formatCurrency(stats.todayCash)}</div>
+                </div>
+                <div className="bg-blue-50 p-2 rounded border border-blue-200">
+                  <div className="flex items-center gap-1 mb-1">
+                    <Smartphone className="text-blue-600" size={12} />
+                    <span className="text-xs font-medium text-blue-800">M-Pesa</span>
+                  </div>
+                  <div className="text-sm font-bold text-blue-700">Ksh {formatCurrency(stats.todayMpesa)}</div>
+                </div>
+                <div className="bg-purple-50 p-2 rounded border border-purple-200">
+                  <div className="flex items-center gap-1 mb-1">
+                    <Landmark className="text-purple-600" size={12} />
+                    <span className="text-xs font-medium text-purple-800">Bank</span>
+                  </div>
+                  <div className="text-sm font-bold text-purple-700">Ksh {formatCurrency(stats.todayBank)}</div>
+                </div>
+                <div className="bg-orange-50 p-2 rounded border border-orange-200">
+                  <div className="flex items-center gap-1 mb-1">
+                    <DollarSign className="text-orange-600" size={12} />
+                    <span className="text-xs font-medium text-orange-800">Check</span>
+                  </div>
+                  <div className="text-sm font-bold text-orange-700">Ksh {formatCurrency(stats.todayCheck)}</div>
+                </div>
+                <div className="bg-pink-50 p-2 rounded border border-pink-200">
+                  <div className="flex items-center gap-1 mb-1">
+                    <CardIcon className="text-pink-600" size={12} />
+                    <span className="text-xs font-medium text-pink-800">Card</span>
+                  </div>
+                  <div className="text-sm font-bold text-pink-700">Ksh {formatCurrency(stats.todayCard)}</div>
+                </div>
+                <div className="bg-yellow-50 p-2 rounded border border-yellow-200">
+                  <div className="flex items-center gap-1 mb-1">
+                    <CreditCard className="text-yellow-600" size={12} />
+                    <span className="text-xs font-medium text-yellow-800">Credit</span>
+                  </div>
+                  <div className="text-sm font-bold text-yellow-700">Ksh {formatCurrency(stats.todayCredit)}</div>
+                </div>
+              </div>
+            </>
+          ) : (
+            <>
+              <h3 className="text-sm font-semibold text-gray-700">Overall Payments</h3>
+              <div className="grid grid-cols-3 gap-2">
+                <div className="bg-green-50 p-2 rounded border border-green-200">
+                  <div className="flex items-center gap-1 mb-1">
+                    <Banknote className="text-green-600" size={12} />
+                    <span className="text-xs font-medium text-green-800">Cash</span>
+                  </div>
+                  <div className="text-sm font-bold text-green-700">Ksh {formatCurrency(stats.cashAmount)}</div>
+                </div>
+                <div className="bg-blue-50 p-2 rounded border border-blue-200">
+                  <div className="flex items-center gap-1 mb-1">
+                    <Smartphone className="text-blue-600" size={12} />
+                    <span className="text-xs font-medium text-blue-800">M-Pesa</span>
+                  </div>
+                  <div className="text-sm font-bold text-blue-700">Ksh {formatCurrency(stats.mpesaAmount)}</div>
+                </div>
+                <div className="bg-purple-50 p-2 rounded border border-purple-200">
+                  <div className="flex items-center gap-1 mb-1">
+                    <Landmark className="text-purple-600" size={12} />
+                    <span className="text-xs font-medium text-purple-800">Bank</span>
+                  </div>
+                  <div className="text-sm font-bold text-purple-700">Ksh {formatCurrency(stats.bankAmount)}</div>
+                </div>
+                <div className="bg-orange-50 p-2 rounded border border-orange-200">
+                  <div className="flex items-center gap-1 mb-1">
+                    <DollarSign className="text-orange-600" size={12} />
+                    <span className="text-xs font-medium text-orange-800">Check</span>
+                  </div>
+                  <div className="text-sm font-bold text-orange-700">Ksh {formatCurrency(stats.checkAmount)}</div>
+                </div>
+                <div className="bg-pink-50 p-2 rounded border border-pink-200">
+                  <div className="flex items-center gap-1 mb-1">
+                    <CardIcon className="text-pink-600" size={12} />
+                    <span className="text-xs font-medium text-pink-800">Card</span>
+                  </div>
+                  <div className="text-sm font-bold text-pink-700">Ksh {formatCurrency(stats.cardAmount)}</div>
+                </div>
+                <div className="bg-yellow-50 p-2 rounded border border-yellow-200">
+                  <div className="flex items-center gap-1 mb-1">
+                    <CreditCard className="text-yellow-600" size={12} />
+                    <span className="text-xs font-medium text-yellow-800">Credit</span>
+                  </div>
+                  <div className="text-sm font-bold text-yellow-700">Ksh {formatCurrency(stats.creditAmount)}</div>
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+
       {/* Stats Cards - Mobile Optimized */}
       <div className="grid grid-cols-2 gap-2 mb-4">
         <div className="bg-white p-3 rounded-lg shadow border-l-2 border-emerald-500">
@@ -1163,10 +1461,26 @@ Swiftmetals`;
           <div className="text-base font-bold text-red-600">Ksh {formatCurrency(stats.unpaidSales)}</div>
           <div className="text-xs text-black">{stats.unpaidCount} orders</div>
         </div>
-        <div className="bg-white p-3 rounded-lg shadow border-l-2 border-purple-500 col-span-2">
+        <div className="bg-white p-3 rounded-lg shadow border-l-2 border-yellow-500">
+          <div className="text-xs text-gray-600">Recently Updated</div>
+          <div className="text-base font-bold text-yellow-600">Ksh {formatCurrency(stats.recentlyUpdatedAmount)}</div>
+          <div className="text-xs text-black">{stats.recentlyUpdatedCount} orders</div>
+        </div>
+        <div className="bg-white p-3 rounded-lg shadow border-l-2 border-purple-500">
           <div className="text-xs text-gray-600">Outstanding Amount</div>
           <div className="text-base font-bold text-purple-600">Ksh {formatCurrency(stats.totalOutstanding)}</div>
           <div className="text-xs text-black">Total remaining</div>
+        </div>
+        {/* Today's stats */}
+        <div className="bg-white p-3 rounded-lg shadow border-l-2 border-green-500">
+          <div className="text-xs text-gray-600">Today's Sales</div>
+          <div className="text-base font-bold text-green-600">Ksh {formatCurrency(stats.todaySales)}</div>
+          <div className="text-xs text-black">{stats.todayCount} orders</div>
+        </div>
+        <div className="bg-white p-3 rounded-lg shadow border-l-2 border-teal-500">
+          <div className="text-xs text-gray-600">Today's Outstanding</div>
+          <div className="text-base font-bold text-teal-600">Ksh {formatCurrency(stats.todayOutstanding)}</div>
+          <div className="text-xs text-black">Remaining today</div>
         </div>
       </div>
 
@@ -1177,7 +1491,8 @@ Swiftmetals`;
             { key: "overview", label: "All", count: sales.length },
             { key: "paid", label: "Paid", count: stats.paidCount },
             { key: "partial", label: "Partial", count: stats.partialCount },
-            { key: "unpaid", label: "Unpaid", count: stats.unpaidCount }
+            { key: "unpaid", label: "Unpaid", count: stats.unpaidCount },
+            { key: "recentlyUpdated", label: "Recent", count: stats.recentlyUpdatedCount }
           ].map((tab) => (
             <button
               key={tab.key}
@@ -1197,9 +1512,41 @@ Swiftmetals`;
         </div>
 
         <div className="p-2">
+          {/* Debug info for Recently Updated tab */}
+          {activeTab === "recentlyUpdated" && (
+            <div className="mb-3 p-2 bg-blue-50 rounded-lg border border-blue-200">
+              <div className="text-xs text-blue-800">
+                <div className="font-semibold">Recently Updated Sales Filter:</div>
+                <div className="mt-1">
+                  • Shows sales updated in the last 7 days
+                  <br />
+                  • Excludes sales that were only created (not modified)
+                  <br />
+                  • Total matching: {sortedFilteredSales.length} sales
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Date Filter Info */}
+          <div className="mb-3 p-2 bg-gray-50 rounded-lg border border-gray-200">
+            <div className="text-xs text-gray-700 flex items-center gap-1">
+              <Calendar size={12} />
+              <span className="font-semibold">Showing: </span>
+              {dateFilter === "today" ? "Today's transactions" :
+               dateFilter === "week" ? "Last 7 days" :
+               dateFilter === "month" ? "Last 30 days" :
+               dateFilter === "custom" ? `Custom: ${customStartDate} to ${customEndDate}` :
+               "All transactions"}
+              <span className="ml-2 text-gray-500">
+                ({sortedFilteredSales.length} sales, Ksh {formatCurrency(sortedFilteredSales.reduce((acc, s) => acc + Number(s.amount), 0))})
+              </span>
+            </div>
+          </div>
+
           {/* Sales List - Mobile Cards */}
           <div className="space-y-2">
-            {fullyFilteredSales.map((sale) => (
+            {sortedFilteredSales.map((sale) => (
               <div key={sale.id} className="bg-white border rounded-lg p-3 shadow-sm">
                 {/* Header */}
                 <div className="flex justify-between items-start mb-2">
@@ -1219,6 +1566,14 @@ Swiftmetals`;
                     }`}>
                       {sale.status}
                     </span>
+                    
+                    {/* Recently Updated Badge */}
+                    {isRecentlyUpdated(sale) && isSaleModified(sale) && (
+                      <span className="px-1.5 py-0.5 rounded-full text-xs bg-yellow-100 text-yellow-800 border border-yellow-200 font-medium">
+                        Updated
+                      </span>
+                    )}
+                    
                     <button
                       onClick={() => setExpandedSaleId(expandedSaleId === sale.id ? null : sale.id)}
                       className="text-gray-500 hover:text-gray-700"
@@ -1249,6 +1604,46 @@ Swiftmetals`;
                     </div>
                   )}
                 </div>
+
+                {/* Payment Methods Badges */}
+                {sale.payments && sale.payments.length > 0 && (
+                  <div className="mb-2">
+                    <div className="flex flex-wrap gap-1">
+                      {sale.payments.slice(0, 3).map((payment, idx) => {
+                        const IconComponent = paymentMethods.find(m => m.value === payment.method)?.icon || Banknote;
+                        return (
+                          <span key={idx} className={`px-2 py-1 rounded-full text-xs flex items-center gap-1 ${
+                            paymentMethods.find(m => m.value === payment.method)?.color || "bg-gray-100 text-gray-800"
+                          }`}>
+                            <IconComponent size={10} />
+                            <span>{payment.method}</span>
+                            {payment.amount > 0 && (
+                              <span className="font-semibold">Ksh {formatCurrency(payment.amount)}</span>
+                            )}
+                          </span>
+                        );
+                      })}
+                      {sale.payments.length > 3 && (
+                        <span className="text-gray-500 text-xs px-2 py-1">+{sale.payments.length - 3} more</span>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {/* Last Updated Info */}
+                {sale.updatedAt && sale.updatedBy && (
+                  <div className="mt-1 mb-2">
+                    <div className="flex items-center gap-1 text-xs">
+                      <span className="text-gray-500">Updated:</span>
+                      <span className="text-green-600 font-medium">
+                        {formatDate(sale.updatedAt)} at {formatTime(sale.updatedAt)}
+                      </span>
+                      <span className="text-blue-600">
+                        by {getUserDisplayName(sale.updatedBy).name}
+                      </span>
+                    </div>
+                  </div>
+                )}
 
                 {/* Expanded Details */}
                 {expandedSaleId === sale.id && (
@@ -1289,25 +1684,6 @@ Swiftmetals`;
                             </div>
                           </div>
                         )}
-                      </div>
-                    )}
-
-                    {/* Payment Methods */}
-                    {sale.payments && sale.payments.length > 0 && (
-                      <div className="text-xs">
-                        <div className="font-medium text-gray-700 mb-1">Payments:</div>
-                        <div className="flex flex-wrap gap-1">
-                          {sale.payments.slice(0, 3).map((payment, idx) => (
-                            <span key={idx} className={`px-1.5 py-0.5 rounded-full text-xs ${
-                              paymentMethods.find(m => m.value === payment.method)?.color || "bg-gray-100 text-gray-800"
-                            }`}>
-                              {payment.method}
-                            </span>
-                          ))}
-                          {sale.payments.length > 3 && (
-                            <span className="text-gray-500 text-xs">+{sale.payments.length - 3} more</span>
-                          )}
-                        </div>
                       </div>
                     )}
                   </div>
@@ -1372,9 +1748,22 @@ Swiftmetals`;
               </div>
             ))}
             
-            {fullyFilteredSales.length === 0 && (
+            {sortedFilteredSales.length === 0 && (
               <div className="text-center py-8 text-gray-500 text-sm">
-                {isFilterActive ? "No sales match your filters" : "No sales found"}
+                {activeTab === "recentlyUpdated" ? (
+                  <div>
+                    <div className="mb-2">No recently updated sales found.</div>
+                    <div className="text-xs text-gray-400">
+                      This filter shows sales that were:
+                      <br />• Updated in the last 7 days
+                      <br />• Actually modified (not just created)
+                    </div>
+                  </div>
+                ) : isFilterActive ? (
+                  "No sales match your filters"
+                ) : (
+                  "No sales found"
+                )}
               </div>
             )}
           </div>
@@ -1721,6 +2110,4 @@ Swiftmetals`;
       )}
     </div>
   );
-};
-
-export default EnhancedSalesPage;
+}

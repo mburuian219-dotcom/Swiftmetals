@@ -76,6 +76,13 @@ interface CurrentUser {
   message?: string;
 }
 
+interface PartialPayment {
+  cash: string;
+  bank_transfer: string;
+  till: string;
+  [key: string]: string;
+}
+
 async function fetchCurrentUser(): Promise<CurrentUser | null> {
   try {
     const token = localStorage.getItem("token");
@@ -95,7 +102,7 @@ async function fetchCurrentUser(): Promise<CurrentUser | null> {
   }
 }
 
-type PaymentOption = 'cash' | 'partial' | 'credit';
+type PaymentOption = 'cash' | 'bank_transfer' | 'till' | 'partial' | 'credit';
 
 export default function AdminDashboard() {
   const [quickStats, setQuickStats] = useState<any[]>([]);
@@ -137,6 +144,11 @@ export default function AdminDashboard() {
   const [paymentOption, setPaymentOption] = useState<PaymentOption>('cash');
   const [amountPaid, setAmountPaid] = useState<string>("");
   const [isCreating, setIsCreating] = useState(false);
+  const [partialPayment, setPartialPayment] = useState<PartialPayment>({
+    cash: "",
+    bank_transfer: "",
+    till: ""
+  });
 
   const [optimisticSale, setOptimisticSale] = useState<any>(null);
   const [optimisticProducts, setOptimisticProducts] = useState<Product[]>([]);
@@ -542,16 +554,12 @@ export default function AdminDashboard() {
 
   useEffect(() => {
     const total = calculateTotalAmount();
-    if (paymentOption === 'cash') {
+    if (paymentOption === 'cash' || paymentOption === 'bank_transfer' || paymentOption === 'till') {
       setAmountPaid(total.toFixed(2));
     } else if (paymentOption === 'credit') {
       setAmountPaid("0");
-    } else {
-      if (!amountPaid || parseFloat(amountPaid) > total) {
-        setAmountPaid("");
-      }
     }
-  }, [saleItems, paymentOption, amountPaid]);
+  }, [saleItems, paymentOption]);
 
   const filteredCustomers = useMemo(() => {
     if (!customerSearch.trim()) return customers.slice(0, 10);
@@ -890,15 +898,31 @@ export default function AdminDashboard() {
     }
 
     const totalAmount = calculateTotalAmount();
-    const paidAmount = parseFloat(amountPaid) || 0;
 
-    if (paymentOption === "partial" && (!amountPaid || isNaN(paidAmount) || paidAmount <= 0)) {
+    if (paymentOption === "partial") {
+      const totalPartial = Object.values(partialPayment)
+        .reduce((sum, val) => sum + (parseFloat(val) || 0), 0);
+      
+      if (totalPartial <= 0) {
+        setSaleError("Please enter at least one partial payment amount");
+        setTimeout(() => setSaleError(null), 3000);
+        return;
+      }
+      
+      if (totalPartial > totalAmount) {
+        setSaleError("Partial payment cannot exceed total amount");
+        setTimeout(() => setSaleError(null), 3000);
+        return;
+      }
+    }
+
+    if (paymentOption === "partial" && (!amountPaid || isNaN(parseFloat(amountPaid)) || parseFloat(amountPaid) <= 0)) {
       setSaleError("Please enter a valid payment amount");
       setTimeout(() => setSaleError(null), 3000);
       return;
     }
 
-    if (paymentOption === "partial" && paidAmount > totalAmount) {
+    if (paymentOption === "partial" && parseFloat(amountPaid) > totalAmount) {
       setSaleError("Payment amount cannot exceed total amount");
       setTimeout(() => setSaleError(null), 3000);
       return;
@@ -924,21 +948,65 @@ export default function AdminDashboard() {
         price: item.price,
       })),
       date: new Date().toISOString(),
-      paymentMethod: paymentOption === "cash" || paymentOption === "partial" ? "CASH" : "CASH",
-      payments:
-        paymentOption === "cash" || paymentOption === "partial"
-          ? [
-              {
-                amount: paidAmount,
-                method: "CASH",
-                status: "CLEARED",
-                paidAt: new Date().toISOString(),
-              },
-            ]
-          : [],
+      paymentMethod: paymentOption.toUpperCase().replace('_', ' '),
+      payments: [],
       userId: user.uid,
       userName: user.displayName || user.email || "Unknown User",
     };
+
+    // Add payment based on payment option
+    if (paymentOption === 'cash' || paymentOption === 'bank_transfer' || paymentOption === 'till') {
+      saleData.payments.push({
+        amount: totalAmount,
+        method: paymentOption.toUpperCase().replace('_', ' '),
+        status: "CLEARED",
+        paidAt: new Date().toISOString(),
+      });
+      saleData.status = "PAID";
+    } else if (paymentOption === 'partial') {
+      const paidAmount = parseFloat(amountPaid) || 0;
+      
+      // Create payments array based on partial payment breakdown
+      saleData.payments = [];
+      
+      // Add cash payment if any
+      const cashAmount = parseFloat(partialPayment.cash) || 0;
+      if (cashAmount > 0) {
+        saleData.payments.push({
+          amount: cashAmount,
+          method: "CASH",
+          status: "CLEARED",
+          paidAt: new Date().toISOString(),
+        });
+      }
+      
+      // Add bank transfer payment if any
+      const bankAmount = parseFloat(partialPayment.bank_transfer) || 0;
+      if (bankAmount > 0) {
+        saleData.payments.push({
+          amount: bankAmount,
+          method: "BANK TRANSFER",
+          status: "CLEARED",
+          paidAt: new Date().toISOString(),
+        });
+      }
+      
+      // Add till payment if any
+      const tillAmount = parseFloat(partialPayment.till) || 0;
+      if (tillAmount > 0) {
+        saleData.payments.push({
+          amount: tillAmount,
+          method: "TILL",
+          status: "CLEARED",
+          paidAt: new Date().toISOString(),
+        });
+      }
+      
+      saleData.status = "PARTIAL";
+      saleData.partialPayments = partialPayment; // Store the breakdown
+    } else if (paymentOption === 'credit') {
+      saleData.status = "UNPAID";
+    }
 
     setOptimisticSale(saleData);
 
@@ -976,6 +1044,7 @@ export default function AdminDashboard() {
           setCurrentPrice("");
           setPaymentOption("cash");
           setAmountPaid("");
+          setPartialPayment({ cash: "", bank_transfer: "", till: "" });
 
           setTimeout(() => fetchDashboardData().catch(console.error), 1000);
 
@@ -1357,6 +1426,7 @@ export default function AdminDashboard() {
                     setStockError(null);
                     setOptimisticSale(null);
                     setOptimisticProducts([]);
+                    setPartialPayment({ cash: "", bank_transfer: "", till: "" });
                   }}
                   type="button"
                   className="text-white hover:bg-white/20 p-1.5 rounded-lg transition-colors"
@@ -1805,6 +1875,7 @@ export default function AdminDashboard() {
                       onClick={() => {
                         setPaymentOption('cash');
                         setAmountPaid(calculateTotalAmount().toFixed(2));
+                        setPartialPayment({ cash: "", bank_transfer: "", till: "" });
                       }}
                       className={`p-3 rounded-lg border-2 flex flex-col items-center justify-center gap-1 transition-all text-xs ${
                         paymentOption === 'cash'
@@ -1828,24 +1899,77 @@ export default function AdminDashboard() {
                     <button
                       type="button"
                       onClick={() => {
-                        setPaymentOption('partial');
-                        setAmountPaid("");
+                        setPaymentOption('bank_transfer');
+                        setAmountPaid(calculateTotalAmount().toFixed(2));
+                        setPartialPayment({ cash: "", bank_transfer: "", till: "" });
                       }}
                       className={`p-3 rounded-lg border-2 flex flex-col items-center justify-center gap-1 transition-all text-xs ${
-                        paymentOption === 'partial'
+                        paymentOption === 'bank_transfer'
                           ? 'border-green-500 bg-green-50'
                           : 'border-gray-200 hover:border-green-300 hover:bg-green-25'
                       }`}
                     >
                       <div className={`p-2 rounded-full ${
-                        paymentOption === 'partial' ? 'bg-green-100' : 'bg-gray-100'
+                        paymentOption === 'bank_transfer' ? 'bg-green-100' : 'bg-gray-100'
                       }`}>
-                        <Wallet className={`w-5 h-5 ${
-                          paymentOption === 'partial' ? 'text-green-600' : 'text-gray-400'
+                        <CreditCard className={`w-5 h-5 ${
+                          paymentOption === 'bank_transfer' ? 'text-green-600' : 'text-gray-400'
                         }`} />
                       </div>
                       <span className={`font-medium ${
-                        paymentOption === 'partial' ? 'text-green-700' : 'text-gray-700'
+                        paymentOption === 'bank_transfer' ? 'text-green-700' : 'text-gray-700'
+                      }`}>Bank Transfer</span>
+                      <span className="text-xs text-gray-500">Full</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setPaymentOption('till');
+                        setAmountPaid(calculateTotalAmount().toFixed(2));
+                        setPartialPayment({ cash: "", bank_transfer: "", till: "" });
+                      }}
+                      className={`p-3 rounded-lg border-2 flex flex-col items-center justify-center gap-1 transition-all text-xs ${
+                        paymentOption === 'till'
+                          ? 'border-purple-500 bg-purple-50'
+                          : 'border-gray-200 hover:border-purple-300 hover:bg-purple-25'
+                      }`}
+                    >
+                      <div className={`p-2 rounded-full ${
+                        paymentOption === 'till' ? 'bg-purple-100' : 'bg-gray-100'
+                      }`}>
+                        <CreditCard className={`w-5 h-5 ${
+                          paymentOption === 'till' ? 'text-purple-600' : 'text-gray-400'
+                        }`} />
+                      </div>
+                      <span className={`font-medium ${
+                        paymentOption === 'till' ? 'text-purple-700' : 'text-gray-700'
+                      }`}>Till</span>
+                      <span className="text-xs text-gray-500">Full</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setPaymentOption('partial');
+                        setAmountPaid("");
+                        setPartialPayment({ cash: "", bank_transfer: "", till: "" });
+                      }}
+                      className={`p-3 rounded-lg border-2 flex flex-col items-center justify-center gap-1 transition-all text-xs ${
+                        paymentOption === 'partial'
+                          ? 'border-yellow-500 bg-yellow-50'
+                          : 'border-gray-200 hover:border-yellow-300 hover:bg-yellow-25'
+                      }`}
+                    >
+                      <div className={`p-2 rounded-full ${
+                        paymentOption === 'partial' ? 'bg-yellow-100' : 'bg-gray-100'
+                      }`}>
+                        <Wallet className={`w-5 h-5 ${
+                          paymentOption === 'partial' ? 'text-yellow-600' : 'text-gray-400'
+                        }`} />
+                      </div>
+                      <span className={`font-medium ${
+                        paymentOption === 'partial' ? 'text-yellow-700' : 'text-gray-700'
                       }`}>Partial</span>
                       <span className="text-xs text-gray-500">Pay some</span>
                     </button>
@@ -1855,51 +1979,168 @@ export default function AdminDashboard() {
                       onClick={() => {
                         setPaymentOption('credit');
                         setAmountPaid("0");
+                        setPartialPayment({ cash: "", bank_transfer: "", till: "" });
                       }}
                       className={`p-3 rounded-lg border-2 flex flex-col items-center justify-center gap-1 transition-all text-xs ${
                         paymentOption === 'credit'
-                          ? 'border-yellow-500 bg-yellow-50'
-                          : 'border-gray-200 hover:border-yellow-300 hover:bg-yellow-25'
+                          ? 'border-red-500 bg-red-50'
+                          : 'border-gray-200 hover:border-red-300 hover:bg-red-25'
                       }`}
                     >
                       <div className={`p-2 rounded-full ${
-                        paymentOption === 'credit' ? 'bg-yellow-100' : 'bg-gray-100'
+                        paymentOption === 'credit' ? 'bg-red-100' : 'bg-gray-100'
                       }`}>
                         <CreditCard className={`w-5 h-5 ${
-                          paymentOption === 'credit' ? 'text-yellow-600' : 'text-gray-400'
+                          paymentOption === 'credit' ? 'text-red-600' : 'text-gray-400'
                         }`} />
                       </div>
                       <span className={`font-medium ${
-                        paymentOption === 'credit' ? 'text-yellow-700' : 'text-gray-700'
+                        paymentOption === 'credit' ? 'text-red-700' : 'text-gray-700'
                       }`}>Credit</span>
                       <span className="text-xs text-gray-500">Pay later</span>
                     </button>
                   </div>
 
+                  {/* Enhanced Partial Payment Details */}
                   {paymentOption === 'partial' && (
-                    <div className="bg-green-50 border-2 border-green-200 rounded-lg p-3">
-                      <label className="block text-xs font-medium text-black mb-1">
-                        Amount Paid (KSh) *
-                      </label>
-                      <div className="relative">
-                        <span className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-500 text-sm">KSh</span>
-                        <input
-                          type="number"
-                          min="0"
-                          step="0.01"
-                          max={calculateTotalAmount()}
-                          value={amountPaid}
-                          onChange={(e) => setAmountPaid(e.target.value)}
-                          placeholder="Enter amount paid"
-                          className="w-full pl-10 pr-3 py-2 border-2 border-green-300 rounded-lg focus:border-green-500 focus:ring-2 focus:ring-green-200 text-black placeholder-gray-400 text-sm"
-                        />
+                    <div className="bg-yellow-50 border-2 border-yellow-200 rounded-lg p-3 space-y-3">
+                      <h4 className="text-sm font-semibold text-yellow-900">How was partial payment made?</h4>
+                      
+                      <div className="space-y-2">
+                        {/* Cash Payment */}
+                        <div>
+                          <label className="block text-xs font-medium text-black mb-1">
+                            Cash Amount (KSh)
+                          </label>
+                          <div className="relative">
+                            <span className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-500 text-sm">KSh</span>
+                            <input
+                              type="number"
+                              min="0"
+                              step="0.01"
+                              value={partialPayment.cash}
+                              onChange={(e) => {
+                                const newValue = e.target.value;
+                                setPartialPayment({...partialPayment, cash: newValue});
+                                // Auto-calculate total
+                                const total = Object.values({...partialPayment, cash: newValue})
+                                  .reduce((sum, val) => sum + (parseFloat(val) || 0), 0);
+                                setAmountPaid(total.toFixed(2));
+                              }}
+                              placeholder="0.00"
+                              className="w-full pl-10 pr-3 py-2 border border-yellow-300 rounded-lg focus:border-yellow-500 focus:ring-2 focus:ring-yellow-200 text-black placeholder-gray-400 text-sm"
+                            />
+                          </div>
+                        </div>
+
+                        {/* Bank Transfer */}
+                        <div>
+                          <label className="block text-xs font-medium text-black mb-1">
+                            Bank Transfer Amount (KSh)
+                          </label>
+                          <div className="relative">
+                            <span className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-500 text-sm">KSh</span>
+                            <input
+                              type="number"
+                              min="0"
+                              step="0.01"
+                              value={partialPayment.bank_transfer}
+                              onChange={(e) => {
+                                const newValue = e.target.value;
+                                setPartialPayment({...partialPayment, bank_transfer: newValue});
+                                const total = Object.values({...partialPayment, bank_transfer: newValue})
+                                  .reduce((sum, val) => sum + (parseFloat(val) || 0), 0);
+                                setAmountPaid(total.toFixed(2));
+                              }}
+                              placeholder="0.00"
+                              className="w-full pl-10 pr-3 py-2 border border-yellow-300 rounded-lg focus:border-yellow-500 focus:ring-2 focus:ring-yellow-200 text-black placeholder-gray-400 text-sm"
+                            />
+                          </div>
+                        </div>
+
+                        {/* Till Payment */}
+                        <div>
+                          <label className="block text-xs font-medium text-black mb-1">
+                            Till Amount (KSh)
+                          </label>
+                          <div className="relative">
+                            <span className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-500 text-sm">KSh</span>
+                            <input
+                              type="number"
+                              min="0"
+                              step="0.01"
+                              value={partialPayment.till}
+                              onChange={(e) => {
+                                const newValue = e.target.value;
+                                setPartialPayment({...partialPayment, till: newValue});
+                                const total = Object.values({...partialPayment, till: newValue})
+                                  .reduce((sum, val) => sum + (parseFloat(val) || 0), 0);
+                                setAmountPaid(total.toFixed(2));
+                              }}
+                              placeholder="0.00"
+                              className="w-full pl-10 pr-3 py-2 border border-yellow-300 rounded-lg focus:border-yellow-500 focus:ring-2 focus:ring-yellow-200 text-black placeholder-gray-400 text-sm"
+                            />
+                          </div>
+                        </div>
+
+                        {/* Summary of partial payments */}
+                        <div className="pt-2 border-t border-yellow-300">
+                          <div className="grid grid-cols-2 gap-2 text-xs">
+                            <div className="text-black">Total Partial Payment:</div>
+                            <div className="font-bold text-right text-yellow-700">
+                              KSh {amountPaid ? parseFloat(amountPaid).toLocaleString() : "0.00"}
+                            </div>
+                            
+                            <div className="text-black">Remaining Balance:</div>
+                            <div className="font-bold text-right text-red-600">
+                              KSh {Math.max(0, calculateTotalAmount() - (parseFloat(amountPaid) || 0)).toLocaleString()}
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Breakdown of payments made */}
+                        {parseFloat(amountPaid) > 0 && (
+                          <div className="bg-white/50 rounded-lg p-2 border border-yellow-200">
+                            <p className="text-xs font-medium text-yellow-800 mb-1">Payment Breakdown:</p>
+                            <div className="space-y-1">
+                              {Object.entries(partialPayment).map(([method, amount]) => {
+                                const numAmount = parseFloat(amount || "0");
+                                if (numAmount > 0) {
+                                  const methodName = method === 'bank_transfer' ? 'Bank Transfer' : 
+                                                   method === 'cash' ? 'Cash' : 'Till';
+                                  return (
+                                    <div key={method} className="flex justify-between text-xs">
+                                      <span className="text-gray-700">{methodName}:</span>
+                                      <span className="font-medium text-green-600">
+                                        KSh {numAmount.toLocaleString()}
+                                      </span>
+                                    </div>
+                                  );
+                                }
+                                return null;
+                              })}
+                            </div>
+                          </div>
+                        )}
                       </div>
-                      <div className="text-xs text-gray-600 mt-1">
-                        Remaining: KSh {Math.max(0, calculateTotalAmount() - (parseFloat(amountPaid) || 0)).toLocaleString()}
+                    </div>
+                  )}
+                  
+                  {paymentOption === 'credit' && (
+                    <div className="bg-red-50 border-2 border-red-200 rounded-lg p-3">
+                      <div className="text-center py-2">
+                        <div className="flex items-center justify-center gap-2 text-red-700">
+                          <AlertTriangle className="w-4 h-4" />
+                          <span className="font-semibold">Credit Sale - Customer will pay later</span>
+                        </div>
+                        <p className="text-xs text-gray-600 mt-1">
+                          Total amount: KSh {calculateTotalAmount().toLocaleString()} will be added to customer's credit
+                        </p>
                       </div>
                     </div>
                   )}
 
+                  {/* Payment Summary */}
                   <div className="bg-gray-50 border-2 border-gray-200 rounded-lg p-3 space-y-2 text-sm">
                     <div className="flex justify-between items-center">
                       <span className="text-black">Total Amount:</span>
@@ -1907,26 +2148,66 @@ export default function AdminDashboard() {
                     </div>
                     
                     <div className="flex justify-between items-center">
-                      <span className="text-black">
-                        {paymentOption === 'cash' ? 'Amount Paid:' :
-                         paymentOption === 'partial' ? 'Amount Paid:' : 'Payment Status:'}
-                      </span>
+                      <span className="text-black">Payment Method:</span>
                       <span className={`font-bold ${
-                        paymentOption === 'cash' ? 'text-green-600' :
-                        paymentOption === 'partial' ? 'text-green-600' : 'text-yellow-600'
+                        paymentOption === 'cash' ? 'text-blue-600' :
+                        paymentOption === 'bank_transfer' ? 'text-green-600' :
+                        paymentOption === 'till' ? 'text-purple-600' :
+                        paymentOption === 'partial' ? 'text-yellow-600' :
+                        'text-red-600'
                       }`}>
-                        {paymentOption === 'cash' ? `KSh ${calculateTotalAmount().toLocaleString()}` :
-                         paymentOption === 'partial' ? `KSh ${(parseFloat(amountPaid) || 0).toLocaleString()}` :
+                        {paymentOption === 'cash' ? 'Cash' :
+                         paymentOption === 'bank_transfer' ? 'Bank Transfer' :
+                         paymentOption === 'till' ? 'Till' :
+                         paymentOption === 'partial' ? 'Partial Payment' :
                          'Credit'}
                       </span>
                     </div>
                     
-                    {paymentOption === 'partial' && (
+                    <div className="flex justify-between items-center">
+                      <span className="text-black">Amount Paid:</span>
+                      <span className={`font-bold ${
+                        paymentOption === 'partial' || paymentOption === 'credit' ? 'text-gray-600' : 'text-green-600'
+                      }`}>
+                        {paymentOption === 'cash' || paymentOption === 'bank_transfer' || paymentOption === 'till' 
+                          ? `KSh ${calculateTotalAmount().toLocaleString()}`
+                          : paymentOption === 'partial'
+                          ? `KSh ${(parseFloat(amountPaid) || 0).toLocaleString()}`
+                          : 'KSh 0'}
+                      </span>
+                    </div>
+                    
+                    {(paymentOption === 'partial' || paymentOption === 'credit') && (
                       <div className="flex justify-between items-center pt-1 border-t border-gray-300">
-                        <span className="font-bold text-black">Remaining:</span>
-                        <span className="font-bold text-red-600">
+                        <span className="font-bold text-black">
+                          {paymentOption === 'partial' ? 'Remaining:' : 'Credit Amount:'}
+                        </span>
+                        <span className={`font-bold ${
+                          paymentOption === 'partial' ? 'text-red-600' : 'text-red-600'
+                        }`}>
                           KSh {Math.max(0, calculateTotalAmount() - (parseFloat(amountPaid) || 0)).toLocaleString()}
                         </span>
+                      </div>
+                    )}
+
+                    {/* Partial Payment Breakdown in Summary */}
+                    {paymentOption === 'partial' && parseFloat(amountPaid) > 0 && (
+                      <div className="space-y-1 pt-2 border-t border-gray-300">
+                        <p className="text-xs font-medium text-yellow-700">Partial Payment Breakdown:</p>
+                        {Object.entries(partialPayment).map(([method, amount]) => {
+                          const numAmount = parseFloat(amount || "0");
+                          if (numAmount > 0) {
+                            const methodName = method === 'bank_transfer' ? 'Bank Transfer' : 
+                                             method === 'cash' ? 'Cash' : 'Till';
+                            return (
+                              <div key={method} className="flex justify-between text-xs pl-2">
+                                <span className="text-gray-600">{methodName}:</span>
+                                <span className="font-medium">KSh {numAmount.toLocaleString()}</span>
+                              </div>
+                            );
+                          }
+                          return null;
+                        })}
                       </div>
                     )}
                   </div>
@@ -1943,6 +2224,7 @@ export default function AdminDashboard() {
                     setStockError(null);
                     setOptimisticSale(null);
                     setOptimisticProducts([]);
+                    setPartialPayment({ cash: "", bank_transfer: "", till: "" });
                   }}
                   type="button"
                   disabled={isCreating}

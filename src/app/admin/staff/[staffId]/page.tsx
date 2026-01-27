@@ -47,7 +47,13 @@ import {
   FileDigit,
   CheckCheck,
   FileBarChart,
-  ClipboardList
+  ClipboardList,
+  Edit,
+  Save,
+  Check,
+  Users,
+  ChevronDown,
+  Upload
 } from "lucide-react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
@@ -76,6 +82,7 @@ interface StaffInventory {
   createdAt: Date;
   updatedAt: Date;
   product: Product;
+  staff: Staff;
   saleItems?: SaleItem[];
 }
 
@@ -155,19 +162,34 @@ const StaffDetailsPage = () => {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [loadingCloseWeek, setLoadingCloseWeek] = useState<string | null>(null);
+  const [actionLoading, setActionLoading] = useState(false);
   
+  // Data states
   const [weeklyPerformance, setWeeklyPerformance] = useState<WeeklyPerformance[]>([]);
   const [selectedWeek, setSelectedWeek] = useState<WeeklyPerformance | null>(null);
   const [showWeekDetails, setShowWeekDetails] = useState(false);
   
+  // Edit states
+  const [editingItem, setEditingItem] = useState<StaffInventory | null>(null);
+  const [editForm, setEditForm] = useState({
+    quantityGiven: '',
+    quantitySold: '',
+    quantityReturned: '',
+    weekStartDate: '',
+    weekEndDate: ''
+  });
+  
+  // Return modal states
   const [showReturnModal, setShowReturnModal] = useState(false);
   const [selectedInventory, setSelectedInventory] = useState<StaffInventory | null>(null);
   const [returnQuantity, setReturnQuantity] = useState('');
   const [returnReason, setReturnReason] = useState('');
   
+  // Close week modal states
   const [showCloseWeekModal, setShowCloseWeekModal] = useState(false);
   const [weekToClose, setWeekToClose] = useState<WeeklyPerformance | null>(null);
   
+  // Filter states
   const [searchQuery, setSearchQuery] = useState("");
   const [filterStatus, setFilterStatus] = useState("all");
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
@@ -314,6 +336,91 @@ const StaffDetailsPage = () => {
     setWeeklyPerformance(weeklyArray);
   };
 
+  // Handle edit click
+  const handleEditClick = (item: StaffInventory) => {
+    setEditingItem(item);
+    setEditForm({
+      quantityGiven: item.quantityGiven.toString(),
+      quantitySold: item.quantitySold.toString(),
+      quantityReturned: item.quantityReturned.toString(),
+      weekStartDate: item.weekStartDate ? new Date(item.weekStartDate).toISOString().split('T')[0] : '',
+      weekEndDate: item.weekEndDate ? new Date(item.weekEndDate).toISOString().split('T')[0] : ''
+    });
+  };
+
+  // Handle save edit
+  const handleSaveEdit = async () => {
+    if (!editingItem) return;
+
+    try {
+      setActionLoading(true);
+      setError(null);
+
+      const response = await fetch(`/api/staff-inventory/${editingItem.id}/update`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          quantityGiven: parseInt(editForm.quantityGiven) || 0,
+          quantitySold: parseInt(editForm.quantitySold) || 0,
+          quantityReturned: parseInt(editForm.quantityReturned) || 0,
+          weekStartDate: editForm.weekStartDate || null,
+          weekEndDate: editForm.weekEndDate || null
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to update assignment');
+      }
+
+      setSuccess('Assignment updated successfully!');
+      setEditingItem(null);
+      
+      // Refresh data
+      fetchStaffDetails();
+
+    } catch (err: any) {
+      setError(err.message || 'Failed to update assignment');
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  // Handle delete assignment
+  const handleDeleteAssignment = async (id: number) => {
+    if (!confirm('Are you sure you want to delete this assignment? This will return items to stock.')) {
+      return;
+    }
+
+    setActionLoading(true);
+    setError(null);
+
+    try {
+      const response = await fetch(`/api/staff-inventory/${id}`, {
+        method: 'DELETE',
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to delete assignment');
+      }
+
+      setSuccess('Assignment deleted successfully!');
+      
+      // Refresh data
+      fetchStaffDetails();
+
+    } catch (err: any) {
+      setError(err.message || 'Failed to delete assignment');
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
   // Handle return items
   const handleReturnItems = async () => {
     if (!selectedInventory || !returnQuantity) {
@@ -330,13 +437,13 @@ const StaffDetailsPage = () => {
     }
 
     try {
-      const response = await fetch(`/api/staff-inventory/${selectedInventory.id}/return`, {
-        method: 'POST',
+      const response = await fetch(`/api/staff-inventory/${selectedInventory.id}/update`, {
+        method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          quantityReturned: returnQty,
+          quantityReturned: selectedInventory.quantityReturned + returnQty,
           reason: returnReason || "Defective/Damaged"
         }),
       });
@@ -656,7 +763,7 @@ const StaffDetailsPage = () => {
                 className="inline-flex items-center gap-2 px-3 py-1.5 bg-emerald-500 text-white rounded-lg hover:bg-emerald-600 transition-colors text-sm shadow-sm"
               >
                 <Plus className="w-3 h-3" />
-                <span className="hidden sm:inline">Assign</span>
+                <span className="hidden sm:inline">Assign New</span>
               </Link>
             </div>
           </div>
@@ -764,8 +871,8 @@ const StaffDetailsPage = () => {
           <div className="px-4 sm:px-6 py-4 border-b border-gray-200">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div>
-                <div className="text-lg sm:text-xl font-semibold text-gray-900">Weekly Performance</div>
-                <div className="text-xs sm:text-sm text-gray-600">Tap any week for details</div>
+                <div className="text-lg sm:text-xl font-semibold text-gray-900">Assigned Inventory</div>
+                <div className="text-xs sm:text-sm text-gray-600">Tap any week for details • Click Edit to modify assignments</div>
               </div>
               
               <div className="flex items-center gap-2">
@@ -797,7 +904,7 @@ const StaffDetailsPage = () => {
                     type="text"
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
-                    placeholder="Search weeks..."
+                    placeholder="Search weeks or products..."
                     className="w-full pl-9 pr-4 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                   />
                 </div>
@@ -995,6 +1102,169 @@ const StaffDetailsPage = () => {
           )}
         </div>
 
+        {/* Edit Assignment Modal */}
+        {editingItem && (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-3 sm:p-4 z-50">
+            <div className="bg-white rounded-xl shadow-xl w-full max-w-lg">
+              <div className="px-4 sm:px-6 py-4 border-b border-gray-200">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <div className="text-lg font-semibold text-gray-900">Edit Assignment</div>
+                    <div className="text-sm text-gray-600">{editingItem.product?.name}</div>
+                  </div>
+                  <button
+                    onClick={() => setEditingItem(null)}
+                    className="p-1 hover:bg-gray-100 rounded-lg transition-colors"
+                  >
+                    <X className="w-5 h-5 text-gray-500" />
+                  </button>
+                </div>
+              </div>
+              
+              <div className="p-4 sm:p-6">
+                <div className="space-y-4">
+                  {/* Staff and Product Info */}
+                  <div className="bg-gray-50 rounded-lg p-4 border border-gray-200">
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <div className="text-xs font-medium text-gray-700 mb-1">Staff</div>
+                        <div className="text-sm font-semibold text-gray-900">{editingItem.staff?.name}</div>
+                      </div>
+                      <div>
+                        <div className="text-xs font-medium text-gray-700 mb-1">Product</div>
+                        <div className="text-sm font-semibold text-gray-900">{editingItem.product?.name}</div>
+                        <div className="text-xs text-gray-600">{editingItem.product?.category}</div>
+                      </div>
+                    </div>
+                    <div className="mt-3 pt-3 border-t border-gray-200 grid grid-cols-3 gap-2">
+                      <div className="text-center">
+                        <div className="text-xs text-gray-600">Current</div>
+                        <div className="text-sm font-bold">{editingItem.quantityGiven}</div>
+                      </div>
+                      <div className="text-center">
+                        <div className="text-xs text-gray-600">Sold</div>
+                        <div className="text-sm font-bold text-emerald-600">{editingItem.quantitySold}</div>
+                      </div>
+                      <div className="text-center">
+                        <div className="text-xs text-gray-600">Returned</div>
+                        <div className="text-sm font-bold text-orange-600">{editingItem.quantityReturned}</div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Quantity Fields */}
+                  <div className="grid grid-cols-3 gap-3">
+                    <div>
+                      <label className="block text-xs font-medium text-gray-700 mb-1">
+                        Assigned Quantity
+                      </label>
+                      <input
+                        type="number"
+                        value={editForm.quantityGiven}
+                        onChange={(e) => setEditForm({...editForm, quantityGiven: e.target.value})}
+                        className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                        min="0"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-700 mb-1">
+                        Sold Quantity
+                      </label>
+                      <input
+                        type="number"
+                        value={editForm.quantitySold}
+                        onChange={(e) => setEditForm({...editForm, quantitySold: e.target.value})}
+                        className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                        min="0"
+                        max={parseInt(editForm.quantityGiven)}
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-700 mb-1">
+                        Returned Quantity
+                      </label>
+                      <input
+                        type="number"
+                        value={editForm.quantityReturned}
+                        onChange={(e) => setEditForm({...editForm, quantityReturned: e.target.value})}
+                        className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                        min="0"
+                        max={parseInt(editForm.quantityGiven) - parseInt(editForm.quantitySold)}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Week Dates */}
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-medium text-gray-700 mb-1">
+                        Week Start Date
+                      </label>
+                      <input
+                        type="date"
+                        value={editForm.weekStartDate}
+                        onChange={(e) => setEditForm({...editForm, weekStartDate: e.target.value})}
+                        className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-700 mb-1">
+                        Week End Date
+                      </label>
+                      <input
+                        type="date"
+                        value={editForm.weekEndDate}
+                        onChange={(e) => setEditForm({...editForm, weekEndDate: e.target.value})}
+                        className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Stock Impact Warning */}
+                  {(parseInt(editForm.quantityGiven) > editingItem.quantityGiven || 
+                    parseInt(editForm.quantityReturned) > editingItem.quantityReturned) && (
+                    <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-3">
+                      <div className="flex items-start gap-2">
+                        <AlertTriangle className="w-4 h-4 text-yellow-600 flex-shrink-0 mt-0.5" />
+                        <div className="text-xs text-yellow-700">
+                          Changing these quantities will update the main inventory stock levels.
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+              
+              <div className="px-4 sm:px-6 py-4 border-t border-gray-200 flex justify-end gap-3">
+                <button
+                  onClick={() => setEditingItem(null)}
+                  className="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors text-sm"
+                  disabled={actionLoading}
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleSaveEdit}
+                  disabled={actionLoading}
+                  className="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors text-sm font-medium disabled:opacity-50"
+                >
+                  {actionLoading ? (
+                    <>
+                      <div className="animate-spin rounded-full h-3 w-3 border-b-2 border-white mr-2 inline-block"></div>
+                      Saving...
+                    </>
+                  ) : (
+                    <>
+                      <Save className="w-3 h-3 inline-block mr-1" />
+                      Save Changes
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Week Details Modal */}
         {showWeekDetails && selectedWeek && (
           <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-2 sm:p-4 z-50 overflow-y-auto">
@@ -1053,7 +1323,7 @@ const StaffDetailsPage = () => {
                 {/* Inventory Section */}
                 <div className="px-4 sm:px-6 pb-6">
                   <div className="flex items-center justify-between mb-4">
-                    <div className="text-lg font-semibold text-gray-900">Inventory</div>
+                    <div className="text-lg font-semibold text-gray-900">Inventory Details</div>
                     <div className="text-sm text-gray-600">
                       {selectedWeek.inventory.length} products
                     </div>
@@ -1062,6 +1332,9 @@ const StaffDetailsPage = () => {
                   <div className="space-y-3">
                     {selectedWeek.inventory.map((inventory) => {
                       const remaining = inventory.quantityGiven - inventory.quantitySold - inventory.quantityReturned;
+                      const sellThroughRate = inventory.quantityGiven > 0 
+                        ? (inventory.quantitySold / inventory.quantityGiven) * 100 
+                        : 0;
                       
                       return (
                         <div key={inventory.id} className="bg-gray-50 rounded-xl p-4 border border-gray-200">
@@ -1073,24 +1346,37 @@ const StaffDetailsPage = () => {
                               </div>
                             </div>
                             
-                            {remaining > 0 && selectedWeek.status === 'active' && (
+                            <div className="flex items-center gap-2">
+                              {remaining > 0 && selectedWeek.status === 'active' && (
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setSelectedInventory(inventory);
+                                    setReturnQuantity('');
+                                    setReturnReason('');
+                                    setShowReturnModal(true);
+                                  }}
+                                  className="inline-flex items-center gap-1 px-2 py-1 bg-orange-100 text-orange-700 rounded-lg text-xs hover:bg-orange-200 transition-colors"
+                                >
+                                  <PackageX className="w-3 h-3" />
+                                  Quick Return
+                                </button>
+                              )}
                               <button
                                 onClick={(e) => {
                                   e.stopPropagation();
-                                  setSelectedInventory(inventory);
-                                  setReturnQuantity('');
-                                  setReturnReason('');
-                                  setShowReturnModal(true);
+                                  handleEditClick(inventory);
+                                  setShowWeekDetails(false);
                                 }}
-                                className="inline-flex items-center gap-1 px-2 py-1 bg-orange-100 text-orange-700 rounded-lg text-xs hover:bg-orange-200 transition-colors"
+                                className="inline-flex items-center gap-1 px-2 py-1 bg-blue-100 text-blue-700 rounded-lg text-xs hover:bg-blue-200 transition-colors"
                               >
-                                <PackageX className="w-3 h-3" />
-                                Return
+                                <Edit className="w-3 h-3" />
+                                Edit
                               </button>
-                            )}
+                            </div>
                           </div>
                           
-                          <div className="grid grid-cols-4 gap-2">
+                          <div className="grid grid-cols-5 gap-2">
                             <div className="text-center">
                               <div className="text-xs text-gray-600">Assigned</div>
                               <div className="font-bold">{inventory.quantityGiven}</div>
@@ -1108,6 +1394,35 @@ const StaffDetailsPage = () => {
                               <div className={`font-bold ${remaining > 0 ? 'text-blue-600' : 'text-gray-600'}`}>
                                 {remaining}
                               </div>
+                            </div>
+                            <div className="text-center">
+                              <div className="text-xs text-gray-600">Rate</div>
+                              <div className={`font-bold ${
+                                sellThroughRate >= 70 ? 'text-emerald-600' :
+                                sellThroughRate >= 50 ? 'text-yellow-600' : 'text-red-600'
+                              }`}>
+                                {sellThroughRate.toFixed(0)}%
+                              </div>
+                            </div>
+                          </div>
+                          
+                          <div className="mt-3 pt-3 border-t border-gray-200">
+                            <div className="flex items-center justify-between">
+                              <div className="text-xs text-gray-600">
+                                Updated: {formatDate(inventory.updatedAt)}
+                              </div>
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  if (confirm("Delete this assignment and return items to stock?")) {
+                                    handleDeleteAssignment(inventory.id);
+                                  }
+                                }}
+                                className="text-xs text-red-600 hover:text-red-800"
+                              >
+                                <Trash2 className="w-3 h-3 inline-block mr-1" />
+                                Delete
+                              </button>
                             </div>
                           </div>
                         </div>
@@ -1139,7 +1454,7 @@ const StaffDetailsPage = () => {
                               <div className="text-right">
                                 <div className="font-bold text-orange-600">{inventory.quantityReturned} items</div>
                                 <div className="text-xs text-gray-600">
-                                  {formatDate(inventory.updatedAt)}
+                                  Last update: {formatDate(inventory.updatedAt)}
                                 </div>
                               </div>
                             </div>
@@ -1436,7 +1751,7 @@ const StaffDetailsPage = () => {
         {/* Footer */}
         <div className="mt-8 text-center">
           <div className="text-xs text-gray-600 mb-2">
-            Staff Details • {staff.name} • Weekly Inventory System
+            Staff Details • {staff.name} • Inventory Management System
           </div>
           <div className="flex items-center justify-center gap-3">
             <button
