@@ -53,7 +53,8 @@ import {
   Check,
   Users,
   ChevronDown,
-  Upload
+  Upload,
+  Minus
 } from "lucide-react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
@@ -84,6 +85,7 @@ interface StaffInventory {
   product: Product;
   staff: Staff;
   saleItems?: SaleItem[];
+  currentStock?: number;
 }
 
 interface Product {
@@ -94,6 +96,7 @@ interface Product {
   productionCost?: number;
   category?: string;
   image?: string;
+  stock?: number;
 }
 
 interface Sale {
@@ -178,6 +181,12 @@ const StaffDetailsPage = () => {
     weekStartDate: '',
     weekEndDate: ''
   });
+  const [availableStock, setAvailableStock] = useState(0);
+  const [stockError, setStockError] = useState<string | null>(null);
+  
+  // Search states
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchProductQuery, setSearchProductQuery] = useState("");
   
   // Return modal states
   const [showReturnModal, setShowReturnModal] = useState(false);
@@ -185,12 +194,17 @@ const StaffDetailsPage = () => {
   const [returnQuantity, setReturnQuantity] = useState('');
   const [returnReason, setReturnReason] = useState('');
   
+  // Add/Remove modal states
+  const [showAdjustModal, setShowAdjustModal] = useState(false);
+  const [adjustType, setAdjustType] = useState<'add' | 'remove'>('add');
+  const [adjustQuantity, setAdjustQuantity] = useState('');
+  const [adjustReason, setAdjustReason] = useState('');
+  
   // Close week modal states
   const [showCloseWeekModal, setShowCloseWeekModal] = useState(false);
   const [weekToClose, setWeekToClose] = useState<WeeklyPerformance | null>(null);
   
   // Filter states
-  const [searchQuery, setSearchQuery] = useState("");
   const [filterStatus, setFilterStatus] = useState("all");
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
 
@@ -218,9 +232,6 @@ const StaffDetailsPage = () => {
 
   // Format week range
   const formatWeekRange = (startDate: Date, endDate: Date) => {
-    const now = new Date();
-    const isCurrent = now >= startDate && now <= endDate;
-    
     return `${startDate.toLocaleDateString('en-KE', { day: '2-digit', month: 'short' })} - ${endDate.toLocaleDateString('en-KE', { day: '2-digit', month: 'short' })}`;
   };
 
@@ -236,21 +247,47 @@ const StaffDetailsPage = () => {
     });
   };
 
-  // Fetch staff details
+  // Enhanced error handler
+  const handleError = (err: any, customMessage?: string) => {
+    console.error("Error:", err);
+    
+    let errorMessage = customMessage || "An error occurred";
+    
+    if (err instanceof Error) {
+      errorMessage = err.message;
+    } else if (typeof err === 'string') {
+      errorMessage = err;
+    } else if (err?.message) {
+      errorMessage = err.message;
+    } else if (err?.error) {
+      errorMessage = err.error;
+    }
+    
+    setError(errorMessage);
+    
+    // Auto-clear error after 5 seconds
+    setTimeout(() => {
+      setError(null);
+    }, 5000);
+  };
+
+  // Fetch staff details with enhanced error handling
   const fetchStaffDetails = useCallback(async () => {
     if (!staffId) return;
 
     setLoading(true);
     setError(null);
+    setStockError(null);
 
     try {
-      const response = await fetch(`/api/staff/${staffId}?include=inventories,sales`);
+      const response = await fetch(`/api/staff/${staffId}?include=inventories,sales,stock`);
       
       if (!response.ok) {
         if (response.status === 404) {
           throw new Error("Staff member not found");
         }
-        throw new Error(`Failed to fetch staff: ${response.statusText}`);
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || `Failed to fetch staff: ${response.statusText}`);
       }
 
       const data = await response.json();
@@ -260,12 +297,29 @@ const StaffDetailsPage = () => {
       processWeeklyData(data.staffInventories || [], data.sales || []);
 
     } catch (err: any) {
-      console.error("Error fetching staff details:", err);
-      setError(err.message || "Failed to load staff details");
+      handleError(err, "Failed to load staff details");
     } finally {
       setLoading(false);
     }
   }, [staffId]);
+
+  // Fetch available stock for a product
+  const fetchAvailableStock = useCallback(async (productId: number) => {
+    try {
+      const response = await fetch(`/api/products/${productId}/stock`);
+      
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || 'Failed to fetch stock information');
+      }
+
+      const data = await response.json();
+      return data.availableStock || 0;
+    } catch (err) {
+      handleError(err, "Failed to fetch stock information");
+      return 0;
+    }
+  }, []);
 
   // Process weekly data
   const processWeeklyData = (inventories: StaffInventory[], sales: Sale[]) => {
@@ -337,7 +391,7 @@ const StaffDetailsPage = () => {
   };
 
   // Handle edit click
-  const handleEditClick = (item: StaffInventory) => {
+  const handleEditClick = async (item: StaffInventory) => {
     setEditingItem(item);
     setEditForm({
       quantityGiven: item.quantityGiven.toString(),
@@ -346,6 +400,16 @@ const StaffDetailsPage = () => {
       weekStartDate: item.weekStartDate ? new Date(item.weekStartDate).toISOString().split('T')[0] : '',
       weekEndDate: item.weekEndDate ? new Date(item.weekEndDate).toISOString().split('T')[0] : ''
     });
+    
+    // Fetch current stock
+    try {
+      const stock = await fetchAvailableStock(item.productId);
+      setAvailableStock(stock);
+      setStockError(null);
+    } catch (err) {
+      setStockError("Unable to fetch stock information");
+      setAvailableStock(0);
+    }
   };
 
   // Handle save edit
@@ -355,6 +419,27 @@ const StaffDetailsPage = () => {
     try {
       setActionLoading(true);
       setError(null);
+      setStockError(null);
+
+      const newQuantityGiven = parseInt(editForm.quantityGiven) || 0;
+      const quantityDifference = newQuantityGiven - editingItem.quantityGiven;
+
+      // Check if we're adding more items than available stock
+      if (quantityDifference > 0 && quantityDifference > availableStock) {
+        setStockError(`Cannot add ${quantityDifference} items. Only ${availableStock} available in stock.`);
+        return;
+      }
+
+      // Validate quantities
+      if (parseInt(editForm.quantitySold) > newQuantityGiven) {
+        setStockError("Sold quantity cannot exceed assigned quantity");
+        return;
+      }
+
+      if (parseInt(editForm.quantityReturned) > newQuantityGiven - parseInt(editForm.quantitySold)) {
+        setStockError("Returned quantity cannot exceed remaining quantity");
+        return;
+      }
 
       const response = await fetch(`/api/staff-inventory/${editingItem.id}/update`, {
         method: 'PUT',
@@ -362,7 +447,7 @@ const StaffDetailsPage = () => {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          quantityGiven: parseInt(editForm.quantityGiven) || 0,
+          quantityGiven: newQuantityGiven,
           quantitySold: parseInt(editForm.quantitySold) || 0,
           quantityReturned: parseInt(editForm.quantityReturned) || 0,
           weekStartDate: editForm.weekStartDate || null,
@@ -383,7 +468,7 @@ const StaffDetailsPage = () => {
       fetchStaffDetails();
 
     } catch (err: any) {
-      setError(err.message || 'Failed to update assignment');
+      handleError(err, 'Failed to update assignment');
     } finally {
       setActionLoading(false);
     }
@@ -415,7 +500,7 @@ const StaffDetailsPage = () => {
       fetchStaffDetails();
 
     } catch (err: any) {
-      setError(err.message || 'Failed to delete assignment');
+      handleError(err, 'Failed to delete assignment');
     } finally {
       setActionLoading(false);
     }
@@ -462,7 +547,51 @@ const StaffDetailsPage = () => {
       fetchStaffDetails();
 
     } catch (error: any) {
-      setError(error.message || 'Failed to process return');
+      handleError(error, 'Failed to process return');
+    }
+  };
+
+  // Handle add/remove items
+  const handleAdjustItems = async () => {
+    if (!selectedInventory || !adjustQuantity) {
+      setError("Please enter quantity");
+      return;
+    }
+
+    const adjustQty = parseInt(adjustQuantity);
+    if (adjustQty <= 0) {
+      setError("Quantity must be greater than 0");
+      return;
+    }
+
+    try {
+      const response = await fetch(`/api/staff-inventory/${selectedInventory.id}/adjust`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          type: adjustType,
+          quantity: adjustQty,
+          reason: adjustReason || "Inventory adjustment"
+        }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to adjust inventory');
+      }
+
+      setSuccess(`${adjustType === 'add' ? 'Added' : 'Removed'} ${adjustQty} items successfully!`);
+      setShowAdjustModal(false);
+      setSelectedInventory(null);
+      setAdjustQuantity('');
+      setAdjustReason('');
+      
+      fetchStaffDetails();
+
+    } catch (error: any) {
+      handleError(error, 'Failed to adjust inventory');
     }
   };
 
@@ -503,7 +632,7 @@ const StaffDetailsPage = () => {
       fetchStaffDetails();
 
     } catch (error: any) {
-      setError(error.message || 'Failed to close week');
+      handleError(error, 'Failed to close week');
     } finally {
       setLoadingCloseWeek(null);
     }
@@ -550,7 +679,7 @@ const StaffDetailsPage = () => {
     setSuccess(`Week closed and CSV downloaded with ${returnedItems.length} returned items.`);
   };
 
-  // Export weekly report with return details
+  // Export weekly report
   const exportWeeklyReport = (week: WeeklyPerformance) => {
     if (!staff) return;
     
@@ -640,7 +769,11 @@ const StaffDetailsPage = () => {
   const filteredWeeklyPerformance = weeklyPerformance.filter(week => {
     if (searchQuery) {
       const query = searchQuery.toLowerCase();
-      return week.week.toLowerCase().includes(query);
+      return week.week.toLowerCase().includes(query) ||
+        week.inventory.some(inv => 
+          inv.product?.name.toLowerCase().includes(query) ||
+          inv.product?.category?.toLowerCase().includes(query)
+        );
     }
     
     if (filterStatus !== "all") {
@@ -649,6 +782,19 @@ const StaffDetailsPage = () => {
     
     return true;
   });
+
+  // Filter assigned items in week details - FIXED NULL CHECK
+  const getFilteredInventory = () => {
+    if (!selectedWeek) return [];
+    
+    if (!searchProductQuery) return selectedWeek.inventory;
+    
+    const query = searchProductQuery.toLowerCase();
+    return selectedWeek.inventory.filter(inv => 
+      inv.product?.name.toLowerCase().includes(query) ||
+      inv.product?.category?.toLowerCase().includes(query)
+    );
+  };
 
   // Initial load
   useEffect(() => {
@@ -662,7 +808,7 @@ const StaffDetailsPage = () => {
           <div className="flex items-center justify-center min-h-[60vh]">
             <div className="text-center">
               <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500 mx-auto"></div>
-              <div className="mt-4 text-gray-700">Loading staff details...</div>
+              <div className="mt-4 text-black">Loading staff details...</div>
             </div>
           </div>
         </div>
@@ -701,8 +847,8 @@ const StaffDetailsPage = () => {
         <div className="max-w-6xl mx-auto">
           <div className="bg-yellow-50 border border-yellow-100 rounded-xl p-8 text-center shadow-sm">
             <User className="w-16 h-16 text-yellow-400 mx-auto mb-4" />
-            <div className="text-xl font-semibold text-gray-900 mb-2">Staff Not Found</div>
-            <div className="text-gray-700 mb-6">The staff member you're looking for doesn't exist or has been removed.</div>
+            <div className="text-xl font-semibold text-black mb-2">Staff Not Found</div>
+            <div className="text-black mb-6">The staff member you're looking for doesn't exist or has been removed.</div>
             <button
               onClick={() => router.push('/admin/staff')}
               className="inline-flex items-center gap-2 px-6 py-3 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors font-medium shadow-sm"
@@ -776,32 +922,32 @@ const StaffDetailsPage = () => {
                   <User className="w-6 h-6 sm:w-8 sm:h-8 text-white" />
                 </div>
                 <div className="sm:hidden">
-                  <div className="text-lg font-bold text-gray-900">{staff.name}</div>
-                  <div className="text-xs text-gray-600">ID: {staff.id}</div>
+                  <div className="text-lg font-bold text-black">{staff.name}</div>
+                  <div className="text-xs text-black">ID: {staff.id}</div>
                 </div>
               </div>
               
               <div className="flex-1">
                 <div className="hidden sm:block">
-                  <div className="text-xl font-bold text-gray-900 mb-1">{staff.name}</div>
-                  <div className="text-sm text-gray-600 mb-3">ID: {staff.id}</div>
+                  <div className="text-xl font-bold text-black mb-1">{staff.name}</div>
+                  <div className="text-sm text-black mb-3">ID: {staff.id}</div>
                 </div>
                 
-                <div className="grid grid-cols-2 sm:flex sm:flex-wrap gap-3 text-gray-700 text-sm">
+                <div className="grid grid-cols-2 sm:flex sm:flex-wrap gap-3 text-black text-sm">
                   {staff.email && (
                     <div className="flex items-center gap-2">
-                      <Mail className="w-3 h-3 text-gray-500" />
+                      <Mail className="w-3 h-3 text-black" />
                       <div className="truncate">{staff.email}</div>
                     </div>
                   )}
                   {staff.phone && (
                     <div className="flex items-center gap-2">
-                      <Phone className="w-3 h-3 text-gray-500" />
+                      <Phone className="w-3 h-3 text-black" />
                       <div className="font-medium">{staff.phone}</div>
                     </div>
                   )}
                   <div className="col-span-2 flex items-center gap-2">
-                    <Calendar className="w-3 h-3 text-gray-500" />
+                    <Calendar className="w-3 h-3 text-black" />
                     <div className="font-medium">Joined {formatDate(staff.createdAt)}</div>
                   </div>
                 </div>
@@ -820,8 +966,8 @@ const StaffDetailsPage = () => {
           <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-4">
             <div className="flex items-center justify-between">
               <div>
-                <div className="text-xs font-medium text-gray-900">Total Weeks</div>
-                <div className="text-xl font-bold text-gray-900 mt-1">{weeklyPerformance.length}</div>
+                <div className="text-xs font-medium text-black">Total Weeks</div>
+                <div className="text-xl font-bold text-black mt-1">{weeklyPerformance.length}</div>
               </div>
               <CalendarDays className="w-6 h-6 text-blue-500" />
             </div>
@@ -830,8 +976,8 @@ const StaffDetailsPage = () => {
           <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-4">
             <div className="flex items-center justify-between">
               <div>
-                <div className="text-xs font-medium text-gray-900">Total Assigned</div>
-                <div className="text-xl font-bold text-gray-900 mt-1">
+                <div className="text-xs font-medium text-black">Total Assigned</div>
+                <div className="text-xl font-bold text-black mt-1">
                   {weeklyPerformance.reduce((sum, week) => sum + week.totalGiven, 0)}
                 </div>
               </div>
@@ -842,8 +988,8 @@ const StaffDetailsPage = () => {
           <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-4">
             <div className="flex items-center justify-between">
               <div>
-                <div className="text-xs font-medium text-gray-900">Total Returned</div>
-                <div className="text-xl font-bold text-gray-900 mt-1">
+                <div className="text-xs font-medium text-black">Total Returned</div>
+                <div className="text-xl font-bold text-black mt-1">
                   {weeklyPerformance.reduce((sum, week) => sum + week.totalReturned, 0)}
                 </div>
               </div>
@@ -854,8 +1000,8 @@ const StaffDetailsPage = () => {
           <div className="col-span-2 sm:col-span-1 bg-white rounded-xl shadow-sm border border-gray-200 p-4">
             <div className="flex items-center justify-between">
               <div>
-                <div className="text-xs font-medium text-gray-900">Sell-through</div>
-                <div className="text-xl font-bold text-gray-900 mt-1">
+                <div className="text-xs font-medium text-black">Sell-through</div>
+                <div className="text-xl font-bold text-black mt-1">
                   {weeklyPerformance.length > 0 
                     ? (weeklyPerformance.reduce((sum, week) => sum + week.sellThroughRate, 0) / weeklyPerformance.length).toFixed(0) 
                     : 0}%
@@ -871,8 +1017,8 @@ const StaffDetailsPage = () => {
           <div className="px-4 sm:px-6 py-4 border-b border-gray-200">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div>
-                <div className="text-lg sm:text-xl font-semibold text-gray-900">Assigned Inventory</div>
-                <div className="text-xs sm:text-sm text-gray-600">Tap any week for details • Click Edit to modify assignments</div>
+                <div className="text-lg sm:text-xl font-semibold text-black">Assigned Inventory</div>
+                <div className="text-xs sm:text-sm text-black">Tap any week for details • Click Edit to modify assignments</div>
               </div>
               
               <div className="flex items-center gap-2">
@@ -904,8 +1050,8 @@ const StaffDetailsPage = () => {
                     type="text"
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
-                    placeholder="Search weeks or products..."
-                    className="w-full pl-9 pr-4 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    placeholder="Search weeks, products, or categories..."
+                    className="w-full pl-9 pr-4 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-black placeholder-gray-500"
                   />
                 </div>
               </div>
@@ -914,7 +1060,7 @@ const StaffDetailsPage = () => {
                 <select
                   value={filterStatus}
                   onChange={(e) => setFilterStatus(e.target.value)}
-                  className="px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  className="px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-black"
                 >
                   <option value="all">All Status</option>
                   <option value="active">Active</option>
@@ -937,8 +1083,8 @@ const StaffDetailsPage = () => {
                     >
                       <div className="flex items-start justify-between mb-3">
                         <div>
-                          <div className="font-semibold text-gray-900">{week.week}</div>
-                          <div className="text-xs text-gray-600 mt-1">
+                          <div className="font-semibold text-black">{week.week}</div>
+                          <div className="text-xs text-black mt-1">
                             {formatDate(week.weekStart)} - {formatDate(week.weekEnd)}
                           </div>
                         </div>
@@ -953,19 +1099,19 @@ const StaffDetailsPage = () => {
                       
                       <div className="space-y-2">
                         <div className="flex items-center justify-between text-sm">
-                          <span className="text-gray-600">Assigned:</span>
+                          <span className="text-black">Assigned:</span>
                           <span className="font-semibold">{week.totalGiven}</span>
                         </div>
                         <div className="flex items-center justify-between text-sm">
-                          <span className="text-gray-600">Sold:</span>
+                          <span className="text-black">Sold:</span>
                           <span className="font-semibold text-emerald-600">{week.totalSold}</span>
                         </div>
                         <div className="flex items-center justify-between text-sm">
-                          <span className="text-gray-600">Returned:</span>
+                          <span className="text-black">Returned:</span>
                           <span className="font-semibold text-orange-600">{week.totalReturned}</span>
                         </div>
                         <div className="flex items-center justify-between text-sm">
-                          <span className="text-gray-600">Rate:</span>
+                          <span className="text-black">Rate:</span>
                           <span className={`font-semibold ${
                             week.sellThroughRate >= 70 ? 'text-emerald-600' :
                             week.sellThroughRate >= 50 ? 'text-yellow-600' : 'text-red-600'
@@ -976,7 +1122,7 @@ const StaffDetailsPage = () => {
                       </div>
                       
                       <div className="mt-3 pt-3 border-t border-gray-200">
-                        <div className="flex items-center justify-between text-xs text-gray-600">
+                        <div className="flex items-center justify-between text-xs text-black">
                           <span>Sales: {week.sales.length}</span>
                           <span>{formatCurrency(week.totalRevenue)}</span>
                         </div>
@@ -1029,7 +1175,7 @@ const StaffDetailsPage = () => {
                       <div className="flex items-center justify-between">
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-2">
-                            <div className="font-medium text-gray-900 truncate">{week.week}</div>
+                            <div className="font-medium text-black truncate">{week.week}</div>
                             <div className={`px-2 py-0.5 rounded-full text-xs font-medium ${
                               week.status === 'active' 
                                 ? 'bg-emerald-100 text-emerald-800'
@@ -1038,14 +1184,14 @@ const StaffDetailsPage = () => {
                               {week.status.charAt(0).toUpperCase() + week.status.slice(1)}
                             </div>
                           </div>
-                          <div className="text-xs text-gray-600 mt-1">
+                          <div className="text-xs text-black mt-1">
                             {formatDate(week.weekStart)} - {formatDate(week.weekEnd)}
                           </div>
                         </div>
                         
                         <div className="flex items-center gap-3 ml-3">
                           <div className="text-right">
-                            <div className="font-semibold text-gray-900">{week.totalSold}/{week.totalGiven}</div>
+                            <div className="font-semibold text-black">{week.totalSold}/{week.totalGiven}</div>
                             <div className={`text-xs ${
                               week.sellThroughRate >= 70 ? 'text-emerald-600' :
                               week.sellThroughRate >= 50 ? 'text-yellow-600' : 'text-red-600'
@@ -1087,8 +1233,8 @@ const StaffDetailsPage = () => {
           ) : (
             <div className="px-4 sm:px-6 py-12 text-center">
               <CalendarDays className="w-12 h-12 text-gray-300 mx-auto mb-4" />
-              <div className="text-lg font-medium text-gray-900 mb-2">No Weekly Data</div>
-              <div className="text-gray-600 max-w-md mx-auto mb-6 text-sm">
+              <div className="text-lg font-medium text-black mb-2">No Weekly Data</div>
+              <div className="text-black max-w-md mx-auto mb-6 text-sm">
                 No inventory has been assigned to this staff member yet.
               </div>
               <Link
@@ -1109,8 +1255,8 @@ const StaffDetailsPage = () => {
               <div className="px-4 sm:px-6 py-4 border-b border-gray-200">
                 <div className="flex items-center justify-between">
                   <div>
-                    <div className="text-lg font-semibold text-gray-900">Edit Assignment</div>
-                    <div className="text-sm text-gray-600">{editingItem.product?.name}</div>
+                    <div className="text-lg font-semibold text-black">Edit Assignment</div>
+                    <div className="text-sm text-black">{editingItem.product?.name}</div>
                   </div>
                   <button
                     onClick={() => setEditingItem(null)}
@@ -1127,67 +1273,89 @@ const StaffDetailsPage = () => {
                   <div className="bg-gray-50 rounded-lg p-4 border border-gray-200">
                     <div className="grid grid-cols-2 gap-4">
                       <div>
-                        <div className="text-xs font-medium text-gray-700 mb-1">Staff</div>
-                        <div className="text-sm font-semibold text-gray-900">{editingItem.staff?.name}</div>
+                        <div className="text-xs font-medium text-black mb-1">Staff</div>
+                        <div className="text-sm font-semibold text-black">{editingItem.staff?.name}</div>
                       </div>
                       <div>
-                        <div className="text-xs font-medium text-gray-700 mb-1">Product</div>
-                        <div className="text-sm font-semibold text-gray-900">{editingItem.product?.name}</div>
-                        <div className="text-xs text-gray-600">{editingItem.product?.category}</div>
+                        <div className="text-xs font-medium text-black mb-1">Product</div>
+                        <div className="text-sm font-semibold text-black">{editingItem.product?.name}</div>
+                        <div className="text-xs text-black">{editingItem.product?.category}</div>
                       </div>
                     </div>
                     <div className="mt-3 pt-3 border-t border-gray-200 grid grid-cols-3 gap-2">
                       <div className="text-center">
-                        <div className="text-xs text-gray-600">Current</div>
+                        <div className="text-xs text-black">Current</div>
                         <div className="text-sm font-bold">{editingItem.quantityGiven}</div>
                       </div>
                       <div className="text-center">
-                        <div className="text-xs text-gray-600">Sold</div>
+                        <div className="text-xs text-black">Sold</div>
                         <div className="text-sm font-bold text-emerald-600">{editingItem.quantitySold}</div>
                       </div>
                       <div className="text-center">
-                        <div className="text-xs text-gray-600">Returned</div>
+                        <div className="text-xs text-black">Returned</div>
                         <div className="text-sm font-bold text-orange-600">{editingItem.quantityReturned}</div>
+                      </div>
+                    </div>
+                    
+                    {/* Available Stock Info */}
+                    <div className="mt-3 pt-3 border-t border-gray-200">
+                      <div className="flex items-center justify-between">
+                        <div className="text-xs text-black">Available in Stock:</div>
+                        <div className={`text-sm font-bold ${availableStock > 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+                          {availableStock} items
+                        </div>
                       </div>
                     </div>
                   </div>
 
+                  {stockError && (
+                    <div className="bg-red-50 border border-red-200 rounded-lg p-3">
+                      <div className="flex items-start gap-2">
+                        <AlertCircle className="w-4 h-4 text-red-600 flex-shrink-0 mt-0.5" />
+                        <div className="text-xs text-red-700">{stockError}</div>
+                      </div>
+                    </div>
+                  )}
+
                   {/* Quantity Fields */}
                   <div className="grid grid-cols-3 gap-3">
                     <div>
-                      <label className="block text-xs font-medium text-gray-700 mb-1">
+                      <label className="block text-xs font-medium text-black mb-1">
                         Assigned Quantity
                       </label>
                       <input
                         type="number"
                         value={editForm.quantityGiven}
                         onChange={(e) => setEditForm({...editForm, quantityGiven: e.target.value})}
-                        className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                        className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-black"
                         min="0"
                       />
+                      <div className="text-xs text-black mt-1">
+                        Max: {editingItem.quantityGiven + availableStock}
+                      </div>
                     </div>
                     <div>
-                      <label className="block text-xs font-medium text-gray-700 mb-1">
+                      <label className="block text-xs font-medium text-black mb-1">
                         Sold Quantity
                       </label>
                       <input
                         type="number"
                         value={editForm.quantitySold}
                         onChange={(e) => setEditForm({...editForm, quantitySold: e.target.value})}
-                        className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                        className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-black"
                         min="0"
                         max={parseInt(editForm.quantityGiven)}
                       />
                     </div>
                     <div>
-                      <label className="block text-xs font-medium text-gray-700 mb-1">
+                      <label className="block text-xs font-medium text-black mb-1">
                         Returned Quantity
                       </label>
                       <input
                         type="number"
                         value={editForm.quantityReturned}
                         onChange={(e) => setEditForm({...editForm, quantityReturned: e.target.value})}
-                        className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                        className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-black"
                         min="0"
                         max={parseInt(editForm.quantityGiven) - parseInt(editForm.quantitySold)}
                       />
@@ -1197,25 +1365,25 @@ const StaffDetailsPage = () => {
                   {/* Week Dates */}
                   <div className="grid grid-cols-2 gap-3">
                     <div>
-                      <label className="block text-xs font-medium text-gray-700 mb-1">
+                      <label className="block text-xs font-medium text-black mb-1">
                         Week Start Date
                       </label>
                       <input
                         type="date"
                         value={editForm.weekStartDate}
                         onChange={(e) => setEditForm({...editForm, weekStartDate: e.target.value})}
-                        className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                        className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-black"
                       />
                     </div>
                     <div>
-                      <label className="block text-xs font-medium text-gray-700 mb-1">
+                      <label className="block text-xs font-medium text-black mb-1">
                         Week End Date
                       </label>
                       <input
                         type="date"
                         value={editForm.weekEndDate}
                         onChange={(e) => setEditForm({...editForm, weekEndDate: e.target.value})}
-                        className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                        className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-black"
                       />
                     </div>
                   </div>
@@ -1232,13 +1400,48 @@ const StaffDetailsPage = () => {
                       </div>
                     </div>
                   )}
+                  
+                  {/* Add/Remove Quick Actions */}
+                  <div className="border-t border-gray-200 pt-4">
+                    <div className="text-xs font-medium text-black mb-2">Quick Adjustments</div>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => {
+                          setSelectedInventory(editingItem);
+                          setAdjustType('add');
+                          setAdjustQuantity('');
+                          setAdjustReason('');
+                          setShowAdjustModal(true);
+                          setEditingItem(null);
+                        }}
+                        className="flex-1 py-2 bg-emerald-50 text-emerald-700 rounded-lg hover:bg-emerald-100 transition-colors text-xs font-medium flex items-center justify-center gap-1"
+                      >
+                        <Plus className="w-3 h-3" />
+                        Add Items
+                      </button>
+                      <button
+                        onClick={() => {
+                          setSelectedInventory(editingItem);
+                          setAdjustType('remove');
+                          setAdjustQuantity('');
+                          setAdjustReason('');
+                          setShowAdjustModal(true);
+                          setEditingItem(null);
+                        }}
+                        className="flex-1 py-2 bg-orange-50 text-orange-700 rounded-lg hover:bg-orange-100 transition-colors text-xs font-medium flex items-center justify-center gap-1"
+                      >
+                        <Minus className="w-3 h-3" />
+                        Remove Items
+                      </button>
+                    </div>
+                  </div>
                 </div>
               </div>
               
               <div className="px-4 sm:px-6 py-4 border-t border-gray-200 flex justify-end gap-3">
                 <button
                   onClick={() => setEditingItem(null)}
-                  className="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors text-sm"
+                  className="px-4 py-2 border border-gray-300 text-black rounded-lg hover:bg-gray-50 transition-colors text-sm"
                   disabled={actionLoading}
                 >
                   Cancel
@@ -1273,15 +1476,15 @@ const StaffDetailsPage = () => {
               <div className="sticky top-0 bg-white border-b border-gray-200 px-4 sm:px-6 py-4 z-10">
                 <div className="flex items-center justify-between">
                   <div>
-                    <div className="text-lg font-semibold text-gray-900">Week Details</div>
-                    <div className="text-sm text-gray-600">
+                    <div className="text-lg font-semibold text-black">Week Details</div>
+                    <div className="text-sm text-black">
                       {formatDate(selectedWeek.weekStart)} - {formatDate(selectedWeek.weekEnd)}
                     </div>
                   </div>
                   <div className="flex items-center gap-2">
                     <button
                       onClick={() => exportWeeklyReport(selectedWeek)}
-                      className="inline-flex items-center gap-1 px-3 py-1.5 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors text-sm"
+                      className="inline-flex items-center gap-1 px-3 py-1.5 bg-gray-100 text-black rounded-lg hover:bg-gray-200 transition-colors text-sm"
                     >
                       <FileSpreadsheet className="w-3 h-3" />
                       Export CSV
@@ -1303,19 +1506,46 @@ const StaffDetailsPage = () => {
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                     <div className="bg-blue-50 border border-blue-200 rounded-xl p-3">
                       <div className="text-xs font-medium text-blue-800">Assigned</div>
-                      <div className="text-xl font-bold text-gray-900 mt-1">{selectedWeek.totalGiven}</div>
+                      <div className="text-xl font-bold text-black mt-1">{selectedWeek.totalGiven}</div>
                     </div>
                     <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3">
                       <div className="text-xs font-medium text-emerald-800">Sold</div>
-                      <div className="text-xl font-bold text-gray-900 mt-1">{selectedWeek.totalSold}</div>
+                      <div className="text-xl font-bold text-black mt-1">{selectedWeek.totalSold}</div>
                     </div>
                     <div className="bg-orange-50 border border-orange-200 rounded-xl p-3">
                       <div className="text-xs font-medium text-orange-800">Returned</div>
-                      <div className="text-xl font-bold text-gray-900 mt-1">{selectedWeek.totalReturned}</div>
+                      <div className="text-xl font-bold text-black mt-1">{selectedWeek.totalReturned}</div>
                     </div>
                     <div className="bg-purple-50 border border-purple-200 rounded-xl p-3">
                       <div className="text-xs font-medium text-purple-800">Rate</div>
-                      <div className="text-xl font-bold text-gray-900 mt-1">{selectedWeek.sellThroughRate.toFixed(1)}%</div>
+                      <div className="text-xl font-bold text-black mt-1">{selectedWeek.sellThroughRate.toFixed(1)}%</div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Search Bar for Assigned Items */}
+                <div className="px-4 sm:px-6 pb-4">
+                  <div className="bg-gray-50 border border-gray-200 rounded-lg p-3">
+                    <div className="relative">
+                      <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-500" />
+                      <input
+                        type="text"
+                        value={searchProductQuery}
+                        onChange={(e) => setSearchProductQuery(e.target.value)}
+                        placeholder="Search assigned items by product name or category..."
+                        className="w-full pl-10 pr-4 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-black placeholder-gray-500"
+                      />
+                      {searchProductQuery && (
+                        <button
+                          onClick={() => setSearchProductQuery("")}
+                          className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-500 hover:text-gray-700"
+                        >
+                          <X className="w-3 h-3" />
+                        </button>
+                      )}
+                    </div>
+                    <div className="text-xs text-black mt-2">
+                      {getFilteredInventory().length} of {selectedWeek.inventory.length} items shown
                     </div>
                   </div>
                 </div>
@@ -1323,120 +1553,161 @@ const StaffDetailsPage = () => {
                 {/* Inventory Section */}
                 <div className="px-4 sm:px-6 pb-6">
                   <div className="flex items-center justify-between mb-4">
-                    <div className="text-lg font-semibold text-gray-900">Inventory Details</div>
-                    <div className="text-sm text-gray-600">
+                    <div className="text-lg font-semibold text-black">Assigned Items</div>
+                    <div className="text-sm text-black">
                       {selectedWeek.inventory.length} products
                     </div>
                   </div>
                   
-                  <div className="space-y-3">
-                    {selectedWeek.inventory.map((inventory) => {
-                      const remaining = inventory.quantityGiven - inventory.quantitySold - inventory.quantityReturned;
-                      const sellThroughRate = inventory.quantityGiven > 0 
-                        ? (inventory.quantitySold / inventory.quantityGiven) * 100 
-                        : 0;
-                      
-                      return (
-                        <div key={inventory.id} className="bg-gray-50 rounded-xl p-4 border border-gray-200">
-                          <div className="flex items-start justify-between mb-3">
-                            <div>
-                              <div className="font-medium text-gray-900 text-sm">{inventory.product?.name}</div>
-                              <div className="text-xs text-gray-600 mt-1">
-                                Category: {inventory.product?.category || 'N/A'}
+                  {getFilteredInventory().length === 0 ? (
+                    <div className="text-center py-8">
+                      <Package className="w-12 h-12 text-gray-300 mx-auto mb-3" />
+                      <div className="text-black font-medium">No items found</div>
+                      <div className="text-sm text-black mt-1">
+                        Try a different search term
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      {getFilteredInventory().map((inventory) => {
+                        const remaining = inventory.quantityGiven - inventory.quantitySold - inventory.quantityReturned;
+                        const sellThroughRate = inventory.quantityGiven > 0 
+                          ? (inventory.quantitySold / inventory.quantityGiven) * 100 
+                          : 0;
+                        
+                        return (
+                          <div key={inventory.id} className="bg-gray-50 rounded-xl p-4 border border-gray-200">
+                            <div className="flex items-start justify-between mb-3">
+                              <div className="flex-1">
+                                <div className="font-medium text-black text-sm">{inventory.product?.name}</div>
+                                <div className="text-xs text-black mt-1">
+                                  Category: {inventory.product?.category || 'N/A'} | 
+                                  Price: {formatCurrency(inventory.product?.price || 0)}
+                                </div>
                               </div>
-                            </div>
-                            
-                            <div className="flex items-center gap-2">
-                              {remaining > 0 && selectedWeek.status === 'active' && (
+                              
+                              <div className="flex items-center gap-2 ml-2">
+                                {remaining > 0 && selectedWeek.status === 'active' && (
+                                  <>
+                                    <button
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setSelectedInventory(inventory);
+                                        setReturnQuantity('');
+                                        setReturnReason('');
+                                        setShowReturnModal(true);
+                                      }}
+                                      className="inline-flex items-center gap-1 px-2 py-1 bg-orange-100 text-orange-700 rounded-lg text-xs hover:bg-orange-200 transition-colors"
+                                      title="Return Items"
+                                    >
+                                      <PackageX className="w-3 h-3" />
+                                    </button>
+                                    <button
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setSelectedInventory(inventory);
+                                        setAdjustType('add');
+                                        setAdjustQuantity('');
+                                        setAdjustReason('');
+                                        setShowAdjustModal(true);
+                                      }}
+                                      className="inline-flex items-center gap-1 px-2 py-1 bg-emerald-100 text-emerald-700 rounded-lg text-xs hover:bg-emerald-200 transition-colors"
+                                      title="Add Items"
+                                    >
+                                      <Plus className="w-3 h-3" />
+                                    </button>
+                                    <button
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setSelectedInventory(inventory);
+                                        setAdjustType('remove');
+                                        setAdjustQuantity('');
+                                        setAdjustReason('');
+                                        setShowAdjustModal(true);
+                                      }}
+                                      className="inline-flex items-center gap-1 px-2 py-1 bg-red-100 text-red-700 rounded-lg text-xs hover:bg-red-200 transition-colors"
+                                      title="Remove Items"
+                                    >
+                                      <Minus className="w-3 h-3" />
+                                    </button>
+                                  </>
+                                )}
                                 <button
                                   onClick={(e) => {
                                     e.stopPropagation();
-                                    setSelectedInventory(inventory);
-                                    setReturnQuantity('');
-                                    setReturnReason('');
-                                    setShowReturnModal(true);
+                                    handleEditClick(inventory);
+                                    setShowWeekDetails(false);
                                   }}
-                                  className="inline-flex items-center gap-1 px-2 py-1 bg-orange-100 text-orange-700 rounded-lg text-xs hover:bg-orange-200 transition-colors"
+                                  className="inline-flex items-center gap-1 px-2 py-1 bg-blue-100 text-blue-700 rounded-lg text-xs hover:bg-blue-200 transition-colors"
+                                  title="Edit Assignment"
                                 >
-                                  <PackageX className="w-3 h-3" />
-                                  Quick Return
+                                  <Edit className="w-3 h-3" />
                                 </button>
-                              )}
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  handleEditClick(inventory);
-                                  setShowWeekDetails(false);
-                                }}
-                                className="inline-flex items-center gap-1 px-2 py-1 bg-blue-100 text-blue-700 rounded-lg text-xs hover:bg-blue-200 transition-colors"
-                              >
-                                <Edit className="w-3 h-3" />
-                                Edit
-                              </button>
-                            </div>
-                          </div>
-                          
-                          <div className="grid grid-cols-5 gap-2">
-                            <div className="text-center">
-                              <div className="text-xs text-gray-600">Assigned</div>
-                              <div className="font-bold">{inventory.quantityGiven}</div>
-                            </div>
-                            <div className="text-center">
-                              <div className="text-xs text-gray-600">Sold</div>
-                              <div className="font-bold text-emerald-600">{inventory.quantitySold}</div>
-                            </div>
-                            <div className="text-center">
-                              <div className="text-xs text-gray-600">Returned</div>
-                              <div className="font-bold text-orange-600">{inventory.quantityReturned}</div>
-                            </div>
-                            <div className="text-center">
-                              <div className="text-xs text-gray-600">Remaining</div>
-                              <div className={`font-bold ${remaining > 0 ? 'text-blue-600' : 'text-gray-600'}`}>
-                                {remaining}
                               </div>
                             </div>
-                            <div className="text-center">
-                              <div className="text-xs text-gray-600">Rate</div>
-                              <div className={`font-bold ${
-                                sellThroughRate >= 70 ? 'text-emerald-600' :
-                                sellThroughRate >= 50 ? 'text-yellow-600' : 'text-red-600'
-                              }`}>
-                                {sellThroughRate.toFixed(0)}%
+                            
+                            <div className="grid grid-cols-5 gap-2">
+                              <div className="text-center">
+                                <div className="text-xs text-black">Assigned</div>
+                                <div className="font-bold">{inventory.quantityGiven}</div>
+                              </div>
+                              <div className="text-center">
+                                <div className="text-xs text-black">Sold</div>
+                                <div className="font-bold text-emerald-600">{inventory.quantitySold}</div>
+                              </div>
+                              <div className="text-center">
+                                <div className="text-xs text-black">Returned</div>
+                                <div className="font-bold text-orange-600">{inventory.quantityReturned}</div>
+                              </div>
+                              <div className="text-center">
+                                <div className="text-xs text-black">Remaining</div>
+                                <div className={`font-bold ${remaining > 0 ? 'text-blue-600' : 'text-gray-600'}`}>
+                                  {remaining}
+                                </div>
+                              </div>
+                              <div className="text-center">
+                                <div className="text-xs text-black">Rate</div>
+                                <div className={`font-bold ${
+                                  sellThroughRate >= 70 ? 'text-emerald-600' :
+                                  sellThroughRate >= 50 ? 'text-yellow-600' : 'text-red-600'
+                                }`}>
+                                  {sellThroughRate.toFixed(0)}%
+                                </div>
+                              </div>
+                            </div>
+                            
+                            <div className="mt-3 pt-3 border-t border-gray-200">
+                              <div className="flex items-center justify-between">
+                                <div className="text-xs text-black">
+                                  Updated: {formatDate(inventory.updatedAt)}
+                                </div>
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    if (confirm("Delete this assignment and return items to stock?")) {
+                                      handleDeleteAssignment(inventory.id);
+                                    }
+                                  }}
+                                  className="text-xs text-red-600 hover:text-red-800"
+                                >
+                                  <Trash2 className="w-3 h-3 inline-block mr-1" />
+                                  Delete
+                                </button>
                               </div>
                             </div>
                           </div>
-                          
-                          <div className="mt-3 pt-3 border-t border-gray-200">
-                            <div className="flex items-center justify-between">
-                              <div className="text-xs text-gray-600">
-                                Updated: {formatDate(inventory.updatedAt)}
-                              </div>
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  if (confirm("Delete this assignment and return items to stock?")) {
-                                    handleDeleteAssignment(inventory.id);
-                                  }
-                                }}
-                                className="text-xs text-red-600 hover:text-red-800"
-                              >
-                                <Trash2 className="w-3 h-3 inline-block mr-1" />
-                                Delete
-                              </button>
-                            </div>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
 
                 {/* Returned Items Summary */}
                 {selectedWeek.totalReturned > 0 && (
                   <div className="px-4 sm:px-6 pb-6">
                     <div className="flex items-center justify-between mb-4">
-                      <div className="text-lg font-semibold text-gray-900">Returned Items</div>
-                      <div className="text-sm text-gray-600">
+                      <div className="text-lg font-semibold text-black">Returned Items</div>
+                      <div className="text-sm text-black">
                         {selectedWeek.totalReturned} items returned
                       </div>
                     </div>
@@ -1448,12 +1719,12 @@ const StaffDetailsPage = () => {
                           .map((inventory) => (
                             <div key={inventory.id} className="flex items-center justify-between">
                               <div>
-                                <div className="font-medium text-gray-900 text-sm">{inventory.product?.name}</div>
-                                <div className="text-xs text-gray-600">{inventory.product?.category || 'N/A'}</div>
+                                <div className="font-medium text-black text-sm">{inventory.product?.name}</div>
+                                <div className="text-xs text-black">{inventory.product?.category || 'N/A'}</div>
                               </div>
                               <div className="text-right">
                                 <div className="font-bold text-orange-600">{inventory.quantityReturned} items</div>
-                                <div className="text-xs text-gray-600">
+                                <div className="text-xs text-black">
                                   Last update: {formatDate(inventory.updatedAt)}
                                 </div>
                               </div>
@@ -1468,8 +1739,8 @@ const StaffDetailsPage = () => {
                 {selectedWeek.sales.length > 0 && (
                   <div className="px-4 sm:px-6 pb-6">
                     <div className="flex items-center justify-between mb-4">
-                      <div className="text-lg font-semibold text-gray-900">Sales</div>
-                      <div className="text-sm text-gray-600">
+                      <div className="text-lg font-semibold text-black">Sales</div>
+                      <div className="text-sm text-black">
                         {selectedWeek.sales.length} transactions
                       </div>
                     </div>
@@ -1479,8 +1750,8 @@ const StaffDetailsPage = () => {
                         <div key={sale.id} className="bg-white border border-gray-200 rounded-xl p-3">
                           <div className="flex items-center justify-between">
                             <div>
-                              <div className="font-medium text-gray-900 text-sm">Sale #{sale.id}</div>
-                              <div className="text-xs text-gray-600 mt-1">
+                              <div className="font-medium text-black text-sm">Sale #{sale.id}</div>
+                              <div className="text-xs text-black mt-1">
                                 {formatDate(sale.date)}
                               </div>
                             </div>
@@ -1502,7 +1773,7 @@ const StaffDetailsPage = () => {
                       
                       {selectedWeek.sales.length > 5 && (
                         <div className="text-center pt-2">
-                          <div className="text-sm text-gray-600">
+                          <div className="text-sm text-black">
                             +{selectedWeek.sales.length - 5} more sales
                           </div>
                         </div>
@@ -1529,7 +1800,7 @@ const StaffDetailsPage = () => {
                 )}
                 <button
                   onClick={() => setShowWeekDetails(false)}
-                  className="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition-colors text-sm font-medium"
+                  className="px-4 py-2 bg-gray-200 text-black rounded-lg hover:bg-gray-300 transition-colors text-sm font-medium"
                 >
                   Close Details
                 </button>
@@ -1544,7 +1815,7 @@ const StaffDetailsPage = () => {
             <div className="bg-white rounded-xl shadow-xl w-full max-w-sm">
               <div className="px-4 sm:px-6 py-4 border-b border-gray-200">
                 <div className="flex items-center justify-between">
-                  <div className="text-lg font-semibold text-gray-900">Return Items</div>
+                  <div className="text-lg font-semibold text-black">Return Items</div>
                   <button
                     onClick={() => {
                       setShowReturnModal(false);
@@ -1562,27 +1833,27 @@ const StaffDetailsPage = () => {
               <div className="p-4 sm:p-6">
                 <div className="space-y-4">
                   <div className="bg-gray-50 rounded-xl p-4 border border-gray-200">
-                    <div className="text-sm font-medium text-gray-900 mb-1">Product</div>
-                    <div className="text-lg font-bold text-gray-900">{selectedInventory.product?.name}</div>
+                    <div className="text-sm font-medium text-black mb-1">Product</div>
+                    <div className="text-lg font-bold text-black">{selectedInventory.product?.name}</div>
                     
                     <div className="grid grid-cols-3 gap-2 mt-3">
                       <div className="text-center">
-                        <div className="text-xs text-gray-700">Assigned</div>
+                        <div className="text-xs text-black">Assigned</div>
                         <div className="text-lg font-bold">{selectedInventory.quantityGiven}</div>
                       </div>
                       <div className="text-center">
-                        <div className="text-xs text-gray-700">Sold</div>
+                        <div className="text-xs text-black">Sold</div>
                         <div className="text-lg font-bold text-emerald-600">{selectedInventory.quantitySold}</div>
                       </div>
                       <div className="text-center">
-                        <div className="text-xs text-gray-700">Returned</div>
+                        <div className="text-xs text-black">Returned</div>
                         <div className="text-lg font-bold text-orange-600">{selectedInventory.quantityReturned}</div>
                       </div>
                     </div>
                     
                     <div className="mt-3 pt-3 border-t border-gray-200">
                       <div className="flex items-center justify-between">
-                        <div className="text-sm text-gray-700">Remaining:</div>
+                        <div className="text-sm text-black">Remaining:</div>
                         <div className="text-lg font-bold text-blue-600">
                           {selectedInventory.quantityGiven - selectedInventory.quantitySold - selectedInventory.quantityReturned}
                         </div>
@@ -1591,31 +1862,31 @@ const StaffDetailsPage = () => {
                   </div>
                   
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                    <label className="block text-sm font-medium text-black mb-1">
                       Quantity to Return
                     </label>
                     <input
                       type="number"
                       value={returnQuantity}
                       onChange={(e) => setReturnQuantity(e.target.value)}
-                      className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                      className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-black"
                       placeholder="Enter quantity"
                       min="1"
                       max={selectedInventory.quantityGiven - selectedInventory.quantitySold - selectedInventory.quantityReturned}
                     />
-                    <div className="text-xs text-gray-600 mt-1">
+                    <div className="text-xs text-black mt-1">
                       Max: {selectedInventory.quantityGiven - selectedInventory.quantitySold - selectedInventory.quantityReturned} items
                     </div>
                   </div>
                   
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                    <label className="block text-sm font-medium text-black mb-1">
                       Reason for Return (Optional)
                     </label>
                     <select
                       value={returnReason}
                       onChange={(e) => setReturnReason(e.target.value)}
-                      className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                      className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-black"
                     >
                       <option value="">Select reason</option>
                       <option value="Defective">Defective</option>
@@ -1637,7 +1908,7 @@ const StaffDetailsPage = () => {
                     setReturnQuantity('');
                     setReturnReason('');
                   }}
-                  className="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors text-sm"
+                  className="px-4 py-2 border border-gray-300 text-black rounded-lg hover:bg-gray-50 transition-colors text-sm"
                 >
                   Cancel
                 </button>
@@ -1653,13 +1924,127 @@ const StaffDetailsPage = () => {
           </div>
         )}
 
+        {/* Add/Remove Modal */}
+        {showAdjustModal && selectedInventory && (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-3 sm:p-4 z-50">
+            <div className="bg-white rounded-xl shadow-xl w-full max-w-sm">
+              <div className="px-4 sm:px-6 py-4 border-b border-gray-200">
+                <div className="flex items-center justify-between">
+                  <div className="text-lg font-semibold text-black">
+                    {adjustType === 'add' ? 'Add Items' : 'Remove Items'}
+                  </div>
+                  <button
+                    onClick={() => {
+                      setShowAdjustModal(false);
+                      setSelectedInventory(null);
+                      setAdjustQuantity('');
+                      setAdjustReason('');
+                    }}
+                    className="p-1 hover:bg-gray-100 rounded-lg transition-colors"
+                  >
+                    <X className="w-5 h-5 text-gray-500" />
+                  </button>
+                </div>
+              </div>
+              
+              <div className="p-4 sm:p-6">
+                <div className="space-y-4">
+                  <div className="bg-gray-50 rounded-xl p-4 border border-gray-200">
+                    <div className="text-sm font-medium text-black mb-1">Product</div>
+                    <div className="text-lg font-bold text-black">{selectedInventory.product?.name}</div>
+                    
+                    <div className="grid grid-cols-2 gap-2 mt-3">
+                      <div className="text-center">
+                        <div className="text-xs text-black">Current</div>
+                        <div className="text-lg font-bold">{selectedInventory.quantityGiven}</div>
+                      </div>
+                      <div className="text-center">
+                        <div className="text-xs text-black">Remaining</div>
+                        <div className="text-lg font-bold text-blue-600">
+                          {selectedInventory.quantityGiven - selectedInventory.quantitySold - selectedInventory.quantityReturned}
+                        </div>
+                      </div>
+                    </div>
+                    
+                    {adjustType === 'add' && (
+                      <div className="mt-3 pt-3 border-t border-gray-200">
+                        <div className="flex items-center justify-between">
+                          <div className="text-xs text-black">Available in Stock:</div>
+                          <div className={`text-sm font-bold ${availableStock > 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+                            {availableStock} items
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                  
+                  <div>
+                    <label className="block text-sm font-medium text-black mb-1">
+                      Quantity to {adjustType === 'add' ? 'Add' : 'Remove'}
+                    </label>
+                    <input
+                      type="number"
+                      value={adjustQuantity}
+                      onChange={(e) => setAdjustQuantity(e.target.value)}
+                      className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-black"
+                      placeholder={`Enter quantity to ${adjustType}`}
+                      min="1"
+                      max={adjustType === 'add' ? availableStock : (selectedInventory.quantityGiven - selectedInventory.quantitySold - selectedInventory.quantityReturned)}
+                    />
+                    <div className="text-xs text-black mt-1">
+                      {adjustType === 'add' 
+                        ? `Max: ${availableStock} items available in stock`
+                        : `Max: ${selectedInventory.quantityGiven - selectedInventory.quantitySold - selectedInventory.quantityReturned} items remaining`
+                      }
+                    </div>
+                  </div>
+                  
+                  <div>
+                    <label className="block text-sm font-medium text-black mb-1">
+                      Reason (Optional)
+                    </label>
+                    <input
+                      type="text"
+                      value={adjustReason}
+                      onChange={(e) => setAdjustReason(e.target.value)}
+                      className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-black"
+                      placeholder={`Reason for ${adjustType}ing items`}
+                    />
+                  </div>
+                </div>
+              </div>
+              
+              <div className="px-4 sm:px-6 py-4 border-t border-gray-200 flex justify-end gap-3">
+                <button
+                  onClick={() => {
+                    setShowAdjustModal(false);
+                    setSelectedInventory(null);
+                    setAdjustQuantity('');
+                    setAdjustReason('');
+                  }}
+                  className="px-4 py-2 border border-gray-300 text-black rounded-lg hover:bg-gray-50 transition-colors text-sm"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleAdjustItems}
+                  disabled={!adjustQuantity || parseInt(adjustQuantity) > (adjustType === 'add' ? availableStock : (selectedInventory.quantityGiven - selectedInventory.quantitySold - selectedInventory.quantityReturned))}
+                  className={`px-4 py-2 ${adjustType === 'add' ? 'bg-emerald-500 hover:bg-emerald-600' : 'bg-orange-500 hover:bg-orange-600'} text-white rounded-lg transition-colors disabled:opacity-50 text-sm font-medium`}
+                >
+                  {adjustType === 'add' ? 'Add Items' : 'Remove Items'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Close Week Modal */}
         {showCloseWeekModal && weekToClose && (
           <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-3 sm:p-4 z-50">
             <div className="bg-white rounded-xl shadow-xl w-full max-w-md">
               <div className="px-4 sm:px-6 py-4 border-b border-gray-200">
                 <div className="flex items-center justify-between">
-                  <div className="text-lg font-semibold text-gray-900">Close Week</div>
+                  <div className="text-lg font-semibold text-black">Close Week</div>
                   <button
                     onClick={() => {
                       setShowCloseWeekModal(false);
@@ -1687,28 +2072,28 @@ const StaffDetailsPage = () => {
                   </div>
                   
                   <div className="bg-gray-50 rounded-xl p-4 border border-gray-200">
-                    <div className="text-sm font-medium text-gray-900 mb-2">Week Details</div>
+                    <div className="text-sm font-medium text-black mb-2">Week Details</div>
                     <div className="space-y-2">
                       <div className="flex justify-between text-sm">
-                        <span className="text-gray-600">Week:</span>
+                        <span className="text-black">Week:</span>
                         <span className="font-medium">{weekToClose.week}</span>
                       </div>
                       <div className="flex justify-between text-sm">
-                        <span className="text-gray-600">Period:</span>
+                        <span className="text-black">Period:</span>
                         <span className="font-medium">{formatDate(weekToClose.weekStart)} - {formatDate(weekToClose.weekEnd)}</span>
                       </div>
                       <div className="flex justify-between text-sm">
-                        <span className="text-gray-600">Remaining Items:</span>
+                        <span className="text-black">Remaining Items:</span>
                         <span className="font-medium text-blue-600">{weekToClose.remaining}</span>
                       </div>
                       <div className="flex justify-between text-sm">
-                        <span className="text-gray-600">Items to be Returned:</span>
+                        <span className="text-black">Items to be Returned:</span>
                         <span className="font-medium text-orange-600">{weekToClose.remaining}</span>
                       </div>
                     </div>
                   </div>
                   
-                  <div className="text-sm text-gray-600">
+                  <div className="text-sm text-black">
                     <p>A CSV file will be automatically downloaded with details of all returned items.</p>
                   </div>
                 </div>
@@ -1720,7 +2105,7 @@ const StaffDetailsPage = () => {
                     setShowCloseWeekModal(false);
                     setWeekToClose(null);
                   }}
-                  className="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors text-sm"
+                  className="px-4 py-2 border border-gray-300 text-black rounded-lg hover:bg-gray-50 transition-colors text-sm"
                   disabled={loadingCloseWeek !== null}
                 >
                   Cancel
@@ -1746,17 +2131,16 @@ const StaffDetailsPage = () => {
             </div>
           </div>
         )}
-        
 
         {/* Footer */}
         <div className="mt-8 text-center">
-          <div className="text-xs text-gray-600 mb-2">
+          <div className="text-xs text-black mb-2">
             Staff Details • {staff.name} • Inventory Management System
           </div>
           <div className="flex items-center justify-center gap-3">
             <button
               onClick={() => window.print()}
-              className="inline-flex items-center gap-1 text-gray-600 hover:text-gray-900 text-xs"
+              className="inline-flex items-center gap-1 text-black hover:text-gray-900 text-xs"
             >
               <Printer className="w-3 h-3" />
               Print Report
@@ -1774,7 +2158,7 @@ const StaffDetailsPage = () => {
                 window.URL.revokeObjectURL(url);
                 document.body.removeChild(a);
               }}
-              className="inline-flex items-center gap-1 text-gray-600 hover:text-gray-900 text-xs"
+              className="inline-flex items-center gap-1 text-black hover:text-gray-900 text-xs"
             >
               <FileSpreadsheet className="w-3 h-3" />
               Export Complete Report

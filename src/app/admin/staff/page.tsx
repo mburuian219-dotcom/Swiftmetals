@@ -19,7 +19,12 @@ import {
   PackageCheck,
   BarChart3,
   Package,
-  Layers
+  Shield,
+  Calendar,
+  Key,
+  Lock,
+  MoreVertical,
+  Sparkles
 } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -83,6 +88,17 @@ interface StaffKPIs {
   totalSales: number;
 }
 
+interface SessionUser {
+  uid?: string;
+  email?: string;
+  name?: string;
+  role?: string;
+  [key: string]: any;
+}
+
+// Admin configuration - ONLY YOUR EMAIL
+const ADMIN_EMAILS = ["mburuian188@gmail.com"];
+
 // Main Component
 const StaffManagementPage = () => {
   const router = useRouter();
@@ -92,6 +108,7 @@ const StaffManagementPage = () => {
   const [filteredStaff, setFilteredStaff] = useState<Staff[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadingKPIs, setLoadingKPIs] = useState(false);
+  const [loadingSession, setLoadingSession] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
   const [showAddModal, setShowAddModal] = useState(false);
   const [selectedStaff, setSelectedStaff] = useState<Staff | null>(null);
@@ -107,6 +124,15 @@ const StaffManagementPage = () => {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deletingStaff, setDeletingStaff] = useState(false);
   
+  // User session state
+  const [sessionUser, setSessionUser] = useState<SessionUser | null>(null);
+  const [isAdmin, setIsAdmin] = useState(false);
+  
+  // Hidden feature states
+  const [secretClickCount, setSecretClickCount] = useState(0);
+  const [showInventoryButton, setShowInventoryButton] = useState(false);
+  const [showMobileMenu, setShowMobileMenu] = useState(false);
+  
   // KPI states
   const [kpis, setKpis] = useState<StaffKPIs>({
     totalStaff: 0,
@@ -115,14 +141,82 @@ const StaffManagementPage = () => {
     totalSales: 0
   });
 
+  // Get user session from your existing auth endpoint
+  const fetchUserSession = useCallback(async () => {
+    setLoadingSession(true);
+    try {
+      const response = await fetch("/api/auth/session");
+      
+      if (!response.ok) {
+        const verifyResponse = await fetch("/api/auth/verify");
+        if (verifyResponse.ok) {
+          const userData = await verifyResponse.json();
+          setSessionUser(userData);
+          checkAdminStatus(userData);
+        } else {
+          setSessionUser({ email: "user@example.com" });
+          setIsAdmin(false);
+        }
+      } else {
+        const sessionData = await response.json();
+        setSessionUser(sessionData.user || sessionData);
+        checkAdminStatus(sessionData.user || sessionData);
+      }
+    } catch (err) {
+      console.error("Error fetching session:", err);
+      setSessionUser(null);
+      setIsAdmin(false);
+    } finally {
+      setLoadingSession(false);
+    }
+  }, []);
+
+  // Check if user is admin
+  const checkAdminStatus = (user: SessionUser) => {
+    const userEmail = user?.email?.toLowerCase()?.trim();
+    const userIsAdmin = ADMIN_EMAILS.some(adminEmail => 
+      adminEmail.toLowerCase() === userEmail
+    );
+    setIsAdmin(userIsAdmin);
+    
+    // Store in localStorage for quick access
+    if (userEmail) {
+      localStorage.setItem("currentUser", JSON.stringify({
+        email: userEmail,
+        name: user.name,
+        isAdmin: userIsAdmin
+      }));
+    }
+  };
+
+  // Check stored user data
+  const checkStoredUser = () => {
+    const storedUser = localStorage.getItem("currentUser");
+    
+    if (storedUser) {
+      try {
+        const user = JSON.parse(storedUser);
+        setSessionUser(user);
+        setIsAdmin(user.isAdmin);
+        return true;
+      } catch (err) {
+        console.error("Error parsing stored user:", err);
+        return false;
+      }
+    }
+    return false;
+  };
+
   // Fetch staff data
   const fetchStaff = useCallback(async () => {
     setLoading(true);
     try {
       const response = await fetch("/api/staff");
+      
       if (!response.ok) {
         throw new Error(`Failed to fetch staff: ${response.statusText}`);
       }
+      
       const data = await response.json();
       setStaffList(data);
       setFilteredStaff(data);
@@ -150,7 +244,6 @@ const StaffManagementPage = () => {
         }
       } catch (err) {
         console.error("Error fetching products:", err);
-        // Continue with empty products data
       }
       
       // Calculate total staff
@@ -193,21 +286,98 @@ const StaffManagementPage = () => {
       });
     } catch (err) {
       console.error("Error calculating KPIs:", err);
-      setError("Failed to calculate KPIs");
     } finally {
       setLoadingKPIs(false);
     }
   };
 
-  // Fetch all data including KPIs
+  // Fetch all data
   const fetchAllData = async () => {
     await fetchStaff();
   };
 
+  // Refresh data
+  const handleRefresh = () => {
+    fetchAllData();
+    setSuccess("Data refreshed!");
+    setTimeout(() => setSuccess(null), 2000);
+  };
+
+  // Secret click handler - Click the Users icon in header 3 times
+  const handleSecretClick = () => {
+    const newCount = secretClickCount + 1;
+    setSecretClickCount(newCount);
+    
+    // Triple click (0 -> 1 -> 2 = 3 clicks) reveals the hidden button
+    if (newCount >= 3) {
+      setShowInventoryButton(true);
+      setSecretClickCount(0);
+      setSuccess("🎉 Secret unlocked! Inventory button active for 30s");
+      
+      // Hide button after 30 seconds
+      setTimeout(() => {
+        setShowInventoryButton(false);
+        setSuccess(null);
+      }, 30000);
+    }
+    
+    // Reset counter after 2 seconds of inactivity
+    setTimeout(() => {
+      setSecretClickCount(0);
+    }, 2000);
+  };
+
+  // Keyboard shortcut handler
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Press 'I' key three times quickly to show inventory button
+      if (e.key === 'i' || e.key === 'I') {
+        const newCount = secretClickCount + 1;
+        setSecretClickCount(newCount);
+        
+        if (newCount >= 3) {
+          setShowInventoryButton(true);
+          setSecretClickCount(0);
+          setSuccess("⌨️ Keyboard shortcut activated! Inventory button visible for 30s");
+          
+          setTimeout(() => {
+            setShowInventoryButton(false);
+            setSuccess(null);
+          }, 30000);
+        }
+        
+        setTimeout(() => {
+          setSecretClickCount(0);
+        }, 1000);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [secretClickCount]);
+
   // Initial load
   useEffect(() => {
-    fetchAllData();
+    const loadData = async () => {
+      const hasStoredUser = checkStoredUser();
+      
+      if (!hasStoredUser) {
+        await fetchUserSession();
+      } else {
+        setLoadingSession(false);
+      }
+      
+      await fetchAllData();
+    };
+    
+    loadData();
   }, []);
+
+  // Handle logout
+  const handleLogout = () => {
+    localStorage.removeItem("currentUser");
+    router.push("/admin");
+  };
 
   // Filter staff based on search term
   useEffect(() => {
@@ -230,14 +400,13 @@ const StaffManagementPage = () => {
     router.push(`/admin/staff/${staff.id}`);
   };
 
-  // Navigate to assign inventory page - UPDATED ROUTE
+  // Navigate to assign inventory page
   const handleAssignInventory = () => {
     router.push("/admin/staff/inventory");
   };
 
   // Add new staff
   const handleAddStaff = async () => {
-    // Validation
     if (!newStaff.name.trim()) {
       setError("Staff name is required");
       setTimeout(() => setError(null), 3000);
@@ -250,7 +419,6 @@ const StaffManagementPage = () => {
       return;
     }
 
-    // Basic email validation
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!emailRegex.test(newStaff.email)) {
       setError("Please enter a valid email address");
@@ -276,16 +444,14 @@ const StaffManagementPage = () => {
         throw new Error(data.error || "Failed to add staff member");
       }
 
-      // Reset form and close modal
       setNewStaff({ name: "", email: "", phone: "" });
       setShowAddModal(false);
-      setSuccess("Staff member added successfully!");
+      setSuccess("Staff member added!");
 
-      // Refresh all data including KPIs
       setTimeout(() => {
         fetchAllData();
         setSuccess(null);
-      }, 2000);
+      }, 1500);
 
     } catch (err: any) {
       console.error("Error adding staff:", err);
@@ -328,10 +494,9 @@ const StaffManagementPage = () => {
         throw new Error(data.error || "Failed to update staff member");
       }
 
-      // Refresh all data
       fetchAllData();
       setEditingStaff(null);
-      setSuccess("Staff member updated successfully!");
+      setSuccess("Staff member updated!");
       setTimeout(() => setSuccess(null), 3000);
 
     } catch (err: any) {
@@ -343,7 +508,7 @@ const StaffManagementPage = () => {
     }
   };
 
-  // Delete staff with loading state
+  // Delete staff
   const handleDeleteStaff = async () => {
     if (!selectedStaff) return;
 
@@ -361,11 +526,10 @@ const StaffManagementPage = () => {
         throw new Error(data.error || "Failed to delete staff member");
       }
 
-      // Refresh all data
       await fetchAllData();
       setShowDeleteConfirm(false);
       setSelectedStaff(null);
-      setSuccess("Staff member deleted successfully!");
+      setSuccess("Staff member deleted!");
       setTimeout(() => setSuccess(null), 3000);
 
     } catch (err: any) {
@@ -390,172 +554,346 @@ const StaffManagementPage = () => {
     });
   };
 
-  // Render component
+  // Show loading state while checking session
+  if (loadingSession) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 flex flex-col items-center justify-center p-4">
+        <div className="text-center">
+          <div className="relative">
+            <div className="animate-spin rounded-full h-12 w-12 border-3 border-blue-200 border-t-blue-600 mb-4"></div>
+            <Users className="w-6 h-6 text-blue-600 absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2" />
+          </div>
+          <h2 className="text-lg font-bold text-gray-800 mb-1">Loading Staff</h2>
+          <p className="text-gray-600 text-xs">Checking your session...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // Main component render
   return (
-    <div className="min-h-screen bg-gray-50 pt-16 px-2 pb-4">
-      {/* Fixed Header with Back Button - Positioned to avoid top nav */}
-      <div className="fixed top-0 left-0 right-0 bg-white border-b border-gray-200 shadow-sm z-40 px-3 py-3">
-        <div className="max-w-full mx-auto">
+    <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 pt-16 px-2 pb-4">
+      {/* Fixed Header - Slimmed down for mobile */}
+      <div className="fixed top-0 left-0 right-0 bg-white/95 backdrop-blur-sm border-b border-gray-200 shadow-sm z-50 px-3 py-3">
+        <div className="max-w-7xl mx-auto">
           <div className="flex items-center justify-between">
-            <Link 
-              href="/admin"
-              className="inline-flex items-center gap-1 px-3 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 hover:border-gray-400 transition-all text-sm"
-            >
-              <ArrowLeft className="w-4 h-4" />
-              <span>Back to Admin</span>
-            </Link>
-            
+            {/* Left side - Back button and Title */}
             <div className="flex items-center gap-2">
-              <Users className="w-5 h-5 text-blue-600" />
-              <span className="font-semibold text-gray-900 text-sm">Staff</span>
+              <Link 
+                href="/admin"
+                className="inline-flex items-center gap-1 px-2 py-1.5 bg-white border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 hover:border-gray-400 transition-all text-xs font-medium"
+              >
+                <ArrowLeft className="w-3 h-3" />
+                <span className="hidden xs:inline">Back</span>
+              </Link>
+              
+              <div className="flex items-center gap-2">
+                {/* SECRET BUTTON LOCATION: Click the Users icon 3 times */}
+                <div 
+                  onClick={handleSecretClick}
+                  className="p-1.5 bg-gradient-to-br from-blue-100 to-blue-200 rounded-lg cursor-pointer hover:from-blue-200 hover:to-blue-300 transition-all relative group"
+                  title="Secret: Click 3 times"
+                >
+                  <Users className="w-4 h-4 text-blue-700" />
+                  {/* Hidden click counter */}
+                  {secretClickCount > 0 && (
+                    <div className="absolute -top-1 -right-1 w-3 h-3 bg-red-500 rounded-full flex items-center justify-center text-[10px] text-white font-bold">
+                      {secretClickCount}
+                    </div>
+                  )}
+                </div>
+                <div className="flex flex-col">
+                  <h1 className="text-sm font-bold text-gray-900 leading-tight">Staff Management</h1>
+                  <p className="text-gray-600 text-[10px] hidden xs:block">Manage staff & inventory</p>
+                </div>
+              </div>
+            </div>
+            
+            {/* Right side - User info and mobile menu */}
+            <div className="flex items-center gap-2">
+              {/* Admin Badge - Shows if you're logged in as admin */}
+              {isAdmin && (
+                <div className="hidden xs:flex items-center gap-1 px-2 py-1 bg-gradient-to-r from-red-600 to-red-700 text-white rounded-full text-[10px] font-bold">
+                  <Shield className="w-3 h-3" />
+                  <span>ADMIN</span>
+                </div>
+              )}
+              
+              {/* Mobile menu button */}
+              <button
+                onClick={() => setShowMobileMenu(!showMobileMenu)}
+                className="p-1.5 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors md:hidden"
+              >
+                <MoreVertical className="w-4 h-4" />
+              </button>
+              
+              {/* User Info - Desktop */}
+              {sessionUser && (
+                <div className="hidden md:flex items-center gap-2">
+                  <div className="text-right">
+                    <div className="text-[10px] text-gray-500">Logged in as</div>
+                    <div className="text-xs font-semibold text-gray-900 max-w-[120px] truncate">
+                      {sessionUser.email || "User"}
+                    </div>
+                  </div>
+                  
+                  <div className="w-8 h-8 bg-gradient-to-br from-blue-500 to-blue-600 rounded-full flex items-center justify-center text-white text-xs font-bold">
+                    {(sessionUser.email?.charAt(0) || sessionUser.name?.charAt(0) || "U").toUpperCase()}
+                  </div>
+                </div>
+              )}
             </div>
           </div>
+          
+          {/* Mobile User Info - Expanded on menu click */}
+          {showMobileMenu && sessionUser && (
+            <div className="mt-2 pt-2 border-t border-gray-100">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <div className="w-7 h-7 bg-gradient-to-br from-blue-500 to-blue-600 rounded-full flex items-center justify-center text-white text-xs font-bold">
+                    {(sessionUser.email?.charAt(0) || sessionUser.name?.charAt(0) || "U").toUpperCase()}
+                  </div>
+                  <div className="text-xs">
+                    <div className="text-gray-900 font-medium truncate max-w-[140px]">
+                      {sessionUser.email || sessionUser.name || "User"}
+                    </div>
+                    <div className="text-[10px] text-gray-600">
+                      {isAdmin ? "Administrator" : "Staff"}
+                    </div>
+                  </div>
+                </div>
+                <button
+                  onClick={handleRefresh}
+                  disabled={loading}
+                  className="p-1.5 text-blue-600 hover:text-blue-800 hover:bg-blue-50 rounded-lg transition-colors"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
-      <div className="max-w-full mt-2">
-        {/* Title Section - Now below fixed header */}
-        <div className="mb-3">
-          <div className="bg-white rounded-lg p-3 shadow border border-gray-200">
-            <h1 className="text-lg font-bold text-gray-900">Staff Management</h1>
-            <p className="text-gray-600 text-xs">Manage staff members and their inventory</p>
+      <div className="max-w-7xl mx-auto">
+        {/* Hidden Features Notification */}
+        {showInventoryButton && !isAdmin && (
+          <div className="mb-3 bg-gradient-to-r from-purple-100 to-indigo-100 border border-purple-300 rounded-xl p-3 animate-pulse">
+            <div className="flex items-center gap-2">
+              <Key className="w-4 h-4 text-purple-700 flex-shrink-0" />
+              <div className="flex-1">
+                <div className="text-xs font-bold text-purple-900">Secret Unlocked!</div>
+                <div className="text-[10px] text-purple-800">
+                  Inventory button active for 30s • Press 'I' key 3x to reveal again
+                </div>
+              </div>
+              <button 
+                onClick={() => setShowInventoryButton(false)}
+                className="text-purple-700 hover:text-purple-900 p-0.5"
+              >
+                <X size={14} />
+              </button>
+            </div>
           </div>
-        </div>
+        )}
 
-        {/* Action Buttons Row - Two buttons side by side */}
-        <div className="grid grid-cols-2 gap-2 mb-3">
+        {/* Admin Status Banner - Compact */}
+        {!loadingSession && (
+          <div className={`mb-4 rounded-xl border ${isAdmin ? 'bg-gradient-to-r from-emerald-50 to-green-50 border-emerald-200' : 'bg-gradient-to-r from-amber-50 to-orange-50 border-amber-200'} p-3 shadow-xs`}>
+            <div className="flex items-center gap-2">
+              <div className={`p-2 rounded-lg ${isAdmin ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>
+                {isAdmin ? <Shield className="w-4 h-4" /> : <User className="w-4 h-4" />}
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-1">
+                  <span className="text-sm font-bold truncate">
+                    {isAdmin ? "Administrator Access" : "Staff Access"}
+                  </span>
+                  {isAdmin && (
+                    <span className="px-1.5 py-0.5 bg-gradient-to-r from-red-600 to-red-700 text-white text-[10px] font-bold rounded-full">
+                      FULL
+                    </span>
+                  )}
+                </div>
+                <p className={`text-[10px] mt-0.5 ${isAdmin ? 'text-emerald-800' : 'text-amber-800'}`}>
+                  {isAdmin 
+                    ? "Full access to staff & inventory"
+                    : "View only - cannot assign inventory"}
+                </p>
+              </div>
+              
+              {/* Hidden Feature Hint */}
+              {!isAdmin && (
+                <div 
+                  className="text-gray-500 hover:text-gray-700 transition-colors cursor-help relative group"
+                  title="Psst... click the blue icon in header 3 times"
+                >
+                  <Lock className="w-3.5 h-3.5" />
+                  <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-1 hidden group-hover:block">
+                    <div className="bg-gray-900 text-white text-[10px] rounded py-1 px-1.5 whitespace-nowrap">
+                      Tip: Click header icon 3x
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Action Buttons - Compact Grid */}
+        <div className={`grid ${showInventoryButton || isAdmin ? 'grid-cols-3' : 'grid-cols-2'} gap-2 mb-4`}>
           {/* Add New Staff Button */}
           <button
             onClick={() => setShowAddModal(true)}
-            className="flex items-center justify-center gap-2 bg-gradient-to-r from-green-500 to-emerald-600 text-white px-3 py-3 rounded-lg hover:from-green-600 hover:to-emerald-700 transition-all font-bold shadow-lg hover:shadow-xl"
+            className="group relative bg-gradient-to-r from-green-500 to-emerald-600 text-white px-3 py-2.5 rounded-xl hover:from-green-600 hover:to-emerald-700 transition-all font-bold shadow-md hover:shadow-lg flex items-center justify-center gap-1.5 text-xs"
           >
-            <Plus className="w-4 h-4" />
-            <span className="text-sm">ADD STAFF</span>
+            <Plus className="w-3.5 h-3.5" />
+            <span className="hidden xs:inline">ADD STAFF</span>
+            <span className="xs:hidden">ADD</span>
           </button>
 
-          {/* Assign Inventory Button - UPDATED: Goes to /admin/staff/inventory */}
+          {/* HIDDEN INVENTORY BUTTON */}
+          {(showInventoryButton || isAdmin) && (
+            <button
+              onClick={handleAssignInventory}
+              className={`group relative ${
+                showInventoryButton 
+                  ? 'bg-gradient-to-r from-purple-600 to-purple-700 animate-pulse' 
+                  : 'bg-gradient-to-r from-blue-600 to-blue-700'
+              } text-white px-3 py-2.5 rounded-xl hover:from-blue-700 hover:to-blue-800 transition-all font-bold shadow-md hover:shadow-lg flex items-center justify-center gap-1.5 text-xs`}
+            >
+              <Package className="w-3.5 h-3.5" />
+              <span className="hidden xs:inline">INVENTORY</span>
+              <span className="xs:hidden">STOCK</span>
+              
+              {/* Secret indicator */}
+              {showInventoryButton && !isAdmin && (
+                <div className="absolute -top-1 -right-1">
+                  <Key className="w-3 h-3 text-yellow-400" />
+                </div>
+              )}
+              
+              {/* Admin badge */}
+              {isAdmin && (
+                <div className="absolute -top-1 -right-1">
+                  <Shield className="w-3 h-3 text-yellow-400" />
+                </div>
+              )}
+            </button>
+          )}
+
+          {/* Refresh Button */}
           <button
-            onClick={handleAssignInventory}
-            className="flex items-center justify-center gap-2 bg-gradient-to-r from-blue-600 to-blue-700 text-white px-3 py-3 rounded-lg hover:from-blue-700 hover:to-blue-800 transition-all font-bold shadow-lg hover:shadow-xl"
+            onClick={handleRefresh}
+            disabled={loading}
+            className="bg-white border border-gray-300 text-gray-700 px-3 py-2.5 rounded-xl hover:border-blue-500 hover:bg-blue-50 transition-all font-medium shadow-sm hover:shadow flex items-center justify-center gap-1.5 text-xs disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            <Package className="w-4 h-4" />
-            <span className="text-sm">ASSIGN INVENTORY</span>
+            <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
+            <span className="hidden xs:inline">REFRESH</span>
+            <span className="xs:hidden">SYNC</span>
           </button>
         </div>
 
-        {/* KPI Summary Cards - Compact Grid for Mobile */}
-        <div className="grid grid-cols-2 gap-2 mb-3">
+        {/* KPI Cards - Compact 2x2 grid for mobile */}
+        <div className="grid grid-cols-2 gap-2 mb-4">
           {/* Total Staff Card */}
-          <div className="bg-white rounded-lg shadow border border-gray-200 p-3">
+          <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-3 hover:shadow transition-shadow">
             <div className="flex items-center justify-between">
-              <div className="min-w-0 flex-1">
-                <div className="text-xs text-gray-500 font-medium">Total Staff</div>
-                <div className="text-lg font-bold text-gray-900 mt-1">
+              <div>
+                <div className="text-[10px] text-gray-500 font-medium mb-0.5">Total Staff</div>
+                <div className="text-lg font-bold text-gray-900">
                   {loadingKPIs ? (
-                    <div className="animate-pulse h-6 w-10 bg-gray-200 rounded"></div>
+                    <div className="animate-pulse h-5 w-10 bg-gray-200 rounded"></div>
                   ) : (
                     kpis.totalStaff
                   )}
                 </div>
               </div>
-              <div className="p-2 bg-blue-50 rounded-lg flex-shrink-0">
-                <Users className="w-4 h-4 text-blue-600" />
+              <div className="p-2 bg-gradient-to-br from-blue-100 to-blue-200 rounded-lg">
+                <Users className="w-4 h-4 text-blue-700" />
               </div>
             </div>
           </div>
 
           {/* Active Staff Card */}
-          <div className="bg-white rounded-lg shadow border border-gray-200 p-3">
+          <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-3 hover:shadow transition-shadow">
             <div className="flex items-center justify-between">
-              <div className="min-w-0 flex-1">
-                <div className="text-xs text-gray-500 font-medium">Active</div>
-                <div className="text-lg font-bold text-green-600 mt-1">
+              <div>
+                <div className="text-[10px] text-gray-500 font-medium mb-0.5">Active</div>
+                <div className="text-lg font-bold text-green-600">
                   {loadingKPIs ? (
-                    <div className="animate-pulse h-6 w-10 bg-gray-200 rounded"></div>
+                    <div className="animate-pulse h-5 w-10 bg-gray-200 rounded"></div>
                   ) : (
                     kpis.activeStaff
                   )}
                 </div>
-                <div className="text-xs text-gray-500 mt-0.5 truncate">
-                  With inventory
-                </div>
               </div>
-              <div className="p-2 bg-green-50 rounded-lg flex-shrink-0">
-                <User className="w-4 h-4 text-green-600" />
+              <div className="p-2 bg-gradient-to-br from-green-100 to-green-200 rounded-lg">
+                <User className="w-4 h-4 text-green-700" />
               </div>
             </div>
           </div>
 
           {/* Inventory Value Card */}
-          <div className="bg-white rounded-lg shadow border border-gray-200 p-3">
+          <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-3 hover:shadow transition-shadow">
             <div className="flex items-center justify-between">
-              <div className="min-w-0 flex-1">
-                <div className="text-xs text-gray-500 font-medium">Inventory Value</div>
-                <div className="text-sm font-bold text-purple-600 mt-1 truncate">
+              <div>
+                <div className="text-[10px] text-gray-500 font-medium mb-0.5">Stock Value</div>
+                <div className="text-sm font-bold text-purple-600">
                   {loadingKPIs ? (
-                    <div className="animate-pulse h-6 w-16 bg-gray-200 rounded"></div>
+                    <div className="animate-pulse h-4 w-14 bg-gray-200 rounded"></div>
                   ) : (
-                    formatCurrency(kpis.inventoryValue)
+                    formatCurrency(kpis.inventoryValue).split(' ')[1]
                   )}
                 </div>
-                <div className="text-xs text-gray-500 mt-0.5 truncate">
-                  At cost
-                </div>
+                <div className="text-[8px] text-gray-500 mt-0.5">At cost</div>
               </div>
-              <div className="p-2 bg-purple-50 rounded-lg flex-shrink-0">
-                <PackageCheck className="w-4 h-4 text-purple-600" />
+              <div className="p-2 bg-gradient-to-br from-purple-100 to-purple-200 rounded-lg">
+                <PackageCheck className="w-4 h-4 text-purple-700" />
               </div>
             </div>
           </div>
 
           {/* Total Sales Card */}
-          <div className="bg-white rounded-lg shadow border border-gray-200 p-3">
+          <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-3 hover:shadow transition-shadow">
             <div className="flex items-center justify-between">
-              <div className="min-w-0 flex-1">
-                <div className="text-xs text-gray-500 font-medium">Total Sales</div>
-                <div className="text-sm font-bold text-orange-600 mt-1 truncate">
+              <div>
+                <div className="text-[10px] text-gray-500 font-medium mb-0.5">Total Sales</div>
+                <div className="text-sm font-bold text-orange-600">
                   {loadingKPIs ? (
-                    <div className="animate-pulse h-6 w-16 bg-gray-200 rounded"></div>
+                    <div className="animate-pulse h-4 w-14 bg-gray-200 rounded"></div>
                   ) : (
-                    formatCurrency(kpis.totalSales)
+                    formatCurrency(kpis.totalSales).split(' ')[1]
                   )}
                 </div>
-                <div className="text-xs text-gray-500 mt-0.5 truncate">
-                  All staff
-                </div>
+                <div className="text-[8px] text-gray-500 mt-0.5">All staff</div>
               </div>
-              <div className="p-2 bg-orange-50 rounded-lg flex-shrink-0">
-                <BarChart3 className="w-4 h-4 text-orange-600" />
+              <div className="p-2 bg-gradient-to-br from-orange-100 to-orange-200 rounded-lg">
+                <BarChart3 className="w-4 h-4 text-orange-700" />
               </div>
             </div>
           </div>
         </div>
 
         {/* Search and Filter Section - Compact */}
-        <div className="bg-white rounded-lg shadow border border-gray-200 p-3 mb-3">
-          <div className="flex flex-col gap-2">
-            <div className="relative">
-              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400" />
-              <input
-                type="text"
-                placeholder="Search staff..."
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                className="w-full pl-9 pr-3 py-2 border border-gray-300 rounded-lg focus:border-blue-500 focus:ring-1 focus:ring-blue-200 transition-all text-sm text-gray-900 placeholder-gray-500"
-              />
+        <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-3 mb-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+            <div className="flex-1">
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-3.5 h-3.5 text-gray-400" />
+                <input
+                  type="text"
+                  placeholder="Search staff..."
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  className="w-full pl-9 pr-3 py-2 border border-gray-300 rounded-lg focus:border-blue-500 focus:ring-1 focus:ring-blue-200 transition-all text-sm text-gray-900 placeholder-gray-500"
+                />
+              </div>
             </div>
             
-            <div className="flex items-center justify-between">
-              <button
-                onClick={fetchAllData}
-                disabled={loading}
-                className="flex items-center gap-1 px-3 py-1.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-sm"
-              >
-                <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
-                <span>Refresh</span>
-              </button>
-              <div className="text-xs text-gray-700 font-medium px-2 py-1 rounded bg-gray-100">
-                {filteredStaff.length} of {staffList.length}
+            <div className="flex items-center gap-2">
+              <div className="px-2 py-1 bg-gray-100 text-gray-700 rounded text-xs font-medium">
+                {filteredStaff.length}/{staffList.length}
               </div>
             </div>
           </div>
@@ -563,59 +901,81 @@ const StaffManagementPage = () => {
 
         {/* Alerts - Compact */}
         {error && (
-          <div className="mb-2 bg-red-50 border border-red-200 text-red-700 px-3 py-2 rounded-lg flex items-start gap-2 text-xs">
+          <div className="mb-3 bg-gradient-to-r from-red-50 to-red-100 border border-red-200 text-red-800 px-3 py-2 rounded-xl flex items-start gap-2 text-xs">
             <AlertCircle className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
             <div className="flex-1">
-              <span className="font-medium">{error}</span>
+              <div className="font-bold text-red-900">Error</div>
+              <div className="mt-0.5">{error}</div>
             </div>
-            <button onClick={() => setError(null)} className="text-red-700 hover:text-red-900">
+            <button 
+              onClick={() => setError(null)}
+              className="text-red-800 hover:text-red-900 p-0.5 hover:bg-red-200 rounded transition-colors"
+            >
               <X size={14} />
             </button>
           </div>
         )}
 
         {success && (
-          <div className="mb-2 bg-emerald-50 border border-emerald-200 text-emerald-700 px-3 py-2 rounded-lg flex items-start gap-2 text-xs">
+          <div className="mb-3 bg-gradient-to-r from-emerald-50 to-green-100 border border-emerald-200 text-emerald-800 px-3 py-2 rounded-xl flex items-start gap-2 text-xs">
             <CheckCircle className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
-            <span className="font-medium">{success}</span>
+            <div className="flex-1">
+              <div className="font-bold text-emerald-900">Success</div>
+              <div className="mt-0.5">{success}</div>
+            </div>
+            <button 
+              onClick={() => setSuccess(null)}
+              className="text-emerald-800 hover:text-emerald-900 p-0.5 hover:bg-emerald-200 rounded transition-colors"
+            >
+              <X size={14} />
+            </button>
           </div>
         )}
 
-        {/* Staff List - Card Layout for Mobile */}
-        <div className="bg-white rounded-lg shadow border border-gray-200 overflow-hidden">
-          <div className="px-3 py-2 border-b border-gray-200 bg-gray-50">
+        {/* Staff List - Card Layout */}
+        <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+          <div className="px-3 py-2.5 border-b border-gray-200 bg-gradient-to-r from-gray-50 to-gray-100">
             <div className="flex items-center justify-between">
-              <div className="text-sm font-semibold text-gray-900">Staff Members</div>
-              <div className="text-xs text-gray-600">
-                {filteredStaff.length} staff
+              <div className="flex items-center gap-2">
+                <Users className="w-4 h-4 text-blue-600" />
+                <h2 className="text-sm font-bold text-gray-900">Staff Members</h2>
+              </div>
+              <div className="text-xs text-gray-700 font-medium">
+                {filteredStaff.length} {filteredStaff.length === 1 ? 'staff' : 'staff'}
               </div>
             </div>
           </div>
 
           {loading ? (
-            <div className="p-4 text-center">
-              <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-600 mx-auto"></div>
-              <div className="mt-2 text-gray-600 text-sm">Loading staff...</div>
+            <div className="p-6 text-center">
+              <div className="inline-block animate-spin rounded-full h-8 w-8 border-3 border-blue-200 border-t-blue-600"></div>
+              <div className="mt-3 text-gray-700 text-sm font-medium">Loading staff...</div>
             </div>
           ) : filteredStaff.length === 0 ? (
-            <div className="p-4 text-center">
-              <Users className="w-8 h-8 text-gray-300 mx-auto mb-2" />
-              <div className="text-sm font-medium text-gray-900 mb-1">No staff found</div>
-              <div className="text-gray-600 text-xs mb-3">
-                {searchTerm ? "Try different search terms" : "Add your first staff member"}
+            <div className="p-6 text-center">
+              <div className="w-12 h-12 mx-auto mb-3 bg-gray-100 rounded-full flex items-center justify-center">
+                <Users className="w-6 h-6 text-gray-400" />
+              </div>
+              <div className="text-sm font-bold text-gray-900 mb-1">
+                {searchTerm ? "No matching staff" : "No staff yet"}
+              </div>
+              <div className="text-gray-600 text-xs mb-4 max-w-xs mx-auto">
+                {searchTerm 
+                  ? "Try different search terms"
+                  : "Add your first staff member to begin"}
               </div>
               {!searchTerm && (
                 <button
                   onClick={() => setShowAddModal(true)}
-                  className="inline-flex items-center gap-1 bg-gradient-to-r from-green-500 to-emerald-600 text-white px-3 py-1.5 rounded-lg hover:from-green-600 hover:to-emerald-700 text-sm"
+                  className="inline-flex items-center gap-1.5 bg-gradient-to-r from-green-500 to-emerald-600 text-white px-4 py-2 rounded-lg hover:from-green-600 hover:to-emerald-700 font-bold text-xs"
                 >
                   <Plus className="w-3.5 h-3.5" />
-                  Add Staff
+                  Add First Staff
                 </button>
               )}
             </div>
           ) : (
-            <div className="divide-y divide-gray-200">
+            <div className="divide-y divide-gray-100">
               {filteredStaff.map((staff) => {
                 const totalInventoryGiven = staff.staffInventories?.reduce(
                   (sum, inv) => sum + inv.quantityGiven, 0
@@ -626,63 +986,72 @@ const StaffManagementPage = () => {
                 const salesCount = staff.sales?.length || 0;
 
                 return (
-                  <div key={staff.id} className="p-3 hover:bg-gray-50 transition-colors">
-                    <div className="flex items-start justify-between gap-2">
+                  <div key={staff.id} className="p-3 hover:bg-gray-50 transition-colors group">
+                    <div className="flex items-start gap-3">
+                      {/* Staff Avatar */}
+                      <div className="flex-shrink-0">
+                        <div className="w-10 h-10 bg-gradient-to-br from-blue-500 to-blue-600 rounded-lg flex items-center justify-center text-white font-bold text-sm">
+                          {staff.name.charAt(0).toUpperCase()}
+                        </div>
+                      </div>
+                      
                       {/* Staff Info */}
                       <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2 mb-1">
-                          <div className="flex-shrink-0 w-8 h-8 bg-gradient-to-br from-blue-100 to-blue-200 rounded-full flex items-center justify-center">
-                            <User className="w-3.5 h-3.5 text-blue-600" />
-                          </div>
-                          <div className="min-w-0">
-                            <div className="text-sm font-semibold text-gray-900 truncate">{staff.name}</div>
-                            <div className="text-xs text-gray-500">
-                              ID: {staff.id} • {formatDate(staff.createdAt)}
+                        <div className="flex flex-wrap items-center gap-1.5 mb-1">
+                          <h3 className="text-sm font-bold text-gray-900 truncate">{staff.name}</h3>
+                          <div className="flex items-center gap-1">
+                            <div className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${isActive 
+                              ? 'bg-green-100 text-green-800' 
+                              : 'bg-gray-100 text-gray-800'
+                            }`}>
+                              {isActive ? 'ACTIVE' : 'INACTIVE'}
+                            </div>
+                            <div className="px-1.5 py-0.5 bg-blue-100 text-blue-800 rounded text-[10px] font-bold">
+                              ID: {staff.id}
                             </div>
                           </div>
                         </div>
                         
                         {/* Contact Info */}
-                        <div className="ml-10 space-y-1">
+                        <div className="space-y-1 mb-2">
                           {staff.email && (
-                            <div className="flex items-center text-xs text-gray-600">
-                              <Mail className="w-3 h-3 mr-1.5 text-gray-400 flex-shrink-0" />
+                            <div className="flex items-center text-xs text-gray-700">
+                              <Mail className="w-3 h-3 mr-1.5 text-gray-500 flex-shrink-0" />
                               <span className="truncate">{staff.email}</span>
                             </div>
                           )}
                           {staff.phone && (
-                            <div className="flex items-center text-xs text-gray-600">
-                              <Phone className="w-3 h-3 mr-1.5 text-gray-400 flex-shrink-0" />
+                            <div className="flex items-center text-xs text-gray-700">
+                              <Phone className="w-3 h-3 mr-1.5 text-gray-500 flex-shrink-0" />
                               <span className="truncate">{staff.phone}</span>
                             </div>
                           )}
                         </div>
                         
-                        {/* Stats */}
-                        <div className="ml-10 mt-2">
-                          <div className="flex flex-wrap gap-1.5 mb-1">
-                            <div className={`px-2 py-0.5 rounded-full text-xs font-medium ${
-                              isActive 
-                                ? 'bg-green-100 text-green-800 border border-green-200' 
-                                : 'bg-gray-100 text-gray-800 border border-gray-200'
-                            }`}>
-                              {totalInventoryGiven} items
-                            </div>
-                            <div className="px-2 py-0.5 bg-blue-100 text-blue-800 rounded-full text-xs font-medium border border-blue-200">
-                              {salesCount} sales
-                            </div>
+                        {/* Stats Row - Horizontal for mobile */}
+                        <div className="flex items-center gap-2">
+                          <div className="px-2 py-1 bg-gradient-to-r from-purple-50 to-purple-100 rounded border border-purple-200">
+                            <div className="text-[10px] text-purple-700 font-medium">Inventory</div>
+                            <div className="text-sm font-bold text-purple-900">{totalInventoryGiven}</div>
                           </div>
-                          <div className="text-xs font-medium text-gray-900">
-                            Sales: {formatCurrency(totalSalesAmount)}
+                          <div className="px-2 py-1 bg-gradient-to-r from-blue-50 to-blue-100 rounded border border-blue-200">
+                            <div className="text-[10px] text-blue-700 font-medium">Sales</div>
+                            <div className="text-sm font-bold text-blue-900">{salesCount}</div>
+                          </div>
+                          <div className="px-2 py-1 bg-gradient-to-r from-orange-50 to-orange-100 rounded border border-orange-200">
+                            <div className="text-[10px] text-orange-700 font-medium">Revenue</div>
+                            <div className="text-xs font-bold text-orange-900">
+                              {formatCurrency(totalSalesAmount).split(' ')[1]}
+                            </div>
                           </div>
                         </div>
                       </div>
                       
-                      {/* Actions - Stacked Vertically for Mobile */}
-                      <div className="flex flex-col gap-1 flex-shrink-0">
+                      {/* Actions - Vertical for mobile */}
+                      <div className="flex flex-col gap-1">
                         <button
                           onClick={() => handleViewStaffDetails(staff)}
-                          className="inline-flex items-center justify-center p-1.5 bg-gradient-to-r from-blue-600 to-blue-700 text-white text-xs font-medium rounded hover:from-blue-700 hover:to-blue-800 transition-all"
+                          className="p-1.5 bg-gradient-to-r from-blue-600 to-blue-700 text-white rounded-lg hover:from-blue-700 hover:to-blue-800 transition-all"
                           title="View Details"
                         >
                           <Eye className="w-3.5 h-3.5" />
@@ -690,7 +1059,7 @@ const StaffManagementPage = () => {
                         
                         <button
                           onClick={() => setEditingStaff(staff)}
-                          className="inline-flex items-center justify-center p-1.5 bg-gradient-to-r from-purple-600 to-purple-700 text-white text-xs font-medium rounded hover:from-purple-700 hover:to-purple-800 transition-all"
+                          className="p-1.5 bg-gradient-to-r from-purple-600 to-purple-700 text-white rounded-lg hover:from-purple-700 hover:to-purple-800 transition-all"
                           title="Edit"
                         >
                           <Edit className="w-3.5 h-3.5" />
@@ -701,7 +1070,7 @@ const StaffManagementPage = () => {
                             setSelectedStaff(staff);
                             setShowDeleteConfirm(true);
                           }}
-                          className="inline-flex items-center justify-center p-1.5 bg-gradient-to-r from-red-600 to-red-700 text-white text-xs font-medium rounded hover:from-red-700 hover:to-red-800 transition-all"
+                          className="p-1.5 bg-gradient-to-r from-red-600 to-red-700 text-white rounded-lg hover:from-red-700 hover:to-red-800 transition-all"
                           title="Delete"
                         >
                           <Trash2 className="w-3.5 h-3.5" />
@@ -716,22 +1085,28 @@ const StaffManagementPage = () => {
         </div>
 
         {/* Footer */}
-        <div className="mt-3 text-center text-gray-500 text-xs py-2">
-          <div>Staff Dashboard • {new Date().getFullYear()}</div>
+        <div className="mt-4 text-center text-gray-500 text-xs py-2">
+          <div className="flex flex-col sm:flex-row items-center justify-center gap-1">
+            <div>Staff Management • {new Date().getFullYear()}</div>
+            <div className="hidden sm:block">•</div>
+            <div className="text-[10px]">Access: <span className="font-semibold text-gray-900">{isAdmin ? "Admin" : "Staff"}</span></div>
+          </div>
         </div>
       </div>
 
-      {/* MODALS - Optimized for Mobile */}
+      {/* MODALS - Optimized for mobile */}
       {/* Add Staff Modal */}
       {showAddModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-3 z-50">
-          <div className="bg-white rounded-lg w-full max-w-sm max-h-[90vh] overflow-y-auto">
-            <div className="bg-gradient-to-r from-green-500 to-emerald-600 text-white p-4 rounded-t-lg">
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-3 z-50">
+          <div className="bg-white rounded-xl w-full max-w-sm max-h-[85vh] overflow-y-auto">
+            <div className="bg-gradient-to-r from-green-500 to-emerald-600 text-white p-4 rounded-t-xl">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
-                  <User className="w-5 h-5" />
+                  <div className="p-1.5 bg-white/20 rounded-lg">
+                    <User className="w-4 h-4" />
+                  </div>
                   <div>
-                    <div className="text-base font-bold">Add Staff</div>
+                    <div className="text-sm font-bold">Add New Staff</div>
                     <div className="text-green-100 text-xs">Enter details</div>
                   </div>
                 </div>
@@ -750,13 +1125,13 @@ const StaffManagementPage = () => {
             <div className="p-4 space-y-3">
               <div>
                 <div className="block text-xs font-semibold text-gray-900 mb-1">
-                  Full Name *
+                  Full Name <span className="text-red-500">*</span>
                 </div>
                 <input
                   type="text"
                   value={newStaff.name}
                   onChange={(e) => setNewStaff({ ...newStaff, name: e.target.value })}
-                  placeholder="Full name"
+                  placeholder="John Doe"
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:border-green-500 focus:ring-1 focus:ring-green-200 transition-all text-sm text-gray-900"
                   disabled={addingStaff}
                 />
@@ -764,7 +1139,7 @@ const StaffManagementPage = () => {
 
               <div>
                 <div className="block text-xs font-semibold text-gray-900 mb-1">
-                  Email Address *
+                  Email <span className="text-red-500">*</span>
                 </div>
                 <input
                   type="email"
@@ -778,7 +1153,7 @@ const StaffManagementPage = () => {
 
               <div>
                 <div className="block text-xs font-semibold text-gray-900 mb-1">
-                  Phone Number
+                  Phone
                 </div>
                 <input
                   type="tel"
@@ -795,11 +1170,11 @@ const StaffManagementPage = () => {
                   onClick={handleAddStaff}
                   type="button"
                   disabled={addingStaff || !newStaff.name.trim() || !newStaff.email.trim()}
-                  className="w-full px-4 py-2.5 bg-gradient-to-r from-green-500 to-emerald-600 text-white rounded-lg hover:from-green-600 hover:to-emerald-700 font-medium transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-1 text-sm"
+                  className="w-full px-4 py-2.5 bg-gradient-to-r from-green-500 to-emerald-600 text-white rounded-lg hover:from-green-600 hover:to-emerald-700 font-bold transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-1.5 text-sm"
                 >
                   {addingStaff ? (
                     <>
-                      <div className="animate-spin rounded-full h-3 w-3 border-b-2 border-white"></div>
+                      <div className="animate-spin rounded-full h-3 w-3 border-2 border-white border-t-transparent"></div>
                       Adding...
                     </>
                   ) : (
@@ -828,14 +1203,16 @@ const StaffManagementPage = () => {
 
       {/* Edit Staff Modal */}
       {editingStaff && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-3 z-50">
-          <div className="bg-white rounded-lg w-full max-w-sm max-h-[90vh] overflow-y-auto">
-            <div className="bg-gradient-to-r from-purple-600 to-purple-700 text-white p-4 rounded-t-lg">
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-3 z-50">
+          <div className="bg-white rounded-xl w-full max-w-sm max-h-[85vh] overflow-y-auto">
+            <div className="bg-gradient-to-r from-purple-600 to-purple-700 text-white p-4 rounded-t-xl">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
-                  <Edit className="w-5 h-5" />
+                  <div className="p-1.5 bg-white/20 rounded-lg">
+                    <Edit className="w-4 h-4" />
+                  </div>
                   <div>
-                    <div className="text-base font-bold">Edit Staff</div>
+                    <div className="text-sm font-bold">Edit Staff</div>
                     <div className="text-purple-100 text-xs">Update details</div>
                   </div>
                 </div>
@@ -851,39 +1228,39 @@ const StaffManagementPage = () => {
             <div className="p-4 space-y-3">
               <div>
                 <div className="block text-xs font-semibold text-gray-900 mb-1">
-                  Full Name *
+                  Full Name <span className="text-red-500">*</span>
                 </div>
                 <input
                   type="text"
                   value={editingStaff.name}
                   onChange={(e) => setEditingStaff({ ...editingStaff, name: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:border-purple-500 focus:ring-1 focus:ring-purple-200 transition-all text-sm text-gray-900"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:border-purple-500 focus:ring-1 focus:ring-purple-200 transition-all text-sm"
                   disabled={addingStaff}
                 />
               </div>
 
               <div>
                 <div className="block text-xs font-semibold text-gray-900 mb-1">
-                  Email Address
+                  Email
                 </div>
                 <input
                   type="email"
                   value={editingStaff.email || ""}
                   onChange={(e) => setEditingStaff({ ...editingStaff, email: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:border-purple-500 focus:ring-1 focus:ring-purple-200 transition-all text-sm text-gray-900"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:border-purple-500 focus:ring-1 focus:ring-purple-200 transition-all text-sm"
                   disabled={addingStaff}
                 />
               </div>
 
               <div>
                 <div className="block text-xs font-semibold text-gray-900 mb-1">
-                  Phone Number
+                  Phone
                 </div>
                 <input
                   type="tel"
                   value={editingStaff.phone || ""}
                   onChange={(e) => setEditingStaff({ ...editingStaff, phone: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:border-purple-500 focus:ring-1 focus:ring-purple-200 transition-all text-sm text-gray-900"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:border-purple-500 focus:ring-1 focus:ring-purple-200 transition-all text-sm"
                   disabled={addingStaff}
                 />
               </div>
@@ -893,11 +1270,11 @@ const StaffManagementPage = () => {
                   onClick={handleUpdateStaff}
                   type="button"
                   disabled={addingStaff || !editingStaff.name.trim()}
-                  className="w-full px-4 py-2.5 bg-gradient-to-r from-purple-600 to-purple-700 text-white rounded-lg hover:from-purple-700 hover:to-purple-800 font-medium transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-1 text-sm"
+                  className="w-full px-4 py-2.5 bg-gradient-to-r from-purple-600 to-purple-700 text-white rounded-lg hover:from-purple-700 hover:to-purple-800 font-bold transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-1.5 text-sm"
                 >
                   {addingStaff ? (
                     <>
-                      <div className="animate-spin rounded-full h-3 w-3 border-b-2 border-white"></div>
+                      <div className="animate-spin rounded-full h-3 w-3 border-2 border-white border-t-transparent"></div>
                       Updating...
                     </>
                   ) : (
@@ -923,14 +1300,16 @@ const StaffManagementPage = () => {
 
       {/* Delete Confirmation Modal */}
       {showDeleteConfirm && selectedStaff && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-3 z-[60]">
-          <div className="bg-white rounded-lg w-full max-w-sm">
-            <div className="bg-gradient-to-r from-red-600 to-red-700 text-white p-4 rounded-t-lg">
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-3 z-[60]">
+          <div className="bg-white rounded-xl w-full max-w-sm">
+            <div className="bg-gradient-to-r from-red-600 to-red-700 text-white p-4 rounded-t-xl">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
-                  <AlertCircle className="w-5 h-5" />
+                  <div className="p-1.5 bg-white/20 rounded-lg">
+                    <AlertCircle className="w-4 h-4" />
+                  </div>
                   <div>
-                    <div className="text-base font-bold">Delete Staff</div>
+                    <div className="text-sm font-bold">Delete Staff</div>
                     <div className="text-red-100 text-xs">Cannot be undone</div>
                   </div>
                 </div>
@@ -949,14 +1328,14 @@ const StaffManagementPage = () => {
                 <div className="mx-auto w-12 h-12 bg-red-100 rounded-full flex items-center justify-center mb-3">
                   <AlertCircle className="w-6 h-6 text-red-600" />
                 </div>
-                <div className="text-sm font-semibold text-gray-900 mb-2">
+                <div className="text-sm font-bold text-gray-900 mb-2">
                   Delete <span className="text-red-600">{selectedStaff.name}</span>?
                 </div>
-                <div className="text-gray-600 text-xs mb-3">
+                <div className="text-gray-600 text-xs mb-4">
                   This will permanently remove the staff member and all associated records.
                 </div>
 
-                <div className="bg-red-50 border border-red-200 rounded p-2 mb-3">
+                <div className="bg-red-50 border border-red-200 rounded p-2 mb-4">
                   <div className="text-xs text-red-700 font-medium flex items-center gap-1">
                     <AlertCircle className="w-3.5 h-3.5" />
                     ⚠️ Warning: Cannot be undone!
@@ -967,11 +1346,11 @@ const StaffManagementPage = () => {
                   <button
                     onClick={handleDeleteStaff}
                     disabled={deletingStaff}
-                    className="w-full px-4 py-2.5 bg-red-600 text-white rounded-lg hover:bg-red-700 font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-1 text-sm"
+                    className="w-full px-4 py-2.5 bg-red-600 text-white rounded-lg hover:bg-red-700 font-bold transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-1.5 text-sm"
                   >
                     {deletingStaff ? (
                       <>
-                        <div className="animate-spin rounded-full h-3 w-3 border-b-2 border-white"></div>
+                        <div className="animate-spin rounded-full h-3 w-3 border-2 border-white border-t-transparent"></div>
                         Deleting...
                       </>
                     ) : (
