@@ -130,7 +130,6 @@ import {
   Smartphone as SmartphoneIcon,
   Tablet as TabletIcon2,
   Laptop as LaptopIcon,
-  
   Server as ServerIcon,
   Router as RouterIcon,
   Camera as CameraIcon,
@@ -141,7 +140,14 @@ import {
   Headphones as HeadphonesIcon,
   Speaker as SpeakerIcon,
   Keyboard as KeyboardIcon,
-  Mouse as MouseIcon
+  Mouse as MouseIcon,
+  Copy,
+  XSquare,
+  PlusSquare,
+  MinusSquare,
+  ListChecks,
+  Grid as GridIcon,
+  Columns as ColumnsIcon
 } from "lucide-react";
 import Link from "next/link";
 
@@ -227,7 +233,7 @@ interface AssignmentForm {
   weekStartDate: string;
   weekEndDate: string;
   notes?: string;
-  priority?: 'LOW' | 'MEDIUM' | 'HIGH';
+  priority?: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
 }
 
 interface ReturnForm {
@@ -276,8 +282,15 @@ interface ProductSearchModalProps {
   isOpen: boolean;
   onClose: () => void;
   onSelect: (product: Product) => void;
+  onSelectBulk: (products: Product[]) => void;
   products: Product[];
   excludedIds?: number[];
+  bulkMode?: boolean;
+}
+
+interface BatchAssignmentItem {
+  productId: number;
+  quantityGiven: number;
 }
 
 // Helper: Get current week dates (Monday to Sunday)
@@ -322,21 +335,15 @@ const isCurrentWeek = (startDate: string | null, endDate: string | null) => {
   return now >= start && now <= end;
 };
 
-// Helper: Calculate remaining days in week
-const getDaysRemainingInWeek = (endDate: string) => {
-  const now = new Date();
-  const end = new Date(endDate);
-  const diffTime = end.getTime() - now.getTime();
-  return Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-};
-
-// Enhanced Product Search Modal Component
+// Enhanced Product Search Modal Component with Bulk Selection
 const ProductSearchModal: React.FC<ProductSearchModalProps> = ({ 
   isOpen, 
   onClose, 
   onSelect, 
+  onSelectBulk,
   products,
-  excludedIds = []
+  excludedIds = [],
+  bulkMode = true
 }) => {
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedCategory, setSelectedCategory] = useState<string>("all");
@@ -344,6 +351,8 @@ const ProductSearchModal: React.FC<ProductSearchModalProps> = ({
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
   const [filteredProducts, setFilteredProducts] = useState<Product[]>([]);
   const [selectedProducts, setSelectedProducts] = useState<Product[]>([]);
+  const [bulkQuantity, setBulkQuantity] = useState("1");
+  const [selectAll, setSelectAll] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
 
   const categories = useMemo(() => {
@@ -355,6 +364,9 @@ const ProductSearchModal: React.FC<ProductSearchModalProps> = ({
     if (isOpen && searchInputRef.current) {
       setTimeout(() => searchInputRef.current?.focus(), 100);
     }
+    // Reset on open
+    setSelectedProducts([]);
+    setSelectAll(false);
   }, [isOpen]);
 
   useEffect(() => {
@@ -440,9 +452,33 @@ const ProductSearchModal: React.FC<ProductSearchModalProps> = ({
     }
   };
 
+  const toggleSelectAll = () => {
+    if (selectAll) {
+      setSelectedProducts([]);
+    } else {
+      setSelectedProducts(filteredProducts);
+    }
+    setSelectAll(!selectAll);
+  };
+
   const handleBulkAdd = () => {
-    selectedProducts.forEach(product => onSelect(product));
+    if (bulkMode && onSelectBulk) {
+      onSelectBulk(selectedProducts);
+    } else {
+      selectedProducts.forEach(product => onSelect(product));
+    }
     setSelectedProducts([]);
+    setSelectAll(false);
+    onClose();
+  };
+
+  const handleAddWithQuantity = () => {
+    if (bulkMode && onSelectBulk) {
+      const productsWithDefaultQuantity = selectedProducts.map(product => product);
+      onSelectBulk(productsWithDefaultQuantity);
+    }
+    setSelectedProducts([]);
+    setSelectAll(false);
     onClose();
   };
 
@@ -450,7 +486,7 @@ const ProductSearchModal: React.FC<ProductSearchModalProps> = ({
 
   return (
     <div className="fixed inset-0 bg-black/70 flex items-center justify-center p-2 md:p-4 z-[100]">
-      <div className="bg-white rounded-2xl w-full max-w-4xl shadow-2xl max-h-[85vh] flex flex-col">
+      <div className="bg-white rounded-2xl w-full max-w-5xl shadow-2xl max-h-[90vh] flex flex-col">
         {/* Header */}
         <div className="sticky top-0 bg-gradient-to-r from-blue-600 to-purple-600 text-white p-4 md:p-5 rounded-t-2xl">
           <div className="flex items-center justify-between">
@@ -459,9 +495,10 @@ const ProductSearchModal: React.FC<ProductSearchModalProps> = ({
                 <Search className="w-5 h-5 md:w-6 md:h-6" />
               </div>
               <div>
-                <h2 className="text-xl md:text-2xl font-bold">Add Products to Weekly Assignment</h2>
+                <h2 className="text-xl md:text-2xl font-bold">Select Products for Weekly Assignment</h2>
                 <p className="text-blue-100 text-sm">
                   {selectedProducts.length} product{selectedProducts.length !== 1 ? 's' : ''} selected
+                  {bulkMode && " • All items will be added with quantity 1 by default"}
                 </p>
               </div>
             </div>
@@ -473,6 +510,52 @@ const ProductSearchModal: React.FC<ProductSearchModalProps> = ({
             </button>
           </div>
         </div>
+
+        {/* Bulk Controls */}
+        {bulkMode && selectedProducts.length > 0 && (
+          <div className="bg-blue-50 border-b border-blue-200 p-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-4">
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-medium text-blue-800">
+                    {selectedProducts.length} products selected
+                  </span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-sm text-blue-700">Default quantity:</span>
+                  <div className="flex items-center gap-1">
+                    <button
+                      onClick={() => setBulkQuantity(prev => Math.max(1, parseInt(prev) - 1).toString())}
+                      className="w-6 h-6 flex items-center justify-center bg-white border border-blue-300 rounded text-blue-700 hover:bg-blue-50"
+                    >
+                      -
+                    </button>
+                    <input
+                      type="number"
+                      min="1"
+                      max="100"
+                      value={bulkQuantity}
+                      onChange={(e) => setBulkQuantity(e.target.value)}
+                      className="w-16 px-2 py-1 text-center border border-blue-300 rounded text-sm text-blue-800"
+                    />
+                    <button
+                      onClick={() => setBulkQuantity(prev => (parseInt(prev) + 1).toString())}
+                      className="w-6 h-6 flex items-center justify-center bg-white border border-blue-300 rounded text-blue-700 hover:bg-blue-50"
+                    >
+                      +
+                    </button>
+                  </div>
+                </div>
+              </div>
+              <button
+                onClick={toggleSelectAll}
+                className="flex items-center gap-2 px-3 py-1.5 bg-white border border-blue-300 text-blue-700 rounded-lg hover:bg-blue-50 text-sm"
+              >
+                {selectAll ? 'Deselect All' : 'Select All'}
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Search Bar */}
         <div className="p-4 border-b border-slate-200 bg-white">
@@ -641,6 +724,33 @@ const ProductSearchModal: React.FC<ProductSearchModalProps> = ({
                       )}
                     </div>
 
+                    {bulkMode && (
+                      <div className="mt-3 pt-3 border-t border-slate-100">
+                        <div className="text-xs text-slate-700 mb-2">Default quantity:</div>
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setBulkQuantity(prev => Math.max(1, parseInt(prev) - 1).toString());
+                            }}
+                            className="w-6 h-6 flex items-center justify-center bg-slate-100 rounded text-slate-700 hover:bg-slate-200"
+                          >
+                            -
+                          </button>
+                          <span className="text-sm font-medium text-slate-900">{bulkQuantity}</span>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setBulkQuantity(prev => (parseInt(prev) + 1).toString());
+                            }}
+                            className="w-6 h-6 flex items-center justify-center bg-slate-100 rounded text-slate-700 hover:bg-slate-200"
+                          >
+                            +
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
                     <div className="mt-4 pt-3 border-t border-slate-100">
                       <button className={`w-full py-2 rounded-lg font-medium transition-all flex items-center justify-center gap-2 text-sm ${
                         isSelected
@@ -683,12 +793,23 @@ const ProductSearchModal: React.FC<ProductSearchModalProps> = ({
                 Cancel
               </button>
               {selectedProducts.length > 0 && (
-                <button
-                  onClick={handleBulkAdd}
-                  className="px-4 py-2 bg-gradient-to-r from-blue-600 to-blue-700 text-white rounded-lg hover:from-blue-700 hover:to-blue-800 font-medium"
-                >
-                  Add {selectedProducts.length} Product{selectedProducts.length !== 1 ? 's' : ''}
-                </button>
+                <>
+                  {bulkMode ? (
+                    <button
+                      onClick={handleBulkAdd}
+                      className="px-4 py-2 bg-gradient-to-r from-blue-600 to-blue-700 text-white rounded-lg hover:from-blue-700 hover:to-blue-800 font-medium"
+                    >
+                      Add {selectedProducts.length} Product{selectedProducts.length !== 1 ? 's' : ''} (×{bulkQuantity})
+                    </button>
+                  ) : (
+                    <button
+                      onClick={handleBulkAdd}
+                      className="px-4 py-2 bg-gradient-to-r from-blue-600 to-blue-700 text-white rounded-lg hover:from-blue-700 hover:to-blue-800 font-medium"
+                    >
+                      Add {selectedProducts.length} Product{selectedProducts.length !== 1 ? 's' : ''}
+                    </button>
+                  )}
+                </>
               )}
             </div>
           </div>
@@ -705,15 +826,19 @@ const ProductSelectionCard: React.FC<{
   quantity?: number;
   onQuantityChange?: (quantity: number) => void;
   availableStock: number;
-}> = ({ product, onRemove, quantity = 1, onQuantityChange, availableStock }) => {
+  onSetMax?: () => void;
+  onSetMin?: () => void;
+}> = ({ product, onRemove, quantity = 1, onQuantityChange, availableStock, onSetMax, onSetMin }) => {
   const handleQuantityChange = (newQty: number) => {
     if (newQty < 1) return;
-    if (newQty > availableStock) return;
+    if (newQty > availableStock) {
+      newQty = availableStock;
+    }
     onQuantityChange?.(newQty);
   };
 
   return (
-    <div className="border border-slate-200 rounded-xl p-4 bg-gradient-to-br from-white to-slate-50/50 hover:shadow-sm transition-shadow">
+    <div className="border border-slate-200 rounded-xl p-4 bg-gradient-to-br from-white to-slate-50/50 hover:shadow-sm transition-shadow group">
       <div className="flex items-start justify-between mb-3">
         <div className="flex items-start gap-3">
           <div className="w-12 h-12 rounded-lg bg-gradient-to-br from-blue-100 to-blue-200 flex items-center justify-center flex-shrink-0">
@@ -740,7 +865,7 @@ const ProductSelectionCard: React.FC<{
         {onRemove && (
           <button
             onClick={onRemove}
-            className="p-1.5 text-slate-500 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+            className="p-1.5 text-slate-500 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors opacity-0 group-hover:opacity-100"
           >
             <X className="w-4 h-4" />
           </button>
@@ -756,7 +881,25 @@ const ProductSelectionCard: React.FC<{
         </div>
         
         <div>
-          <div className="text-sm text-slate-700 mb-1">Quantity</div>
+          <div className="flex items-center justify-between mb-1">
+            <span className="text-sm text-slate-700">Quantity</span>
+            <div className="flex items-center gap-1">
+              <button
+                onClick={onSetMin}
+                className="text-xs text-blue-600 hover:text-blue-800 px-2 py-0.5 rounded hover:bg-blue-50"
+                title="Set to 1"
+              >
+                Min
+              </button>
+              <button
+                onClick={onSetMax}
+                className="text-xs text-blue-600 hover:text-blue-800 px-2 py-0.5 rounded hover:bg-blue-50"
+                title={`Set to max (${availableStock})`}
+              >
+                Max
+              </button>
+            </div>
+          </div>
           <div className="flex items-center gap-2">
             <button
               onClick={() => handleQuantityChange(quantity - 1)}
@@ -797,67 +940,6 @@ const ProductSelectionCard: React.FC<{
             {availableStock} units
           </span>
         </div>
-      </div>
-    </div>
-  );
-};
-
-// NEW: Auto-fill Suggestions Component
-const AutoFillSuggestions: React.FC<{
-  products: Product[];
-  staffId: number;
-  onApply: (items: AssignmentItem[]) => void;
-}> = ({ products, staffId, onApply }) => {
-  const [suggestions, setSuggestions] = useState<AssignmentItem[]>([]);
-  
-  useEffect(() => {
-    // Auto-fill with products that have stock and are popular
-    const popularProducts = products
-      .filter(p => p.stockQuantity > 0)
-      .sort((a, b) => (b.stockQuantity || 0) - (a.stockQuantity || 0))
-      .slice(0, 5) // Top 5 products with stock
-      .map(product => ({
-        productId: product.id.toString(),
-        quantity: "1", // Default to 1
-        product
-      }));
-    
-    setSuggestions(popularProducts);
-  }, [products]);
-
-  if (suggestions.length === 0) return null;
-
-  return (
-    <div className="mb-6 bg-gradient-to-r from-blue-50 to-indigo-50/50 rounded-xl p-4 border border-blue-200">
-      <div className="flex items-center justify-between mb-3">
-        <div className="flex items-center gap-2">
-          <Zap className="w-5 h-5 text-blue-600" />
-          <h4 className="font-semibold text-slate-900">Quick Add Suggestions</h4>
-        </div>
-        <button
-          onClick={() => onApply(suggestions)}
-          className="px-4 py-2 bg-gradient-to-r from-blue-600 to-blue-700 text-white rounded-lg hover:from-blue-700 hover:to-blue-800 text-sm font-medium"
-        >
-          Add All
-        </button>
-      </div>
-      <p className="text-sm text-slate-700 mb-3">
-        Based on available stock. Click to add products quickly.
-      </p>
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
-        {suggestions.map((item) => (
-          <button
-            key={item.productId}
-            onClick={() => onApply([item])}
-            className="bg-white border border-slate-200 rounded-lg p-2 hover:border-blue-500 hover:bg-blue-50 transition-colors text-left"
-          >
-            <div className="text-xs font-medium text-slate-900 truncate">{item.product?.name}</div>
-            <div className="text-xs text-slate-600 mt-1">Stock: {item.product?.stockQuantity}</div>
-            <div className="text-xs font-bold text-green-700 mt-1">
-              KES {item.product?.price.toLocaleString()}
-            </div>
-          </button>
-        ))}
       </div>
     </div>
   );
@@ -974,7 +1056,6 @@ export default function StaffInventoryManagementPage() {
     
     // Check if week is over
     if (weekEnd && now > weekEnd) {
-      // Week is over but items remain - this should be rare (means week wasn't closed properly)
       return 'OVERDUE';
     }
     
@@ -986,24 +1067,6 @@ export default function StaffInventoryManagementPage() {
   useEffect(() => {
     fetchData();
   }, [fetchData]);
-
-  // Auto-fill form with available products when staff is selected
-  useEffect(() => {
-    if (form.staffId && showAssignModal) {
-      const availableProducts = products
-        .filter(p => p.stockQuantity > 0)
-        .slice(0, 3); // Pre-fill with 3 products
-      
-      if (availableProducts.length > 0 && form.items.length === 0) {
-        const newItems: AssignmentItem[] = availableProducts.map(product => ({
-          productId: product.id.toString(),
-          quantity: "1", // Default to 1
-          product
-        }));
-        setForm(prev => ({ ...prev, items: newItems }));
-      }
-    }
-  }, [form.staffId, products, showAssignModal]);
 
   // Filter and sort assignments
   useEffect(() => {
@@ -1188,7 +1251,24 @@ export default function StaffInventoryManagementPage() {
     return Math.max(0, availableStock - totalAssigned);
   };
 
-  // Handle product selection from search modal
+  // Handle bulk product selection
+  const handleBulkProductSelect = (selectedProducts: Product[]) => {
+    const newItems: AssignmentItem[] = selectedProducts.map(product => ({
+      productId: product.id.toString(),
+      quantity: "1", // Default to 1 for each product
+      product
+    }));
+    
+    // Add new items, avoid duplicates
+    const existingIds = new Set(form.items.map(item => item.productId));
+    const itemsToAdd = newItems.filter(item => !existingIds.has(item.productId));
+    
+    setForm(prev => ({ ...prev, items: [...prev.items, ...itemsToAdd] }));
+    setSuccess(`Added ${itemsToAdd.length} products to assignment`);
+    setTimeout(() => setSuccess(null), 3000);
+  };
+
+  // Handle single product selection
   const handleProductSelect = (product: Product) => {
     const existingIndex = form.items.findIndex(item => item.productId === product.id.toString());
     
@@ -1201,31 +1281,13 @@ export default function StaffInventoryManagementPage() {
     } else {
       const newItem: AssignmentItem = {
         productId: product.id.toString(),
-        quantity: "1", // Always default to 1
+        quantity: "1",
         product: product
       };
       setForm({ ...form, items: [...form.items, newItem] });
       setSuccess(`Added ${product.name} to weekly assignment`);
     }
 
-    setTimeout(() => setSuccess(null), 3000);
-  };
-
-  // Apply auto-fill suggestions
-  const applyAutoFill = (items: AssignmentItem[]) => {
-    const newItems = [...form.items];
-    
-    items.forEach(item => {
-      const existingIndex = newItems.findIndex(i => i.productId === item.productId);
-      if (existingIndex >= 0) {
-        newItems[existingIndex].quantity = item.quantity;
-      } else {
-        newItems.push(item);
-      }
-    });
-    
-    setForm({ ...form, items: newItems });
-    setSuccess(`Added ${items.length} product${items.length !== 1 ? 's' : ''}`);
     setTimeout(() => setSuccess(null), 3000);
   };
 
@@ -1240,6 +1302,36 @@ export default function StaffInventoryManagementPage() {
   const removeItemFromForm = (index: number) => {
     const newItems = form.items.filter((_, i) => i !== index);
     setForm({ ...form, items: newItems });
+  };
+
+  // Batch quantity operations
+  const setAllQuantitiesToMax = () => {
+    const newItems = form.items.map(item => {
+      const availableStock = getRemainingStockAfterAssignments(parseInt(item.productId), form.weekStartDate);
+      return {
+        ...item,
+        quantity: Math.min(availableStock, 10).toString() // Cap at 10 max
+      };
+    });
+    setForm({ ...form, items: newItems });
+    setSuccess("Set all quantities to maximum available");
+    setTimeout(() => setSuccess(null), 3000);
+  };
+
+  const setAllQuantitiesToOne = () => {
+    const newItems = form.items.map(item => ({
+      ...item,
+      quantity: "1"
+    }));
+    setForm({ ...form, items: newItems });
+    setSuccess("Set all quantities to 1");
+    setTimeout(() => setSuccess(null), 3000);
+  };
+
+  const clearAllItems = () => {
+    setForm(prev => ({ ...prev, items: [] }));
+    setSuccess("Cleared all items");
+    setTimeout(() => setSuccess(null), 3000);
   };
 
   // Validate assignment form
@@ -1275,7 +1367,7 @@ export default function StaffInventoryManagementPage() {
     return { isValid: errors.length === 0, errors };
   };
 
-  // Handle form submission - Assign weekly inventory
+  // Handle form submission - Assign weekly inventory with BATCH API
   const handleAssignInventory = async () => {
     const validation = validateAssignment();
     if (!validation.isValid) {
@@ -1288,38 +1380,34 @@ export default function StaffInventoryManagementPage() {
     setError(null);
 
     try {
-      const validItems = form.items
+      // Prepare batch items for API
+      const batchItems: BatchAssignmentItem[] = form.items
         .filter(item => item.productId && item.quantity)
         .map(item => ({
           productId: parseInt(item.productId),
           quantityGiven: parseInt(item.quantity)
         }));
 
-      // Send assignments to weekly API
-      const results = [];
-      for (const item of validItems) {
-        const response = await fetch("/api/staff-inventory", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            staffId: parseInt(form.staffId),
-            productId: item.productId,
-            quantityGiven: item.quantityGiven,
-            weekStartDate: form.weekStartDate,
-            weekEndDate: form.weekEndDate,
-            notes: form.notes,
-            priority: form.priority
-          })
-        });
+      // Send BATCH assignment to API
+      const response = await fetch("/api/staff-inventory/batch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          staffId: parseInt(form.staffId),
+          items: batchItems,
+          weekStartDate: form.weekStartDate,
+          weekEndDate: form.weekEndDate,
+          notes: form.notes,
+          priority: form.priority
+        })
+      });
 
-        if (!response.ok) {
-          const data = await response.json();
-          throw new Error(data.error || `Failed to assign item with product ID ${item.productId}`);
-        }
-
+      if (!response.ok) {
         const data = await response.json();
-        results.push(data);
+        throw new Error(data.error || "Failed to assign inventory");
       }
+
+      const result = await response.json();
 
       // Reset form and close modal
       setForm({ 
@@ -1331,7 +1419,12 @@ export default function StaffInventoryManagementPage() {
         priority: 'MEDIUM'
       });
       setShowAssignModal(false);
-      setSuccess(`✅ Successfully assigned ${results.length} items for the week!`);
+      
+      if (result.success) {
+        setSuccess(`✅ Successfully assigned ${batchItems.length} items for the week! Total value: KES ${result.totalValue?.toLocaleString() || 'N/A'}`);
+      } else {
+        setSuccess(`✅ Partially assigned ${result.assignedCount || batchItems.length} items. ${result.message || ''}`);
+      }
 
       // Refresh data
       setTimeout(() => {
@@ -1362,20 +1455,23 @@ export default function StaffInventoryManagementPage() {
     setError(null);
 
     try {
-      // Send multiple individual return requests
-      for (const item of validItems) {
-        const response = await fetch(`/api/staff-inventory/${item.assignmentId}/return`, {
+      // Send multiple individual return requests (or create a batch endpoint if needed)
+      const promises = validItems.map(item =>
+        fetch(`/api/staff-inventory/${item.assignmentId}/return`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             quantityReturned: parseInt(item.quantityReturned)
           })
-        });
+        })
+      );
 
-        if (!response.ok) {
-          const data = await response.json();
-          throw new Error(data.error || `Failed to return item ${item.productName}`);
-        }
+      const responses = await Promise.all(promises);
+      
+      // Check all responses
+      const errors = responses.filter(res => !res.ok);
+      if (errors.length > 0) {
+        throw new Error(`Failed to return ${errors.length} items`);
       }
 
       // Reset and refresh
@@ -1398,22 +1494,19 @@ export default function StaffInventoryManagementPage() {
     }
   };
 
-  // Handle complete assignment (mark all as returned)
+  // Handle complete assignment
   const handleCompleteAssignment = async (assignmentId: number) => {
     if (!confirm("Are you sure you want to complete this assignment? This will mark all remaining inventory as returned for this week.")) return;
 
     try {
-      // First get the assignment details
       const assignment = inventoryAssignments.find(a => a.id === assignmentId);
       if (!assignment) {
         throw new Error("Assignment not found");
       }
 
-      // Calculate remaining quantity
       const remaining = assignment.quantityGiven - assignment.quantitySold - assignment.quantityReturned;
       
       if (remaining > 0) {
-        // Return all remaining items
         const response = await fetch(`/api/staff-inventory/${assignmentId}/return`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -1509,7 +1602,6 @@ export default function StaffInventoryManagementPage() {
       inv => inv.staffId === staff.id && inv.status !== 'COMPLETED' && inv.isCurrentWeek
     );
     
-    // FIXED: Using nullish coalescing to convert null to undefined
     const returnItems = staffAssignments.map(assignment => {
       const remaining = (assignment.quantityGiven || 0) - 
                        (assignment.quantitySold || 0) - 
@@ -1632,16 +1724,15 @@ export default function StaffInventoryManagementPage() {
         </div>
       </div>
 
-      {/* Stats Dashboard with Weekly Focus */}
+      {/* Stats Dashboard */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
+        {/* ... Stats cards remain the same ... */}
         <div className="bg-gradient-to-br from-blue-50 to-white rounded-2xl border border-blue-100 shadow-sm p-4">
           <div className="flex items-center justify-between">
             <div>
               <p className="text-sm font-medium text-slate-700 mb-1">Current Week</p>
               <p className="text-2xl font-bold text-blue-700">{stats.currentWeekAssignments}</p>
-              <p className="text-xs text-slate-700 mt-1">
-                Active assignments this week
-              </p>
+              <p className="text-xs text-slate-700 mt-1">Active assignments this week</p>
             </div>
             <div className="p-3 rounded-xl bg-gradient-to-br from-blue-100 to-blue-50">
               <CalendarDays className="w-6 h-6 text-blue-600" />
@@ -1660,9 +1751,7 @@ export default function StaffInventoryManagementPage() {
             <div>
               <p className="text-sm font-medium text-slate-700 mb-1">This Week Sales</p>
               <p className="text-2xl font-bold text-emerald-700">{stats.currentWeekSales}</p>
-              <p className="text-xs text-slate-700 mt-1">
-                Items sold this week
-              </p>
+              <p className="text-xs text-slate-700 mt-1">Items sold this week</p>
             </div>
             <div className="p-3 rounded-xl bg-gradient-to-br from-emerald-100 to-emerald-50">
               <ShoppingBag className="w-6 h-6 text-emerald-600" />
@@ -1800,39 +1889,6 @@ export default function StaffInventoryManagementPage() {
             </div>
           </div>
         </div>
-
-        {/* Filter Chips */}
-        {searchTerm && (
-          <div className="mt-3 flex items-center gap-2">
-            <div className="text-sm text-slate-700">Active filters:</div>
-            <div className="flex flex-wrap gap-2">
-              {searchTerm && (
-                <div className="inline-flex items-center gap-1 px-3 py-1.5 bg-blue-100 text-blue-800 rounded-lg text-sm">
-                  <Search className="w-3 h-3" />
-                  {searchTerm}
-                  <button
-                    onClick={() => setSearchTerm('')}
-                    className="ml-1 hover:text-blue-900"
-                  >
-                    <X className="w-3 h-3" />
-                  </button>
-                </div>
-              )}
-              {activeFilter !== 'all' && (
-                <div className="inline-flex items-center gap-1 px-3 py-1.5 bg-slate-100 text-slate-800 rounded-lg text-sm">
-                  <Filter className="w-3 h-3" />
-                  {activeFilter}
-                  <button
-                    onClick={() => setActiveFilter('all')}
-                    className="ml-1 hover:text-slate-900"
-                  >
-                    <X className="w-3 h-3" />
-                  </button>
-                </div>
-              )}
-            </div>
-          </div>
-        )}
       </div>
 
       {/* Alerts */}
@@ -2021,14 +2077,16 @@ export default function StaffInventoryManagementPage() {
         isOpen={showProductSearch}
         onClose={() => setShowProductSearch(false)}
         onSelect={handleProductSelect}
+        onSelectBulk={handleBulkProductSelect}
         products={products}
         excludedIds={excludedProductIds}
+        bulkMode={true}
       />
 
       {/* SINGLE Assign Inventory Modal */}
       {showAssignModal && (
         <div className="fixed inset-0 bg-black/70 flex items-center justify-center p-2 md:p-4 z-50">
-          <div className="bg-white rounded-2xl w-full max-w-4xl shadow-2xl max-h-[90vh] flex flex-col">
+          <div className="bg-white rounded-2xl w-full max-w-5xl shadow-2xl max-h-[90vh] flex flex-col">
             {/* Header */}
             <div className="sticky top-0 bg-gradient-to-r from-blue-600 to-purple-600 text-white p-4 md:p-5 rounded-t-2xl">
               <div className="flex items-center justify-between">
@@ -2038,7 +2096,7 @@ export default function StaffInventoryManagementPage() {
                   </div>
                   <div>
                     <h2 className="text-xl md:text-2xl font-bold">Assign Products for the Week</h2>
-                    <p className="text-blue-100 text-sm">Assign products to staff member for the week</p>
+                    <p className="text-blue-100 text-sm">Select multiple products and assign them in batch</p>
                   </div>
                 </div>
                 <button
@@ -2124,19 +2182,10 @@ export default function StaffInventoryManagementPage() {
                 </div>
               </div>
 
-              {/* Auto-fill Suggestions */}
-              {form.staffId && (
-                <AutoFillSuggestions
-                  products={products}
-                  staffId={parseInt(form.staffId)}
-                  onApply={applyAutoFill}
-                />
-              )}
-
               {/* Product Search Section */}
               <div className="mb-6">
                 <label className="block text-sm font-semibold text-slate-900 mb-2">
-                  Add Products
+                  Add Products (Select Multiple)
                 </label>
                 <div className="flex gap-3">
                   <button
@@ -2146,31 +2195,57 @@ export default function StaffInventoryManagementPage() {
                     className="flex-1 px-4 py-3 bg-gradient-to-r from-blue-600 to-blue-700 text-white rounded-xl hover:from-blue-700 hover:to-blue-800 transition-all shadow-sm text-sm font-medium disabled:opacity-50 flex items-center justify-center gap-2"
                   >
                     <Search className="w-4 h-4" />
-                    Browse Products
+                    Browse & Select Multiple Products
                   </button>
                 </div>
                 <p className="text-xs text-slate-600 mt-2">
-                  Products are automatically added with quantity 1. Adjust quantities below.
+                  Select multiple products at once. All selected products will be added with quantity 1 by default.
                 </p>
               </div>
 
-              {/* Selected Products */}
-              {form.items.length > 0 ? (
+              {/* Selected Products with Batch Controls */}
+              {form.items.length > 0 && (
                 <div className="mb-6">
-                  <div className="flex items-center justify-between mb-3">
-                    <label className="block text-sm font-semibold text-slate-900">
-                      Selected Products ({form.items.length})
-                    </label>
-                    <button
-                      type="button"
-                      onClick={() => setForm({ ...form, items: [] })}
-                      className="text-sm text-red-600 hover:text-red-800 font-medium"
-                    >
-                      Clear All
-                    </button>
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
+                    <div>
+                      <label className="block text-sm font-semibold text-slate-900">
+                        Selected Products ({form.items.length})
+                      </label>
+                      <p className="text-xs text-slate-700">
+                        Total items: {form.items.reduce((sum, item) => sum + parseInt(item.quantity), 0)} • 
+                        Total value: KES {form.items.reduce((sum, item) => sum + ((item.product?.price || 0) * parseInt(item.quantity)), 0).toLocaleString()}
+                      </p>
+                    </div>
+                    
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={setAllQuantitiesToOne}
+                        className="px-3 py-1.5 bg-blue-100 text-blue-800 rounded-lg hover:bg-blue-200 text-sm font-medium flex items-center gap-1"
+                      >
+                        <Check className="w-3 h-3" />
+                        Set All to 1
+                      </button>
+                      <button
+                        type="button"
+                        onClick={setAllQuantitiesToMax}
+                        className="px-3 py-1.5 bg-emerald-100 text-emerald-800 rounded-lg hover:bg-emerald-200 text-sm font-medium flex items-center gap-1"
+                      >
+                        <Maximize2 className="w-3 h-3" />
+                        Set All to Max
+                      </button>
+                      <button
+                        type="button"
+                        onClick={clearAllItems}
+                        className="px-3 py-1.5 bg-red-100 text-red-800 rounded-lg hover:bg-red-200 text-sm font-medium flex items-center gap-1"
+                      >
+                        <Trash2 className="w-3 h-3" />
+                        Clear All
+                      </button>
+                    </div>
                   </div>
                   
-                  <div className="space-y-3">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                     {form.items.map((item, index) => (
                       <ProductSelectionCard
                         key={index}
@@ -2179,16 +2254,24 @@ export default function StaffInventoryManagementPage() {
                         quantity={parseInt(item.quantity)}
                         onQuantityChange={(qty) => updateItemQuantity(index, qty)}
                         availableStock={getRemainingStockAfterAssignments(parseInt(item.productId), form.weekStartDate)}
+                        onSetMax={() => {
+                          const maxStock = getRemainingStockAfterAssignments(parseInt(item.productId), form.weekStartDate);
+                          updateItemQuantity(index, Math.min(maxStock, 10));
+                        }}
+                        onSetMin={() => updateItemQuantity(index, 1)}
                       />
                     ))}
                   </div>
                 </div>
-              ) : (
+              )}
+
+              {/* Empty State */}
+              {form.items.length === 0 && (
                 <div className="mb-6 bg-gradient-to-r from-slate-50 to-blue-50/50 rounded-xl p-6 text-center border border-slate-200">
                   <Package className="w-12 h-12 text-slate-300 mx-auto mb-3" />
                   <h4 className="font-medium text-slate-700 mb-2">No products selected</h4>
                   <p className="text-sm text-slate-600 mb-4">
-                    Click "Browse Products" to search and add products, or use the Quick Add suggestions above.
+                    Click "Browse & Select Multiple Products" to add products in bulk.
                   </p>
                   <button
                     type="button"
@@ -2196,7 +2279,7 @@ export default function StaffInventoryManagementPage() {
                     className="px-4 py-2 bg-gradient-to-r from-blue-600 to-blue-700 text-white rounded-lg hover:from-blue-700 hover:to-blue-800 text-sm font-medium"
                   >
                     <Search className="w-4 h-4 inline mr-2" />
-                    Start Browsing Products
+                    Select Multiple Products
                   </button>
                 </div>
               )}
@@ -2244,16 +2327,16 @@ export default function StaffInventoryManagementPage() {
               {form.items.length > 0 && (
                 <div className="mb-6 bg-gradient-to-r from-slate-50 to-blue-50/50 rounded-xl p-4">
                   <h4 className="font-semibold text-slate-900 mb-3">Assignment Summary</h4>
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                    <div className="text-center">
+                      <div className="text-xs text-slate-700">Total Products</div>
+                      <div className="text-xl font-bold text-slate-900">{form.items.length}</div>
+                    </div>
                     <div className="text-center">
                       <div className="text-xs text-slate-700">Total Items</div>
                       <div className="text-xl font-bold text-slate-900">
                         {form.items.reduce((sum, item) => sum + parseInt(item.quantity), 0)}
                       </div>
-                    </div>
-                    <div className="text-center">
-                      <div className="text-xs text-slate-700">Unique Products</div>
-                      <div className="text-xl font-bold text-slate-900">{form.items.length}</div>
                     </div>
                     <div className="text-center">
                       <div className="text-xs text-slate-700">Total Value</div>
@@ -2302,12 +2385,12 @@ export default function StaffInventoryManagementPage() {
                   {submitting ? (
                     <>
                       <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
-                      Assigning...
+                      Assigning {form.items.length} Product{form.items.length !== 1 ? 's' : ''}...
                     </>
                   ) : (
                     <>
                       <CalendarDays className="w-5 h-5" />
-                      Assign for the Week
+                      Assign {form.items.length} Product{form.items.length !== 1 ? 's' : ''} for the Week
                     </>
                   )}
                 </button>

@@ -54,7 +54,13 @@ import {
   Users,
   ChevronDown,
   Upload,
-  Minus
+  Minus,
+  Package2,
+  ShoppingBag,
+  Layers,
+  TrendingUp as TrendingUpIcon,
+  AlertTriangle as AlertTriangleIcon,
+  Download as DownloadIcon
 } from "lucide-react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
@@ -85,7 +91,6 @@ interface StaffInventory {
   product: Product;
   staff: Staff;
   saleItems?: SaleItem[];
-  currentStock?: number;
 }
 
 interface Product {
@@ -96,7 +101,16 @@ interface Product {
   productionCost?: number;
   category?: string;
   image?: string;
-  stock?: number;
+  inStock?: boolean;
+}
+
+interface Stock {
+  id: number;
+  productId: number;
+  quantity: number;
+  costPrice: number;
+  sellingPrice: number;
+  product?: Product;
 }
 
 interface Sale {
@@ -109,6 +123,7 @@ interface Sale {
   createdById?: number;
   saleitem?: SaleItem[];
   customer?: Customer;
+  customerId?: number;
 }
 
 interface SaleItem {
@@ -154,6 +169,21 @@ interface ReturnItem {
   staffName: string;
 }
 
+interface ApiResponse<T> {
+  success: boolean;
+  data?: T;
+  error?: string;
+  message?: string;
+}
+
+interface StockAdjustment {
+  type: 'add' | 'remove' | 'return';
+  quantity: number;
+  productId: number;
+  staffInventoryId: number;
+  reason?: string;
+}
+
 const StaffDetailsPage = () => {
   const router = useRouter();
   const params = useParams();
@@ -166,6 +196,7 @@ const StaffDetailsPage = () => {
   const [success, setSuccess] = useState<string | null>(null);
   const [loadingCloseWeek, setLoadingCloseWeek] = useState<string | null>(null);
   const [actionLoading, setActionLoading] = useState(false);
+  const [stockData, setStockData] = useState<Stock[]>([]);
   
   // Data states
   const [weeklyPerformance, setWeeklyPerformance] = useState<WeeklyPerformance[]>([]);
@@ -227,7 +258,8 @@ const StaffDetailsPage = () => {
 
   // Check if date is in week
   const isDateInWeek = (date: Date, weekStart: Date, weekEnd: Date) => {
-    return date >= weekStart && date <= weekEnd;
+    const checkDate = new Date(date);
+    return checkDate >= weekStart && checkDate <= weekEnd;
   };
 
   // Format week range
@@ -271,7 +303,7 @@ const StaffDetailsPage = () => {
     }, 5000);
   };
 
-  // Fetch staff details with enhanced error handling
+  // FIXED: Fetch staff details with better error handling and response parsing
   const fetchStaffDetails = useCallback(async () => {
     if (!staffId) return;
 
@@ -280,68 +312,245 @@ const StaffDetailsPage = () => {
     setStockError(null);
 
     try {
-      const response = await fetch(`/api/staff/${staffId}?include=inventories,sales,stock`);
+      console.log(`Fetching staff details for ID: ${staffId}`);
       
-      if (!response.ok) {
-        if (response.status === 404) {
-          throw new Error("Staff member not found");
+      // Try multiple endpoint variations
+      const endpoints = [
+        `/api/staff/${staffId}/inventory`,
+        `/api/staff/${staffId}?include=inventories,sales`,
+        `/api/staff/${staffId}?withInventory=true`,
+        `/api/staff-inventory?staffId=${staffId}`
+      ];
+
+      let response = null;
+      let data = null;
+
+      // Try each endpoint until one works
+      for (const endpoint of endpoints) {
+        try {
+          console.log(`Trying endpoint: ${endpoint}`);
+          response = await fetch(endpoint);
+          
+          if (response.ok) {
+            data = await response.json();
+            console.log(`Success with endpoint ${endpoint}:`, data);
+            break;
+          }
+        } catch (err) {
+          console.log(`Endpoint ${endpoint} failed:`, err);
+          continue;
         }
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.error || `Failed to fetch staff: ${response.statusText}`);
       }
 
-      const data = await response.json();
-      setStaff(data);
+      if (!response || !response.ok) {
+        throw new Error("Failed to fetch staff inventory from all endpoints");
+      }
+
+      // Handle different response structures
+      let staffData: Staff | null = null;
+      let inventories: StaffInventory[] = [];
+      let sales: Sale[] = [];
+
+      if (data.success === false) {
+        throw new Error(data.error || "API returned error");
+      }
+
+      if (data.data) {
+        // Response wrapped in data property
+        const responseData = data.data;
+        staffData = responseData.staff || responseData;
+        inventories = responseData.inventories || responseData.staffInventories || responseData.inventory || [];
+        sales = responseData.sales || [];
+      } else if (data.staff) {
+        // Staff data at root
+        staffData = data.staff;
+        inventories = data.staff.staffInventories || data.staff.inventories || data.inventories || [];
+        sales = data.staff.sales || data.sales || [];
+      } else if (Array.isArray(data)) {
+        // Direct array of inventories
+        inventories = data;
+        // Fetch staff info separately
+        const staffResponse = await fetch(`/api/staff/${staffId}`);
+        if (staffResponse.ok) {
+          const staffResult = await staffResponse.json();
+          staffData = staffResult.data?.staff || staffResult.staff || staffResult;
+        }
+      } else {
+        // Assume data is staff object
+        staffData = data;
+        inventories = data.staffInventories || data.inventories || [];
+        sales = data.sales || [];
+      }
+
+      // If still no staff data, create a basic object
+      if (!staffData) {
+        staffData = {
+          id: parseInt(staffId),
+          name: "Staff Member",
+          email: "",
+          phone: "",
+          createdAt: new Date(),
+          updatedAt: new Date()
+        };
+      }
+
+      console.log("Processed staff data:", staffData);
+      console.log("Processed inventories:", inventories);
+      console.log("Processed sales:", sales);
+
+      setStaff(staffData);
       
       // Process weekly data
-      processWeeklyData(data.staffInventories || [], data.sales || []);
+      processWeeklyData(inventories, sales);
 
     } catch (err: any) {
+      console.error("Error in fetchStaffDetails:", err);
       handleError(err, "Failed to load staff details");
+      
+      // Set empty data to prevent UI errors
+      setStaff({
+        id: parseInt(staffId),
+        name: "Staff Member",
+        email: "",
+        phone: "",
+        createdAt: new Date(),
+        updatedAt: new Date()
+      });
+      setWeeklyPerformance([]);
     } finally {
       setLoading(false);
     }
   }, [staffId]);
 
   // Fetch available stock for a product
-  const fetchAvailableStock = useCallback(async (productId: number) => {
+  const fetchProductStock = async (productId: number): Promise<number> => {
     try {
+      console.log(`Fetching stock for product ${productId}`);
       const response = await fetch(`/api/products/${productId}/stock`);
       
       if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.error || 'Failed to fetch stock information');
+        console.log("Stock API response not ok, trying alternative");
+        // Try alternative endpoint
+        const altResponse = await fetch(`/api/stock?productId=${productId}`);
+        if (altResponse.ok) {
+          const altData = await altResponse.json();
+          const stockItem = Array.isArray(altData) 
+            ? altData.find((s: Stock) => s.productId === productId)
+            : altData.data?.find((s: Stock) => s.productId === productId);
+          return stockItem?.quantity || 0;
+        }
+        throw new Error('Failed to fetch stock information');
       }
 
       const data = await response.json();
-      return data.availableStock || 0;
+      console.log("Stock data:", data);
+      
+      // Handle different response formats
+      if (data.data !== undefined) {
+        return data.data.availableStock || data.data.quantity || 0;
+      }
+      if (data.quantity !== undefined) {
+        return data.quantity;
+      }
+      if (data.availableStock !== undefined) {
+        return data.availableStock;
+      }
+      
+      return data?.stock?.quantity || data?.quantity || 0;
     } catch (err) {
-      handleError(err, "Failed to fetch stock information");
+      console.error('Error fetching stock:', err);
       return 0;
     }
-  }, []);
+  };
 
-  // Process weekly data
+  // Fetch all stock data
+  const fetchAllStockData = async () => {
+    try {
+      console.log("Fetching all stock data");
+      const response = await fetch('/api/stock');
+      if (!response.ok) {
+        console.log("Stock API failed, trying /api/products/stock");
+        // Try alternative endpoint
+        const altResponse = await fetch('/api/products/stock');
+        if (altResponse.ok) {
+          const altData = await altResponse.json();
+          setStockData(altData.data || altData.stock || altData);
+          return;
+        }
+        throw new Error('Failed to fetch stock data');
+      }
+      
+      const data = await response.json();
+      console.log("All stock data:", data);
+      
+      // Handle different response formats
+      if (data.data) {
+        setStockData(data.data);
+      } else if (Array.isArray(data)) {
+        setStockData(data);
+      } else if (data.stock) {
+        setStockData(data.stock);
+      } else {
+        setStockData([]);
+      }
+    } catch (error) {
+      console.error('Error fetching stock data:', error);
+      setStockData([]);
+    }
+  };
+
+  // Get available stock from state
+  const getAvailableStock = (productId: number): number => {
+    const stockItem = stockData.find(stock => stock.productId === productId);
+    return stockItem ? stockItem.quantity : 0;
+  };
+
+  // FIXED: Process weekly data with better error handling
   const processWeeklyData = (inventories: StaffInventory[], sales: Sale[]) => {
+    console.log("Processing weekly data with inventories:", inventories);
+    console.log("Processing weekly data with sales:", sales);
+    
+    if (!inventories || inventories.length === 0) {
+      console.log("No inventories to process");
+      setWeeklyPerformance([]);
+      return;
+    }
+
     const weeklyMap = new Map<string, WeeklyPerformance>();
     const now = new Date();
     
     // Group inventories by week
-    inventories.forEach(inventory => {
-      if (!inventory.weekStartDate || !inventory.weekEndDate) return;
+    inventories.forEach((inventory, index) => {
+      if (!inventory) {
+        console.log(`Skipping null inventory at index ${index}`);
+        return;
+      }
+
+      // Handle missing week dates - assign to current week
+      let weekStartDate: Date;
+      let weekEndDate: Date;
       
-      const startDate = new Date(inventory.weekStartDate);
-      const endDate = new Date(inventory.weekEndDate);
-      const weekKey = `${startDate.getFullYear()}-W${Math.ceil((((startDate.getTime() - new Date(startDate.getFullYear(), 0, 1).getTime()) / 86400000) + 1) / 7)}`;
+      if (inventory.weekStartDate && inventory.weekEndDate) {
+        weekStartDate = new Date(inventory.weekStartDate);
+        weekEndDate = new Date(inventory.weekEndDate);
+      } else {
+        // Assign to current week if dates are missing
+        const currentWeek = getCurrentWeekDates();
+        weekStartDate = currentWeek.weekStartDate;
+        weekEndDate = currentWeek.weekEndDate;
+      }
+      
+      const weekKey = `${weekStartDate.toISOString().split('T')[0]}_${weekEndDate.toISOString().split('T')[0]}`;
       
       if (!weeklyMap.has(weekKey)) {
-        const isActive = now >= startDate && now <= endDate;
-        const isCompleted = now > endDate;
+        const isActive = now >= weekStartDate && now <= weekEndDate;
+        const isCompleted = now > weekEndDate;
+        const isUpcoming = now < weekStartDate;
         
         weeklyMap.set(weekKey, {
-          week: `Week ${weekKey.split('-W')[1]}`,
-          weekStart: startDate,
-          weekEnd: endDate,
+          week: `Week ${weekStartDate.getDate()} ${weekStartDate.toLocaleDateString('en-KE', { month: 'short' })}`,
+          weekStart: weekStartDate,
+          weekEnd: weekEndDate,
           totalGiven: 0,
           totalSold: 0,
           totalReturned: 0,
@@ -355,24 +564,28 @@ const StaffDetailsPage = () => {
       }
       
       const weekData = weeklyMap.get(weekKey)!;
-      weekData.totalGiven += inventory.quantityGiven;
-      weekData.totalSold += inventory.quantitySold;
-      weekData.totalReturned += inventory.quantityReturned;
+      weekData.totalGiven += inventory.quantityGiven || 0;
+      weekData.totalSold += inventory.quantitySold || 0;
+      weekData.totalReturned += inventory.quantityReturned || 0;
       weekData.inventory.push(inventory);
     });
     
     // Add sales to weeks
-    sales.forEach(sale => {
-      const saleDate = new Date(sale.date);
-      
-      for (const [, weekData] of weeklyMap) {
-        if (isDateInWeek(saleDate, weekData.weekStart, weekData.weekEnd)) {
-          weekData.sales.push(sale);
-          weekData.totalRevenue += sale.amount;
-          break;
+    if (sales && Array.isArray(sales)) {
+      sales.forEach(sale => {
+        if (!sale || !sale.date) return;
+        
+        const saleDate = new Date(sale.date);
+        
+        for (const [, weekData] of weeklyMap) {
+          if (isDateInWeek(saleDate, weekData.weekStart, weekData.weekEnd)) {
+            weekData.sales.push(sale);
+            weekData.totalRevenue += sale.amount || 0;
+            break;
+          }
         }
-      }
-    });
+      });
+    }
     
     // Calculate metrics
     weeklyMap.forEach(weekData => {
@@ -387,26 +600,30 @@ const StaffDetailsPage = () => {
       b.weekStart.getTime() - a.weekStart.getTime()
     );
     
+    console.log("Processed weekly performance:", weeklyArray);
     setWeeklyPerformance(weeklyArray);
   };
 
   // Handle edit click
   const handleEditClick = async (item: StaffInventory) => {
+    console.log("Edit clicked for item:", item);
     setEditingItem(item);
     setEditForm({
-      quantityGiven: item.quantityGiven.toString(),
-      quantitySold: item.quantitySold.toString(),
-      quantityReturned: item.quantityReturned.toString(),
+      quantityGiven: (item.quantityGiven || 0).toString(),
+      quantitySold: (item.quantitySold || 0).toString(),
+      quantityReturned: (item.quantityReturned || 0).toString(),
       weekStartDate: item.weekStartDate ? new Date(item.weekStartDate).toISOString().split('T')[0] : '',
       weekEndDate: item.weekEndDate ? new Date(item.weekEndDate).toISOString().split('T')[0] : ''
     });
     
     // Fetch current stock
     try {
-      const stock = await fetchAvailableStock(item.productId);
+      const stock = await fetchProductStock(item.productId);
+      console.log("Available stock for product:", stock);
       setAvailableStock(stock);
       setStockError(null);
     } catch (err) {
+      console.error("Error fetching stock:", err);
       setStockError("Unable to fetch stock information");
       setAvailableStock(0);
     }
@@ -422,7 +639,7 @@ const StaffDetailsPage = () => {
       setStockError(null);
 
       const newQuantityGiven = parseInt(editForm.quantityGiven) || 0;
-      const quantityDifference = newQuantityGiven - editingItem.quantityGiven;
+      const quantityDifference = newQuantityGiven - (editingItem.quantityGiven || 0);
 
       // Check if we're adding more items than available stock
       if (quantityDifference > 0 && quantityDifference > availableStock) {
@@ -431,43 +648,89 @@ const StaffDetailsPage = () => {
       }
 
       // Validate quantities
-      if (parseInt(editForm.quantitySold) > newQuantityGiven) {
+      const newQuantitySold = parseInt(editForm.quantitySold) || 0;
+      const newQuantityReturned = parseInt(editForm.quantityReturned) || 0;
+
+      if (newQuantitySold > newQuantityGiven) {
         setStockError("Sold quantity cannot exceed assigned quantity");
         return;
       }
 
-      if (parseInt(editForm.quantityReturned) > newQuantityGiven - parseInt(editForm.quantitySold)) {
+      if (newQuantityReturned > newQuantityGiven - newQuantitySold) {
         setStockError("Returned quantity cannot exceed remaining quantity");
         return;
       }
 
-      const response = await fetch(`/api/staff-inventory/${editingItem.id}/update`, {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          quantityGiven: newQuantityGiven,
-          quantitySold: parseInt(editForm.quantitySold) || 0,
-          quantityReturned: parseInt(editForm.quantityReturned) || 0,
-          weekStartDate: editForm.weekStartDate || null,
-          weekEndDate: editForm.weekEndDate || null
-        }),
-      });
+      // Prepare update data
+      const updateData: any = {
+        quantityGiven: newQuantityGiven,
+        quantitySold: newQuantitySold,
+        quantityReturned: newQuantityReturned
+      };
 
-      const data = await response.json();
+      // Only include dates if they're provided
+      if (editForm.weekStartDate) {
+        updateData.weekStartDate = editForm.weekStartDate;
+      }
+      if (editForm.weekEndDate) {
+        updateData.weekEndDate = editForm.weekEndDate;
+      }
 
-      if (!response.ok) {
-        throw new Error(data.error || 'Failed to update assignment');
+      // If adding items, include stock adjustment
+      if (quantityDifference > 0) {
+        updateData.stockAdjustment = -quantityDifference;
+        updateData.productId = editingItem.productId;
+      }
+
+      console.log("Updating inventory with data:", updateData);
+
+      // Try multiple endpoints for update
+      const endpoints = [
+        `/api/staff-inventory/${editingItem.id}/update`,
+        `/api/staff-inventory/${editingItem.id}`,
+        `/api/inventory/${editingItem.id}`
+      ];
+
+      let success = false;
+      let responseData: any = null;
+
+      for (const endpoint of endpoints) {
+        try {
+          const response = await fetch(endpoint, {
+            method: 'PUT',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(updateData),
+          });
+
+          if (response.ok) {
+            responseData = await response.json();
+            console.log(`Update successful via ${endpoint}:`, responseData);
+            success = true;
+            break;
+          }
+        } catch (err) {
+          console.log(`Endpoint ${endpoint} failed:`, err);
+          continue;
+        }
+      }
+
+      if (!success) {
+        throw new Error('Failed to update assignment via all endpoints');
       }
 
       setSuccess('Assignment updated successfully!');
       setEditingItem(null);
       
       // Refresh data
-      fetchStaffDetails();
+      await Promise.all([
+        fetchStaffDetails(),
+        fetchAllStockData()
+      ]);
 
     } catch (err: any) {
+      console.error("Error in handleSaveEdit:", err);
       handleError(err, 'Failed to update assignment');
     } finally {
       setActionLoading(false);
@@ -484,22 +747,77 @@ const StaffDetailsPage = () => {
     setError(null);
 
     try {
-      const response = await fetch(`/api/staff-inventory/${id}`, {
-        method: 'DELETE',
-      });
+      // First get inventory details
+      let inventory = null;
+      const inventoryEndpoints = [
+        `/api/staff-inventory/${id}`,
+        `/api/inventory/${id}`
+      ];
 
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.error || 'Failed to delete assignment');
+      for (const endpoint of inventoryEndpoints) {
+        try {
+          const response = await fetch(endpoint);
+          if (response.ok) {
+            const data = await response.json();
+            inventory = data.data || data;
+            break;
+          }
+        } catch (err) {
+          console.log(`Failed to fetch from ${endpoint}:`, err);
+        }
       }
 
-      setSuccess('Assignment deleted successfully!');
+      if (!inventory) {
+        throw new Error('Failed to fetch inventory details');
+      }
+
+      const remainingItems = (inventory.quantityGiven || 0) - (inventory.quantitySold || 0) - (inventory.quantityReturned || 0);
+
+      // Try multiple delete endpoints
+      const deleteEndpoints = [
+        `/api/staff-inventory/${id}?restoreStock=true&quantityToRestore=${remainingItems}&productId=${inventory.productId}`,
+        `/api/staff-inventory/${id}?returnToStock=true`,
+        `/api/inventory/${id}?returnToStock=true`
+      ];
+
+      let deleteSuccess = false;
+
+      for (const endpoint of deleteEndpoints) {
+        try {
+          const response = await fetch(endpoint, {
+            method: 'DELETE',
+            headers: {
+              'Content-Type': 'application/json',
+            }
+          });
+
+          const data = await response.json();
+
+          if (response.ok && (data.success || !data.error)) {
+            console.log(`Delete successful via ${endpoint}:`, data);
+            deleteSuccess = true;
+            break;
+          }
+        } catch (err) {
+          console.log(`Delete endpoint ${endpoint} failed:`, err);
+          continue;
+        }
+      }
+
+      if (!deleteSuccess) {
+        throw new Error('Failed to delete assignment');
+      }
+
+      setSuccess(`Assignment deleted successfully! ${remainingItems} items returned to stock.`);
       
       // Refresh data
-      fetchStaffDetails();
+      await Promise.all([
+        fetchStaffDetails(),
+        fetchAllStockData()
+      ]);
 
     } catch (err: any) {
+      console.error("Error in handleDeleteAssignment:", err);
       handleError(err, 'Failed to delete assignment');
     } finally {
       setActionLoading(false);
@@ -514,7 +832,10 @@ const StaffDetailsPage = () => {
     }
 
     const returnQty = parseInt(returnQuantity);
-    const remaining = selectedInventory.quantityGiven - selectedInventory.quantitySold - selectedInventory.quantityReturned;
+    const currentGiven = selectedInventory.quantityGiven || 0;
+    const currentSold = selectedInventory.quantitySold || 0;
+    const currentReturned = selectedInventory.quantityReturned || 0;
+    const remaining = currentGiven - currentSold - currentReturned;
     
     if (returnQty > remaining) {
       setError(`Cannot return more than ${remaining} items`);
@@ -522,31 +843,63 @@ const StaffDetailsPage = () => {
     }
 
     try {
-      const response = await fetch(`/api/staff-inventory/${selectedInventory.id}/update`, {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          quantityReturned: selectedInventory.quantityReturned + returnQty,
-          reason: returnReason || "Defective/Damaged"
-        }),
-      });
+      // Calculate new returned quantity
+      const newQuantityReturned = currentReturned + returnQty;
+      
+      // Try multiple update endpoints
+      const updateData = {
+        quantityReturned: newQuantityReturned,
+        productId: selectedInventory.productId,
+        staffId: selectedInventory.staffId
+      };
 
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || 'Failed to process return');
+      const endpoints = [
+        `/api/staff-inventory/${selectedInventory.id}/update`,
+        `/api/staff-inventory/${selectedInventory.id}/return`,
+        `/api/inventory/${selectedInventory.id}/return`
+      ];
+
+      let success = false;
+
+      for (const endpoint of endpoints) {
+        try {
+          const response = await fetch(endpoint, {
+            method: adjustType === 'add' ? 'PUT' : 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(updateData),
+          });
+
+          if (response.ok) {
+            const data = await response.json();
+            console.log(`Return successful via ${endpoint}:`, data);
+            success = true;
+            break;
+          }
+        } catch (err) {
+          console.log(`Endpoint ${endpoint} failed:`, err);
+          continue;
+        }
       }
 
-      setSuccess('Items returned successfully!');
+      if (!success) {
+        throw new Error('Failed to process return');
+      }
+
+      setSuccess(`${returnQty} items returned successfully!`);
       setShowReturnModal(false);
       setSelectedInventory(null);
       setReturnQuantity('');
       setReturnReason('');
       
-      fetchStaffDetails();
+      await Promise.all([
+        fetchStaffDetails(),
+        fetchAllStockData()
+      ]);
 
     } catch (error: any) {
+      console.error("Error in handleReturnItems:", error);
       handleError(error, 'Failed to process return');
     }
   };
@@ -565,21 +918,76 @@ const StaffDetailsPage = () => {
     }
 
     try {
-      const response = await fetch(`/api/staff-inventory/${selectedInventory.id}/adjust`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          type: adjustType,
-          quantity: adjustQty,
-          reason: adjustReason || "Inventory adjustment"
-        }),
-      });
+      // Check stock availability for adding items
+      if (adjustType === 'add') {
+        const available = await fetchProductStock(selectedInventory.productId);
+        if (adjustQty > available) {
+          setError(`Cannot add ${adjustQty} items. Only ${available} available in stock.`);
+          return;
+        }
+      }
 
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || 'Failed to adjust inventory');
+      // Calculate new quantity
+      const currentGiven = selectedInventory.quantityGiven || 0;
+      const currentSold = selectedInventory.quantitySold || 0;
+      const currentReturned = selectedInventory.quantityReturned || 0;
+      const remaining = currentGiven - currentSold - currentReturned;
+      
+      const newQuantityGiven = adjustType === 'add' 
+        ? currentGiven + adjustQty
+        : currentGiven - adjustQty;
+
+      // Check if we're removing more than available
+      if (adjustType === 'remove') {
+        if (adjustQty > remaining) {
+          setError(`Cannot remove ${adjustQty} items. Only ${remaining} remaining.`);
+          return;
+        }
+      }
+
+      // Prepare update data
+      const updateData: any = {
+        quantityGiven: newQuantityGiven,
+        productId: selectedInventory.productId
+      };
+
+      if (adjustType === 'add') {
+        updateData.stockAdjustment = -adjustQty;
+      }
+
+      // Try multiple endpoints
+      const endpoints = [
+        `/api/staff-inventory/${selectedInventory.id}/update`,
+        `/api/staff-inventory/${selectedInventory.id}`,
+        `/api/inventory/${selectedInventory.id}`
+      ];
+
+      let success = false;
+
+      for (const endpoint of endpoints) {
+        try {
+          const response = await fetch(endpoint, {
+            method: 'PUT',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(updateData),
+          });
+
+          if (response.ok) {
+            const data = await response.json();
+            console.log(`Adjust successful via ${endpoint}:`, data);
+            success = true;
+            break;
+          }
+        } catch (err) {
+          console.log(`Endpoint ${endpoint} failed:`, err);
+          continue;
+        }
+      }
+
+      if (!success) {
+        throw new Error('Failed to adjust inventory');
       }
 
       setSuccess(`${adjustType === 'add' ? 'Added' : 'Removed'} ${adjustQty} items successfully!`);
@@ -588,9 +996,13 @@ const StaffDetailsPage = () => {
       setAdjustQuantity('');
       setAdjustReason('');
       
-      fetchStaffDetails();
+      await Promise.all([
+        fetchStaffDetails(),
+        fetchAllStockData()
+      ]);
 
     } catch (error: any) {
+      console.error("Error in handleAdjustItems:", error);
       handleError(error, 'Failed to adjust inventory');
     }
   };
@@ -609,13 +1021,48 @@ const StaffDetailsPage = () => {
         },
         body: JSON.stringify({
           weekStart: weekToClose.weekStart.toISOString(),
-          weekEnd: weekToClose.weekEnd.toISOString()
+          weekEnd: weekToClose.weekEnd.toISOString(),
+          autoReturnRemaining: true,
+          returnReason: "Week closure - remaining items",
+          addToStock: true
         }),
       });
 
       if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || 'Failed to close week');
+        // Try alternative endpoint
+        const altResponse = await fetch(`/api/week/close`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            staffId: parseInt(staffId),
+            weekStart: weekToClose.weekStart.toISOString(),
+            weekEnd: weekToClose.weekEnd.toISOString()
+          }),
+        });
+
+        if (!altResponse.ok) {
+          const errorData = await response.json().catch(() => ({}));
+          throw new Error(errorData.error || 'Failed to close week');
+        }
+
+        const data = await altResponse.json();
+        
+        setSuccess(`Week closed successfully!`);
+        setShowCloseWeekModal(false);
+        setWeekToClose(null);
+        
+        // Try to generate CSV if data is available
+        if (data.returnedItems && data.returnedItems.length > 0) {
+          generateReturnItemsCSV(data.returnedItems, weekToClose);
+        }
+        
+        await Promise.all([
+          fetchStaffDetails(),
+          fetchAllStockData()
+        ]);
+        return;
       }
 
       const data = await response.json();
@@ -629,9 +1076,13 @@ const StaffDetailsPage = () => {
         generateReturnItemsCSV(data.returnedItems, weekToClose);
       }
       
-      fetchStaffDetails();
+      await Promise.all([
+        fetchStaffDetails(),
+        fetchAllStockData()
+      ]);
 
     } catch (error: any) {
+      console.error("Error in handleCloseWeek:", error);
       handleError(error, 'Failed to close week');
     } finally {
       setLoadingCloseWeek(null);
@@ -657,9 +1108,9 @@ const StaffDetailsPage = () => {
       csvContent.push([
         item.productName || 'Unknown',
         item.productCategory || 'N/A',
-        item.quantityReturned.toString(),
+        (item.quantityReturned || 0).toString(),
         item.reason || 'Defective/Damaged',
-        new Date(item.returnedAt).toLocaleDateString('en-KE'),
+        new Date(item.returnedAt || new Date()).toLocaleDateString('en-KE'),
         formatDate(week.weekStart),
         formatDate(week.weekEnd)
       ]);
@@ -703,17 +1154,20 @@ const StaffDetailsPage = () => {
     ];
     
     week.inventory.forEach((inventory) => {
-      const sellThrough = inventory.quantityGiven > 0 
-        ? (inventory.quantitySold / inventory.quantityGiven) * 100 
+      const quantityGiven = inventory.quantityGiven || 0;
+      const quantitySold = inventory.quantitySold || 0;
+      const quantityReturned = inventory.quantityReturned || 0;
+      const sellThrough = quantityGiven > 0 
+        ? (quantitySold / quantityGiven) * 100 
         : 0;
       
       csvContent.push([
         inventory.product?.name || 'Unknown',
         inventory.product?.category || 'N/A',
-        inventory.quantityGiven.toString(),
-        inventory.quantitySold.toString(),
-        inventory.quantityReturned.toString(),
-        (inventory.quantityGiven - inventory.quantitySold - inventory.quantityReturned).toString(),
+        quantityGiven.toString(),
+        quantitySold.toString(),
+        quantityReturned.toString(),
+        (quantityGiven - quantitySold - quantityReturned).toString(),
         `${sellThrough.toFixed(1)}%`
       ]);
     });
@@ -724,12 +1178,12 @@ const StaffDetailsPage = () => {
       csvContent.push(['Total Items Returned', week.totalReturned.toString()]);
       
       // Group returned items by product
-      const returnedByProduct = week.inventory.filter(inv => inv.quantityReturned > 0);
+      const returnedByProduct = week.inventory.filter(inv => (inv.quantityReturned || 0) > 0);
       returnedByProduct.forEach((inventory) => {
         csvContent.push([
           inventory.product?.name || 'Unknown',
           inventory.product?.category || 'N/A',
-          inventory.quantityReturned.toString()
+          (inventory.quantityReturned || 0).toString()
         ]);
       });
     }
@@ -759,9 +1213,12 @@ const StaffDetailsPage = () => {
   // Format date
   const formatDate = (date: Date | string | null) => {
     if (!date) return 'Not set';
-    return new Date(date).toLocaleDateString('en-KE', {
+    const dateObj = new Date(date);
+    if (isNaN(dateObj.getTime())) return 'Invalid date';
+    return dateObj.toLocaleDateString('en-KE', {
       day: '2-digit',
-      month: 'short'
+      month: 'short',
+      year: 'numeric'
     });
   };
 
@@ -771,7 +1228,7 @@ const StaffDetailsPage = () => {
       const query = searchQuery.toLowerCase();
       return week.week.toLowerCase().includes(query) ||
         week.inventory.some(inv => 
-          inv.product?.name.toLowerCase().includes(query) ||
+          inv.product?.name?.toLowerCase().includes(query) ||
           inv.product?.category?.toLowerCase().includes(query)
         );
     }
@@ -783,7 +1240,7 @@ const StaffDetailsPage = () => {
     return true;
   });
 
-  // Filter assigned items in week details - FIXED NULL CHECK
+  // Filter assigned items in week details
   const getFilteredInventory = () => {
     if (!selectedWeek) return [];
     
@@ -791,15 +1248,43 @@ const StaffDetailsPage = () => {
     
     const query = searchProductQuery.toLowerCase();
     return selectedWeek.inventory.filter(inv => 
-      inv.product?.name.toLowerCase().includes(query) ||
+      inv.product?.name?.toLowerCase().includes(query) ||
       inv.product?.category?.toLowerCase().includes(query)
     );
   };
 
+  // Calculate total stats
+  const calculateTotalStats = () => {
+    return weeklyPerformance.reduce((acc, week) => ({
+      totalGiven: acc.totalGiven + week.totalGiven,
+      totalSold: acc.totalSold + week.totalSold,
+      totalReturned: acc.totalReturned + week.totalReturned,
+      totalRevenue: acc.totalRevenue + week.totalRevenue
+    }), { totalGiven: 0, totalSold: 0, totalReturned: 0, totalRevenue: 0 });
+  };
+
   // Initial load
   useEffect(() => {
-    fetchStaffDetails();
+    console.log("Component mounted, staffId:", staffId);
+    const loadData = async () => {
+      await Promise.all([
+        fetchStaffDetails(),
+        fetchAllStockData()
+      ]);
+    };
+    
+    loadData();
   }, [fetchStaffDetails]);
+
+  // Debug: Log when weeklyPerformance changes
+  useEffect(() => {
+    console.log("Weekly performance updated:", weeklyPerformance);
+  }, [weeklyPerformance]);
+
+  // Debug: Log when staff changes
+  useEffect(() => {
+    console.log("Staff updated:", staff);
+  }, [staff]);
 
   if (loading) {
     return (
@@ -809,6 +1294,7 @@ const StaffDetailsPage = () => {
             <div className="text-center">
               <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500 mx-auto"></div>
               <div className="mt-4 text-black">Loading staff details...</div>
+              <div className="text-xs text-gray-500 mt-2">Fetching inventory data for staff ID: {staffId}</div>
             </div>
           </div>
         </div>
@@ -826,6 +1312,10 @@ const StaffDetailsPage = () => {
               <div>
                 <div className="font-semibold text-red-800">Error Loading Staff Details</div>
                 <div className="text-red-700 mt-1">{error}</div>
+                <div className="text-sm text-gray-600 mt-2">
+                  Staff ID: {staffId}<br />
+                  Please check if the staff member exists and has inventory assigned.
+                </div>
                 <button
                   onClick={() => router.push('/admin/staff')}
                   className="mt-4 inline-flex items-center gap-2 px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors shadow-sm"
@@ -861,6 +1351,8 @@ const StaffDetailsPage = () => {
       </div>
     );
   }
+
+  const totalStats = calculateTotalStats();
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 p-3 sm:p-4">
@@ -953,9 +1445,15 @@ const StaffDetailsPage = () => {
                 </div>
               </div>
 
-              <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-center">
-                <div className="text-xs font-medium text-blue-800 mb-1">Active Weeks</div>
-                <div className="text-lg font-bold text-blue-600">{weeklyPerformance.filter(w => w.status === 'active').length}</div>
+              <div className="grid grid-cols-2 sm:flex sm:flex-col gap-2">
+                <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-center">
+                  <div className="text-xs font-medium text-blue-800 mb-1">Active Weeks</div>
+                  <div className="text-lg font-bold text-blue-600">{weeklyPerformance.filter(w => w.status === 'active').length}</div>
+                </div>
+                <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3 text-center">
+                  <div className="text-xs font-medium text-emerald-800 mb-1">Total Sales</div>
+                  <div className="text-lg font-bold text-emerald-600">KSh {totalStats.totalRevenue.toLocaleString()}</div>
+                </div>
               </div>
             </div>
           </div>
@@ -978,7 +1476,7 @@ const StaffDetailsPage = () => {
               <div>
                 <div className="text-xs font-medium text-black">Total Assigned</div>
                 <div className="text-xl font-bold text-black mt-1">
-                  {weeklyPerformance.reduce((sum, week) => sum + week.totalGiven, 0)}
+                  {totalStats.totalGiven}
                 </div>
               </div>
               <Package className="w-6 h-6 text-emerald-500" />
@@ -990,14 +1488,14 @@ const StaffDetailsPage = () => {
               <div>
                 <div className="text-xs font-medium text-black">Total Returned</div>
                 <div className="text-xl font-bold text-black mt-1">
-                  {weeklyPerformance.reduce((sum, week) => sum + week.totalReturned, 0)}
+                  {totalStats.totalReturned}
                 </div>
               </div>
               <PackageX className="w-6 h-6 text-orange-500" />
             </div>
           </div>
 
-          <div className="col-span-2 sm:col-span-1 bg-white rounded-xl shadow-sm border border-gray-200 p-4">
+          <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-4">
             <div className="flex items-center justify-between">
               <div>
                 <div className="text-xs font-medium text-black">Sell-through</div>
@@ -1018,224 +1516,272 @@ const StaffDetailsPage = () => {
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div>
                 <div className="text-lg sm:text-xl font-semibold text-black">Assigned Inventory</div>
-                <div className="text-xs sm:text-sm text-black">Tap any week for details • Click Edit to modify assignments</div>
+                <div className="text-xs sm:text-sm text-black">
+                  {weeklyPerformance.length > 0 
+                    ? `${weeklyPerformance.length} week(s) found • Tap any week for details`
+                    : 'No inventory assigned yet'}
+                </div>
               </div>
               
-              <div className="flex items-center gap-2">
-                <div className="flex items-center border border-gray-300 rounded-lg overflow-hidden">
-                  <button
-                    onClick={() => setViewMode("grid")}
-                    className={`p-2 ${viewMode === "grid" ? "bg-blue-50 text-blue-600" : "text-gray-600"}`}
-                  >
-                    <Grid className="w-4 h-4" />
-                  </button>
-                  <button
-                    onClick={() => setViewMode("list")}
-                    className={`p-2 ${viewMode === "list" ? "bg-blue-50 text-blue-600" : "text-gray-600"}`}
-                  >
-                    <List className="w-4 h-4" />
-                  </button>
+              {weeklyPerformance.length > 0 && (
+                <div className="flex items-center gap-2">
+                  <div className="flex items-center border border-gray-300 rounded-lg overflow-hidden">
+                    <button
+                      onClick={() => setViewMode("grid")}
+                      className={`p-2 ${viewMode === "grid" ? "bg-blue-50 text-blue-600" : "text-gray-600"}`}
+                    >
+                      <Grid className="w-4 h-4" />
+                    </button>
+                    <button
+                      onClick={() => setViewMode("list")}
+                      className={`p-2 ${viewMode === "list" ? "bg-blue-50 text-blue-600" : "text-gray-600"}`}
+                    >
+                      <List className="w-4 h-4" />
+                    </button>
+                  </div>
                 </div>
-              </div>
+              )}
             </div>
           </div>
 
-          {/* Search and Filter */}
-          <div className="px-4 sm:px-6 py-3 border-b border-gray-200 bg-gray-50">
-            <div className="flex flex-col sm:flex-row gap-2">
-              <div className="flex-1">
-                <div className="relative">
-                  <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-3 h-3 sm:w-4 sm:h-4 text-gray-500" />
-                  <input
-                    type="text"
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    placeholder="Search weeks, products, or categories..."
-                    className="w-full pl-9 pr-4 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-black placeholder-gray-500"
-                  />
+          {/* Search and Filter - Only show if there's data */}
+          {weeklyPerformance.length > 0 && (
+            <div className="px-4 sm:px-6 py-3 border-b border-gray-200 bg-gray-50">
+              <div className="flex flex-col sm:flex-row gap-2">
+                <div className="flex-1">
+                  <div className="relative">
+                    <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-3 h-3 sm:w-4 sm:h-4 text-gray-500" />
+                    <input
+                      type="text"
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      placeholder="Search weeks, products, or categories..."
+                      className="w-full pl-9 pr-4 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-black placeholder-gray-500"
+                    />
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Filter className="w-3 h-3 sm:w-4 sm:h-4 text-gray-500" />
+                  <select
+                    value={filterStatus}
+                    onChange={(e) => setFilterStatus(e.target.value)}
+                    className="px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-black"
+                  >
+                    <option value="all">All Status</option>
+                    <option value="active">Active</option>
+                    <option value="completed">Completed</option>
+                  </select>
                 </div>
               </div>
-              <div className="flex items-center gap-2">
-                <Filter className="w-3 h-3 sm:w-4 sm:h-4 text-gray-500" />
-                <select
-                  value={filterStatus}
-                  onChange={(e) => setFilterStatus(e.target.value)}
-                  className="px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-black"
-                >
-                  <option value="all">All Status</option>
-                  <option value="active">Active</option>
-                  <option value="completed">Completed</option>
-                </select>
-              </div>
             </div>
-          </div>
+          )}
 
           {/* Weeks List/Grid */}
-          {filteredWeeklyPerformance.length > 0 ? (
-            <div className="p-3 sm:p-4">
-              {viewMode === "grid" ? (
-                // Grid View
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                  {filteredWeeklyPerformance.map((week, index) => (
-                    <div 
-                      key={index}
-                      className="bg-gradient-to-br from-white to-gray-50 border border-gray-200 rounded-xl p-4 shadow-sm hover:shadow-md transition-shadow"
-                    >
-                      <div className="flex items-start justify-between mb-3">
-                        <div>
-                          <div className="font-semibold text-black">{week.week}</div>
-                          <div className="text-xs text-black mt-1">
-                            {formatDate(week.weekStart)} - {formatDate(week.weekEnd)}
-                          </div>
-                        </div>
-                        <div className={`px-2 py-1 rounded-full text-xs font-medium ${
-                          week.status === 'active' 
-                            ? 'bg-emerald-100 text-emerald-800'
-                            : 'bg-blue-100 text-blue-800'
-                        }`}>
-                          {week.status.charAt(0).toUpperCase() + week.status.slice(1)}
-                        </div>
-                      </div>
-                      
-                      <div className="space-y-2">
-                        <div className="flex items-center justify-between text-sm">
-                          <span className="text-black">Assigned:</span>
-                          <span className="font-semibold">{week.totalGiven}</span>
-                        </div>
-                        <div className="flex items-center justify-between text-sm">
-                          <span className="text-black">Sold:</span>
-                          <span className="font-semibold text-emerald-600">{week.totalSold}</span>
-                        </div>
-                        <div className="flex items-center justify-between text-sm">
-                          <span className="text-black">Returned:</span>
-                          <span className="font-semibold text-orange-600">{week.totalReturned}</span>
-                        </div>
-                        <div className="flex items-center justify-between text-sm">
-                          <span className="text-black">Rate:</span>
-                          <span className={`font-semibold ${
-                            week.sellThroughRate >= 70 ? 'text-emerald-600' :
-                            week.sellThroughRate >= 50 ? 'text-yellow-600' : 'text-red-600'
-                          }`}>
-                            {week.sellThroughRate.toFixed(0)}%
-                          </span>
-                        </div>
-                      </div>
-                      
-                      <div className="mt-3 pt-3 border-t border-gray-200">
-                        <div className="flex items-center justify-between text-xs text-black">
-                          <span>Sales: {week.sales.length}</span>
-                          <span>{formatCurrency(week.totalRevenue)}</span>
-                        </div>
-                      </div>
-
-                      <div className="mt-3 flex flex-col gap-2">
-                        <button
-                          onClick={() => {
-                            setSelectedWeek(week);
-                            setShowWeekDetails(true);
-                          }}
-                          className="w-full py-1.5 bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100 transition-colors text-xs font-medium"
-                        >
-                          <Eye className="w-3 h-3 inline-block mr-1" />
-                          View Details
-                        </button>
-                        
-                        {week.status === 'active' && week.remaining > 0 && (
-                          <button
-                            onClick={() => {
-                              setWeekToClose(week);
-                              setShowCloseWeekModal(true);
-                            }}
-                            className="w-full py-1.5 bg-orange-50 text-orange-600 rounded-lg hover:bg-orange-100 transition-colors text-xs font-medium"
-                          >
-                            <Archive className="w-3 h-3 inline-block mr-1" />
-                            Close Week
-                          </button>
-                        )}
-                        
-                        <button
-                          onClick={() => exportWeeklyReport(week)}
-                          className="w-full py-1.5 bg-gray-50 text-gray-600 rounded-lg hover:bg-gray-100 transition-colors text-xs font-medium"
-                        >
-                          <FileSpreadsheet className="w-3 h-3 inline-block mr-1" />
-                          Export CSV
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                // List View
-                <div className="space-y-2">
-                  {filteredWeeklyPerformance.map((week, index) => (
-                    <div 
-                      key={index}
-                      className="bg-white border border-gray-200 rounded-lg p-3 hover:bg-gray-50 transition-colors"
-                    >
-                      <div className="flex items-center justify-between">
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2">
-                            <div className="font-medium text-black truncate">{week.week}</div>
-                            <div className={`px-2 py-0.5 rounded-full text-xs font-medium ${
-                              week.status === 'active' 
-                                ? 'bg-emerald-100 text-emerald-800'
-                                : 'bg-blue-100 text-blue-800'
-                            }`}>
-                              {week.status.charAt(0).toUpperCase() + week.status.slice(1)}
+          {weeklyPerformance.length > 0 ? (
+            filteredWeeklyPerformance.length > 0 ? (
+              <div className="p-3 sm:p-4">
+                {viewMode === "grid" ? (
+                  // Grid View
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                    {filteredWeeklyPerformance.map((week, index) => (
+                      <div 
+                        key={index}
+                        className="bg-gradient-to-br from-white to-gray-50 border border-gray-200 rounded-xl p-4 shadow-sm hover:shadow-md transition-shadow cursor-pointer"
+                        onClick={() => {
+                          setSelectedWeek(week);
+                          setShowWeekDetails(true);
+                        }}
+                      >
+                        <div className="flex items-start justify-between mb-3">
+                          <div>
+                            <div className="font-semibold text-black">{week.week}</div>
+                            <div className="text-xs text-black mt-1">
+                              {formatDate(week.weekStart)} - {formatDate(week.weekEnd)}
                             </div>
                           </div>
-                          <div className="text-xs text-black mt-1">
-                            {formatDate(week.weekStart)} - {formatDate(week.weekEnd)}
+                          <div className={`px-2 py-1 rounded-full text-xs font-medium ${
+                            week.status === 'active' 
+                              ? 'bg-emerald-100 text-emerald-800'
+                              : week.status === 'completed'
+                              ? 'bg-blue-100 text-blue-800'
+                              : 'bg-gray-100 text-gray-800'
+                          }`}>
+                            {week.status.charAt(0).toUpperCase() + week.status.slice(1)}
                           </div>
                         </div>
                         
-                        <div className="flex items-center gap-3 ml-3">
-                          <div className="text-right">
-                            <div className="font-semibold text-black">{week.totalSold}/{week.totalGiven}</div>
-                            <div className={`text-xs ${
+                        <div className="space-y-2">
+                          <div className="flex items-center justify-between text-sm">
+                            <span className="text-black">Assigned:</span>
+                            <span className="font-semibold">{week.totalGiven}</span>
+                          </div>
+                          <div className="flex items-center justify-between text-sm">
+                            <span className="text-black">Sold:</span>
+                            <span className="font-semibold text-emerald-600">{week.totalSold}</span>
+                          </div>
+                          <div className="flex items-center justify-between text-sm">
+                            <span className="text-black">Returned:</span>
+                            <span className="font-semibold text-orange-600">{week.totalReturned}</span>
+                          </div>
+                          <div className="flex items-center justify-between text-sm">
+                            <span className="text-black">Rate:</span>
+                            <span className={`font-semibold ${
                               week.sellThroughRate >= 70 ? 'text-emerald-600' :
                               week.sellThroughRate >= 50 ? 'text-yellow-600' : 'text-red-600'
                             }`}>
                               {week.sellThroughRate.toFixed(0)}%
-                            </div>
+                            </span>
                           </div>
-                          <div className="flex flex-col gap-1">
+                        </div>
+                        
+                        <div className="mt-3 pt-3 border-t border-gray-200">
+                          <div className="flex items-center justify-between text-xs text-black">
+                            <span>Sales: {week.sales.length}</span>
+                            <span>{formatCurrency(week.totalRevenue)}</span>
+                          </div>
+                        </div>
+
+                        <div className="mt-3 flex flex-col gap-2">
+                          <div className="flex gap-2">
                             <button
-                              onClick={() => {
+                              onClick={(e) => {
+                                e.stopPropagation();
                                 setSelectedWeek(week);
                                 setShowWeekDetails(true);
                               }}
-                              className="p-1.5 bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100 transition-colors"
-                              title="View Details"
+                              className="flex-1 py-1.5 bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100 transition-colors text-xs font-medium flex items-center justify-center gap-1"
                             >
                               <Eye className="w-3 h-3" />
+                              Details
                             </button>
+                            
                             {week.status === 'active' && week.remaining > 0 && (
                               <button
-                                onClick={() => {
+                                onClick={(e) => {
+                                  e.stopPropagation();
                                   setWeekToClose(week);
                                   setShowCloseWeekModal(true);
                                 }}
-                                className="p-1.5 bg-orange-50 text-orange-600 rounded-lg hover:bg-orange-100 transition-colors"
+                                className="flex-1 py-1.5 bg-orange-50 text-orange-600 rounded-lg hover:bg-orange-100 transition-colors text-xs font-medium flex items-center justify-center gap-1"
                                 title="Close Week"
                               >
                                 <Archive className="w-3 h-3" />
                               </button>
                             )}
                           </div>
+                          
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              exportWeeklyReport(week);
+                            }}
+                            className="w-full py-1.5 bg-gray-50 text-gray-600 rounded-lg hover:bg-gray-100 transition-colors text-xs font-medium flex items-center justify-center gap-1"
+                          >
+                            <FileSpreadsheet className="w-3 h-3" />
+                            Export CSV
+                          </button>
                         </div>
                       </div>
-                    </div>
-                  ))}
+                    ))}
+                  </div>
+                ) : (
+                  // List View
+                  <div className="space-y-2">
+                    {filteredWeeklyPerformance.map((week, index) => (
+                      <div 
+                        key={index}
+                        className="bg-white border border-gray-200 rounded-lg p-3 hover:bg-gray-50 transition-colors cursor-pointer"
+                        onClick={() => {
+                          setSelectedWeek(week);
+                          setShowWeekDetails(true);
+                        }}
+                      >
+                        <div className="flex items-center justify-between">
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2">
+                              <div className="font-medium text-black truncate">{week.week}</div>
+                              <div className={`px-2 py-0.5 rounded-full text-xs font-medium ${
+                                week.status === 'active' 
+                                  ? 'bg-emerald-100 text-emerald-800'
+                                  : week.status === 'completed'
+                                  ? 'bg-blue-100 text-blue-800'
+                                  : 'bg-gray-100 text-gray-800'
+                              }`}>
+                                {week.status.charAt(0).toUpperCase() + week.status.slice(1)}
+                              </div>
+                            </div>
+                            <div className="text-xs text-black mt-1">
+                              {formatDate(week.weekStart)} - {formatDate(week.weekEnd)}
+                            </div>
+                          </div>
+                          
+                          <div className="flex items-center gap-3 ml-3">
+                            <div className="text-right">
+                              <div className="font-semibold text-black">{week.totalSold}/{week.totalGiven}</div>
+                              <div className={`text-xs ${
+                                week.sellThroughRate >= 70 ? 'text-emerald-600' :
+                                week.sellThroughRate >= 50 ? 'text-yellow-600' : 'text-red-600'
+                              }`}>
+                                {week.sellThroughRate.toFixed(0)}%
+                              </div>
+                            </div>
+                            <div className="flex flex-col gap-1">
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setSelectedWeek(week);
+                                  setShowWeekDetails(true);
+                                }}
+                                className="p-1.5 bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100 transition-colors"
+                                title="View Details"
+                              >
+                                <Eye className="w-3 h-3" />
+                              </button>
+                              {week.status === 'active' && week.remaining > 0 && (
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setWeekToClose(week);
+                                    setShowCloseWeekModal(true);
+                                  }}
+                                  className="p-1.5 bg-orange-50 text-orange-600 rounded-lg hover:bg-orange-100 transition-colors"
+                                  title="Close Week"
+                                >
+                                  <Archive className="w-3 h-3" />
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="px-4 sm:px-6 py-8 text-center">
+                <Search className="w-12 h-12 text-gray-300 mx-auto mb-4" />
+                <div className="text-lg font-medium text-black mb-2">No Results Found</div>
+                <div className="text-sm text-black max-w-md mx-auto mb-4">
+                  No weeks match your search criteria. Try a different search term or filter.
                 </div>
-              )}
-            </div>
+                <button
+                  onClick={() => {
+                    setSearchQuery("");
+                    setFilterStatus("all");
+                  }}
+                  className="inline-flex items-center gap-2 px-4 py-2 bg-gray-100 text-black rounded-lg hover:bg-gray-200 transition-colors text-sm"
+                >
+                  Clear Filters
+                </button>
+              </div>
+            )
           ) : (
             <div className="px-4 sm:px-6 py-12 text-center">
-              <CalendarDays className="w-12 h-12 text-gray-300 mx-auto mb-4" />
-              <div className="text-lg font-medium text-black mb-2">No Weekly Data</div>
-              <div className="text-black max-w-md mx-auto mb-6 text-sm">
-                No inventory has been assigned to this staff member yet.
+              <Package className="w-16 h-16 text-gray-300 mx-auto mb-4" />
+              <div className="text-lg font-medium text-black mb-2">No Inventory Assigned</div>
+              <div className="text-sm text-black max-w-md mx-auto mb-6">
+                This staff member doesn't have any inventory assigned yet. Assign inventory to track their performance.
               </div>
               <Link
                 href="/admin/inventory/assign"
@@ -1251,12 +1797,12 @@ const StaffDetailsPage = () => {
         {/* Edit Assignment Modal */}
         {editingItem && (
           <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-3 sm:p-4 z-50">
-            <div className="bg-white rounded-xl shadow-xl w-full max-w-lg">
-              <div className="px-4 sm:px-6 py-4 border-b border-gray-200">
+            <div className="bg-white rounded-xl shadow-xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
+              <div className="px-4 sm:px-6 py-4 border-b border-gray-200 sticky top-0 bg-white">
                 <div className="flex items-center justify-between">
                   <div>
                     <div className="text-lg font-semibold text-black">Edit Assignment</div>
-                    <div className="text-sm text-black">{editingItem.product?.name}</div>
+                    <div className="text-sm text-black">{editingItem.product?.name || 'Unknown Product'}</div>
                   </div>
                   <button
                     onClick={() => setEditingItem(null)}
@@ -1274,26 +1820,26 @@ const StaffDetailsPage = () => {
                     <div className="grid grid-cols-2 gap-4">
                       <div>
                         <div className="text-xs font-medium text-black mb-1">Staff</div>
-                        <div className="text-sm font-semibold text-black">{editingItem.staff?.name}</div>
+                        <div className="text-sm font-semibold text-black">{editingItem.staff?.name || 'Unknown Staff'}</div>
                       </div>
                       <div>
                         <div className="text-xs font-medium text-black mb-1">Product</div>
-                        <div className="text-sm font-semibold text-black">{editingItem.product?.name}</div>
-                        <div className="text-xs text-black">{editingItem.product?.category}</div>
+                        <div className="text-sm font-semibold text-black">{editingItem.product?.name || 'Unknown Product'}</div>
+                        <div className="text-xs text-black">{editingItem.product?.category || 'N/A'}</div>
                       </div>
                     </div>
                     <div className="mt-3 pt-3 border-t border-gray-200 grid grid-cols-3 gap-2">
                       <div className="text-center">
                         <div className="text-xs text-black">Current</div>
-                        <div className="text-sm font-bold">{editingItem.quantityGiven}</div>
+                        <div className="text-sm font-bold">{editingItem.quantityGiven || 0}</div>
                       </div>
                       <div className="text-center">
                         <div className="text-xs text-black">Sold</div>
-                        <div className="text-sm font-bold text-emerald-600">{editingItem.quantitySold}</div>
+                        <div className="text-sm font-bold text-emerald-600">{editingItem.quantitySold || 0}</div>
                       </div>
                       <div className="text-center">
                         <div className="text-xs text-black">Returned</div>
-                        <div className="text-sm font-bold text-orange-600">{editingItem.quantityReturned}</div>
+                        <div className="text-sm font-bold text-orange-600">{editingItem.quantityReturned || 0}</div>
                       </div>
                     </div>
                     
@@ -1305,6 +1851,11 @@ const StaffDetailsPage = () => {
                           {availableStock} items
                         </div>
                       </div>
+                      {availableStock <= 0 && (
+                        <div className="text-xs text-red-600 mt-1">
+                          Warning: No stock available. Cannot add more items.
+                        </div>
+                      )}
                     </div>
                   </div>
 
@@ -1331,7 +1882,7 @@ const StaffDetailsPage = () => {
                         min="0"
                       />
                       <div className="text-xs text-black mt-1">
-                        Max: {editingItem.quantityGiven + availableStock}
+                        Max: {(editingItem.quantityGiven || 0) + availableStock}
                       </div>
                     </div>
                     <div>
@@ -1389,8 +1940,8 @@ const StaffDetailsPage = () => {
                   </div>
 
                   {/* Stock Impact Warning */}
-                  {(parseInt(editForm.quantityGiven) > editingItem.quantityGiven || 
-                    parseInt(editForm.quantityReturned) > editingItem.quantityReturned) && (
+                  {(parseInt(editForm.quantityGiven) > (editingItem.quantityGiven || 0) || 
+                    parseInt(editForm.quantityReturned) > (editingItem.quantityReturned || 0)) && (
                     <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-3">
                       <div className="flex items-start gap-2">
                         <AlertTriangle className="w-4 h-4 text-yellow-600 flex-shrink-0 mt-0.5" />
@@ -1401,9 +1952,9 @@ const StaffDetailsPage = () => {
                     </div>
                   )}
                   
-                  {/* Add/Remove Quick Actions */}
+                  {/* Quick Actions */}
                   <div className="border-t border-gray-200 pt-4">
-                    <div className="text-xs font-medium text-black mb-2">Quick Adjustments</div>
+                    <div className="text-xs font-medium text-black mb-2">Quick Actions</div>
                     <div className="flex gap-2">
                       <button
                         onClick={() => {
@@ -1414,7 +1965,8 @@ const StaffDetailsPage = () => {
                           setShowAdjustModal(true);
                           setEditingItem(null);
                         }}
-                        className="flex-1 py-2 bg-emerald-50 text-emerald-700 rounded-lg hover:bg-emerald-100 transition-colors text-xs font-medium flex items-center justify-center gap-1"
+                        disabled={availableStock <= 0}
+                        className="flex-1 py-2 bg-emerald-50 text-emerald-700 rounded-lg hover:bg-emerald-100 transition-colors text-xs font-medium flex items-center justify-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed"
                       >
                         <Plus className="w-3 h-3" />
                         Add Items
@@ -1438,7 +1990,7 @@ const StaffDetailsPage = () => {
                 </div>
               </div>
               
-              <div className="px-4 sm:px-6 py-4 border-t border-gray-200 flex justify-end gap-3">
+              <div className="px-4 sm:px-6 py-4 border-t border-gray-200 flex justify-end gap-3 sticky bottom-0 bg-white">
                 <button
                   onClick={() => setEditingItem(null)}
                   className="px-4 py-2 border border-gray-300 text-black rounded-lg hover:bg-gray-50 transition-colors text-sm"
@@ -1524,31 +2076,33 @@ const StaffDetailsPage = () => {
                 </div>
 
                 {/* Search Bar for Assigned Items */}
-                <div className="px-4 sm:px-6 pb-4">
-                  <div className="bg-gray-50 border border-gray-200 rounded-lg p-3">
-                    <div className="relative">
-                      <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-500" />
-                      <input
-                        type="text"
-                        value={searchProductQuery}
-                        onChange={(e) => setSearchProductQuery(e.target.value)}
-                        placeholder="Search assigned items by product name or category..."
-                        className="w-full pl-10 pr-4 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-black placeholder-gray-500"
-                      />
-                      {searchProductQuery && (
-                        <button
-                          onClick={() => setSearchProductQuery("")}
-                          className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-500 hover:text-gray-700"
-                        >
-                          <X className="w-3 h-3" />
-                        </button>
-                      )}
-                    </div>
-                    <div className="text-xs text-black mt-2">
-                      {getFilteredInventory().length} of {selectedWeek.inventory.length} items shown
+                {selectedWeek.inventory.length > 0 && (
+                  <div className="px-4 sm:px-6 pb-4">
+                    <div className="bg-gray-50 border border-gray-200 rounded-lg p-3">
+                      <div className="relative">
+                        <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-500" />
+                        <input
+                          type="text"
+                          value={searchProductQuery}
+                          onChange={(e) => setSearchProductQuery(e.target.value)}
+                          placeholder="Search assigned items by product name or category..."
+                          className="w-full pl-10 pr-4 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-black placeholder-gray-500"
+                        />
+                        {searchProductQuery && (
+                          <button
+                            onClick={() => setSearchProductQuery("")}
+                            className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-500 hover:text-gray-700"
+                          >
+                            <X className="w-3 h-3" />
+                          </button>
+                        )}
+                      </div>
+                      <div className="text-xs text-black mt-2">
+                        {getFilteredInventory().length} of {selectedWeek.inventory.length} items shown
+                      </div>
                     </div>
                   </div>
-                </div>
+                )}
 
                 {/* Inventory Section */}
                 <div className="px-4 sm:px-6 pb-6">
@@ -1559,9 +2113,17 @@ const StaffDetailsPage = () => {
                     </div>
                   </div>
                   
-                  {getFilteredInventory().length === 0 ? (
+                  {selectedWeek.inventory.length === 0 ? (
                     <div className="text-center py-8">
                       <Package className="w-12 h-12 text-gray-300 mx-auto mb-3" />
+                      <div className="text-black font-medium">No items assigned for this week</div>
+                      <div className="text-sm text-black mt-1">
+                        All items have been processed or returned
+                      </div>
+                    </div>
+                  ) : getFilteredInventory().length === 0 ? (
+                    <div className="text-center py-8">
+                      <Search className="w-12 h-12 text-gray-300 mx-auto mb-3" />
                       <div className="text-black font-medium">No items found</div>
                       <div className="text-sm text-black mt-1">
                         Try a different search term
@@ -1570,16 +2132,20 @@ const StaffDetailsPage = () => {
                   ) : (
                     <div className="space-y-3">
                       {getFilteredInventory().map((inventory) => {
-                        const remaining = inventory.quantityGiven - inventory.quantitySold - inventory.quantityReturned;
-                        const sellThroughRate = inventory.quantityGiven > 0 
-                          ? (inventory.quantitySold / inventory.quantityGiven) * 100 
+                        const quantityGiven = inventory.quantityGiven || 0;
+                        const quantitySold = inventory.quantitySold || 0;
+                        const quantityReturned = inventory.quantityReturned || 0;
+                        const remaining = quantityGiven - quantitySold - quantityReturned;
+                        const sellThroughRate = quantityGiven > 0 
+                          ? (quantitySold / quantityGiven) * 100 
                           : 0;
+                        const stockAvailable = getAvailableStock(inventory.productId);
                         
                         return (
-                          <div key={inventory.id} className="bg-gray-50 rounded-xl p-4 border border-gray-200">
+                          <div key={inventory.id} className="bg-gray-50 rounded-xl p-4 border border-gray-200 hover:bg-gray-100 transition-colors">
                             <div className="flex items-start justify-between mb-3">
                               <div className="flex-1">
-                                <div className="font-medium text-black text-sm">{inventory.product?.name}</div>
+                                <div className="font-medium text-black text-sm">{inventory.product?.name || 'Unknown Product'}</div>
                                 <div className="text-xs text-black mt-1">
                                   Category: {inventory.product?.category || 'N/A'} | 
                                   Price: {formatCurrency(inventory.product?.price || 0)}
@@ -1611,7 +2177,8 @@ const StaffDetailsPage = () => {
                                         setAdjustReason('');
                                         setShowAdjustModal(true);
                                       }}
-                                      className="inline-flex items-center gap-1 px-2 py-1 bg-emerald-100 text-emerald-700 rounded-lg text-xs hover:bg-emerald-200 transition-colors"
+                                      disabled={stockAvailable <= 0}
+                                      className="inline-flex items-center gap-1 px-2 py-1 bg-emerald-100 text-emerald-700 rounded-lg text-xs hover:bg-emerald-200 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                                       title="Add Items"
                                     >
                                       <Plus className="w-3 h-3" />
@@ -1636,7 +2203,6 @@ const StaffDetailsPage = () => {
                                   onClick={(e) => {
                                     e.stopPropagation();
                                     handleEditClick(inventory);
-                                    setShowWeekDetails(false);
                                   }}
                                   className="inline-flex items-center gap-1 px-2 py-1 bg-blue-100 text-blue-700 rounded-lg text-xs hover:bg-blue-200 transition-colors"
                                   title="Edit Assignment"
@@ -1649,15 +2215,15 @@ const StaffDetailsPage = () => {
                             <div className="grid grid-cols-5 gap-2">
                               <div className="text-center">
                                 <div className="text-xs text-black">Assigned</div>
-                                <div className="font-bold">{inventory.quantityGiven}</div>
+                                <div className="font-bold">{quantityGiven}</div>
                               </div>
                               <div className="text-center">
                                 <div className="text-xs text-black">Sold</div>
-                                <div className="font-bold text-emerald-600">{inventory.quantitySold}</div>
+                                <div className="font-bold text-emerald-600">{quantitySold}</div>
                               </div>
                               <div className="text-center">
                                 <div className="text-xs text-black">Returned</div>
-                                <div className="font-bold text-orange-600">{inventory.quantityReturned}</div>
+                                <div className="font-bold text-orange-600">{quantityReturned}</div>
                               </div>
                               <div className="text-center">
                                 <div className="text-xs text-black">Remaining</div>
@@ -1688,9 +2254,9 @@ const StaffDetailsPage = () => {
                                       handleDeleteAssignment(inventory.id);
                                     }
                                   }}
-                                  className="text-xs text-red-600 hover:text-red-800"
+                                  className="text-xs text-red-600 hover:text-red-800 flex items-center gap-1"
                                 >
-                                  <Trash2 className="w-3 h-3 inline-block mr-1" />
+                                  <Trash2 className="w-3 h-3" />
                                   Delete
                                 </button>
                               </div>
@@ -1715,15 +2281,15 @@ const StaffDetailsPage = () => {
                     <div className="bg-orange-50 border border-orange-200 rounded-xl p-4">
                       <div className="space-y-3">
                         {selectedWeek.inventory
-                          .filter(inv => inv.quantityReturned > 0)
+                          .filter(inv => (inv.quantityReturned || 0) > 0)
                           .map((inventory) => (
                             <div key={inventory.id} className="flex items-center justify-between">
                               <div>
-                                <div className="font-medium text-black text-sm">{inventory.product?.name}</div>
+                                <div className="font-medium text-black text-sm">{inventory.product?.name || 'Unknown Product'}</div>
                                 <div className="text-xs text-black">{inventory.product?.category || 'N/A'}</div>
                               </div>
                               <div className="text-right">
-                                <div className="font-bold text-orange-600">{inventory.quantityReturned} items</div>
+                                <div className="font-bold text-orange-600">{inventory.quantityReturned || 0} items</div>
                                 <div className="text-xs text-black">
                                   Last update: {formatDate(inventory.updatedAt)}
                                 </div>
@@ -1757,14 +2323,14 @@ const StaffDetailsPage = () => {
                             </div>
                             <div className="text-right">
                               <div className="font-bold text-emerald-600 text-sm">
-                                {formatCurrency(sale.amount)}
+                                {formatCurrency(sale.amount || 0)}
                               </div>
                               <div className={`text-xs mt-1 px-2 py-0.5 rounded-full inline-block ${
                                 sale.status === 'PAID' 
                                   ? 'bg-emerald-100 text-emerald-800'
                                   : 'bg-yellow-100 text-yellow-800'
                               }`}>
-                                {sale.status}
+                                {sale.status || 'UNKNOWN'}
                               </div>
                             </div>
                           </div>
@@ -1792,9 +2358,9 @@ const StaffDetailsPage = () => {
                       setWeekToClose(selectedWeek);
                       setShowCloseWeekModal(true);
                     }}
-                    className="px-4 py-2 bg-orange-500 text-white rounded-lg hover:bg-orange-600 transition-colors text-sm font-medium"
+                    className="px-4 py-2 bg-orange-500 text-white rounded-lg hover:bg-orange-600 transition-colors text-sm font-medium flex items-center gap-1"
                   >
-                    <Archive className="w-3 h-3 inline-block mr-1" />
+                    <Archive className="w-3 h-3" />
                     Close Week
                   </button>
                 )}
@@ -1834,20 +2400,20 @@ const StaffDetailsPage = () => {
                 <div className="space-y-4">
                   <div className="bg-gray-50 rounded-xl p-4 border border-gray-200">
                     <div className="text-sm font-medium text-black mb-1">Product</div>
-                    <div className="text-lg font-bold text-black">{selectedInventory.product?.name}</div>
+                    <div className="text-lg font-bold text-black">{selectedInventory.product?.name || 'Unknown Product'}</div>
                     
                     <div className="grid grid-cols-3 gap-2 mt-3">
                       <div className="text-center">
                         <div className="text-xs text-black">Assigned</div>
-                        <div className="text-lg font-bold">{selectedInventory.quantityGiven}</div>
+                        <div className="text-lg font-bold">{selectedInventory.quantityGiven || 0}</div>
                       </div>
                       <div className="text-center">
                         <div className="text-xs text-black">Sold</div>
-                        <div className="text-lg font-bold text-emerald-600">{selectedInventory.quantitySold}</div>
+                        <div className="text-lg font-bold text-emerald-600">{selectedInventory.quantitySold || 0}</div>
                       </div>
                       <div className="text-center">
                         <div className="text-xs text-black">Returned</div>
-                        <div className="text-lg font-bold text-orange-600">{selectedInventory.quantityReturned}</div>
+                        <div className="text-lg font-bold text-orange-600">{selectedInventory.quantityReturned || 0}</div>
                       </div>
                     </div>
                     
@@ -1855,7 +2421,7 @@ const StaffDetailsPage = () => {
                       <div className="flex items-center justify-between">
                         <div className="text-sm text-black">Remaining:</div>
                         <div className="text-lg font-bold text-blue-600">
-                          {selectedInventory.quantityGiven - selectedInventory.quantitySold - selectedInventory.quantityReturned}
+                          {(selectedInventory.quantityGiven || 0) - (selectedInventory.quantitySold || 0) - (selectedInventory.quantityReturned || 0)}
                         </div>
                       </div>
                     </div>
@@ -1872,16 +2438,16 @@ const StaffDetailsPage = () => {
                       className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-black"
                       placeholder="Enter quantity"
                       min="1"
-                      max={selectedInventory.quantityGiven - selectedInventory.quantitySold - selectedInventory.quantityReturned}
+                      max={(selectedInventory.quantityGiven || 0) - (selectedInventory.quantitySold || 0) - (selectedInventory.quantityReturned || 0)}
                     />
                     <div className="text-xs text-black mt-1">
-                      Max: {selectedInventory.quantityGiven - selectedInventory.quantitySold - selectedInventory.quantityReturned} items
+                      Max: {(selectedInventory.quantityGiven || 0) - (selectedInventory.quantitySold || 0) - (selectedInventory.quantityReturned || 0)} items
                     </div>
                   </div>
                   
                   <div>
                     <label className="block text-sm font-medium text-black mb-1">
-                      Reason for Return (Optional)
+                      Reason for Return
                     </label>
                     <select
                       value={returnReason}
@@ -1894,6 +2460,7 @@ const StaffDetailsPage = () => {
                       <option value="Expired">Expired</option>
                       <option value="Wrong Item">Wrong Item</option>
                       <option value="Customer Return">Customer Return</option>
+                      <option value="Week Closure">Week Closure</option>
                       <option value="Other">Other</option>
                     </select>
                   </div>
@@ -1914,7 +2481,7 @@ const StaffDetailsPage = () => {
                 </button>
                 <button
                   onClick={handleReturnItems}
-                  disabled={!returnQuantity || parseInt(returnQuantity) > (selectedInventory.quantityGiven - selectedInventory.quantitySold - selectedInventory.quantityReturned)}
+                  disabled={!returnQuantity || parseInt(returnQuantity) > ((selectedInventory.quantityGiven || 0) - (selectedInventory.quantitySold || 0) - (selectedInventory.quantityReturned || 0))}
                   className="px-4 py-2 bg-orange-500 text-white rounded-lg hover:bg-orange-600 transition-colors disabled:opacity-50 text-sm font-medium"
                 >
                   Process Return
@@ -1951,17 +2518,17 @@ const StaffDetailsPage = () => {
                 <div className="space-y-4">
                   <div className="bg-gray-50 rounded-xl p-4 border border-gray-200">
                     <div className="text-sm font-medium text-black mb-1">Product</div>
-                    <div className="text-lg font-bold text-black">{selectedInventory.product?.name}</div>
+                    <div className="text-lg font-bold text-black">{selectedInventory.product?.name || 'Unknown Product'}</div>
                     
                     <div className="grid grid-cols-2 gap-2 mt-3">
                       <div className="text-center">
                         <div className="text-xs text-black">Current</div>
-                        <div className="text-lg font-bold">{selectedInventory.quantityGiven}</div>
+                        <div className="text-lg font-bold">{selectedInventory.quantityGiven || 0}</div>
                       </div>
                       <div className="text-center">
                         <div className="text-xs text-black">Remaining</div>
                         <div className="text-lg font-bold text-blue-600">
-                          {selectedInventory.quantityGiven - selectedInventory.quantitySold - selectedInventory.quantityReturned}
+                          {(selectedInventory.quantityGiven || 0) - (selectedInventory.quantitySold || 0) - (selectedInventory.quantityReturned || 0)}
                         </div>
                       </div>
                     </div>
@@ -1974,6 +2541,11 @@ const StaffDetailsPage = () => {
                             {availableStock} items
                           </div>
                         </div>
+                        {availableStock <= 0 && (
+                          <div className="text-xs text-red-600 mt-1">
+                            No stock available. Cannot add items.
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>
@@ -1989,12 +2561,12 @@ const StaffDetailsPage = () => {
                       className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-black"
                       placeholder={`Enter quantity to ${adjustType}`}
                       min="1"
-                      max={adjustType === 'add' ? availableStock : (selectedInventory.quantityGiven - selectedInventory.quantitySold - selectedInventory.quantityReturned)}
+                      max={adjustType === 'add' ? availableStock : ((selectedInventory.quantityGiven || 0) - (selectedInventory.quantitySold || 0) - (selectedInventory.quantityReturned || 0))}
                     />
                     <div className="text-xs text-black mt-1">
                       {adjustType === 'add' 
                         ? `Max: ${availableStock} items available in stock`
-                        : `Max: ${selectedInventory.quantityGiven - selectedInventory.quantitySold - selectedInventory.quantityReturned} items remaining`
+                        : `Max: ${(selectedInventory.quantityGiven || 0) - (selectedInventory.quantitySold || 0) - (selectedInventory.quantityReturned || 0)} items remaining`
                       }
                     </div>
                   </div>
@@ -2028,7 +2600,7 @@ const StaffDetailsPage = () => {
                 </button>
                 <button
                   onClick={handleAdjustItems}
-                  disabled={!adjustQuantity || parseInt(adjustQuantity) > (adjustType === 'add' ? availableStock : (selectedInventory.quantityGiven - selectedInventory.quantitySold - selectedInventory.quantityReturned))}
+                  disabled={!adjustQuantity || parseInt(adjustQuantity) > (adjustType === 'add' ? availableStock : ((selectedInventory.quantityGiven || 0) - (selectedInventory.quantitySold || 0) - (selectedInventory.quantityReturned || 0)))}
                   className={`px-4 py-2 ${adjustType === 'add' ? 'bg-emerald-500 hover:bg-emerald-600' : 'bg-orange-500 hover:bg-orange-600'} text-white rounded-lg transition-colors disabled:opacity-50 text-sm font-medium`}
                 >
                   {adjustType === 'add' ? 'Add Items' : 'Remove Items'}
@@ -2145,24 +2717,26 @@ const StaffDetailsPage = () => {
               <Printer className="w-3 h-3" />
               Print Report
             </button>
-            <button
-              onClick={() => {
-                const csvContent = `Staff,${staff.name}\nEmail,${staff.email || ''}\nPhone,${staff.phone || ''}\n\nWeek,Start Date,End Date,Status,Assigned,Sold,Returned,Remaining,Rate%,Revenue\n${weeklyPerformance.map(w => `${w.week},${formatDate(w.weekStart)},${formatDate(w.weekEnd)},${w.status},${w.totalGiven},${w.totalSold},${w.totalReturned},${w.remaining},${w.sellThroughRate.toFixed(1)}%,${formatCurrency(w.totalRevenue)}`).join('\n')}`;
-                const blob = new Blob([csvContent], { type: 'text/csv' });
-                const url = window.URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = `staff-${staff.name.replace(/\s+/g, '-')}-complete-report.csv`;
-                document.body.appendChild(a);
-                a.click();
-                window.URL.revokeObjectURL(url);
-                document.body.removeChild(a);
-              }}
-              className="inline-flex items-center gap-1 text-black hover:text-gray-900 text-xs"
-            >
-              <FileSpreadsheet className="w-3 h-3" />
-              Export Complete Report
-            </button>
+            {weeklyPerformance.length > 0 && (
+              <button
+                onClick={() => {
+                  const csvContent = `Staff,${staff.name}\nEmail,${staff.email || ''}\nPhone,${staff.phone || ''}\n\nWeek,Start Date,End Date,Status,Assigned,Sold,Returned,Remaining,Rate%,Revenue\n${weeklyPerformance.map(w => `${w.week},${formatDate(w.weekStart)},${formatDate(w.weekEnd)},${w.status},${w.totalGiven},${w.totalSold},${w.totalReturned},${w.remaining},${w.sellThroughRate.toFixed(1)}%,${formatCurrency(w.totalRevenue)}`).join('\n')}`;
+                  const blob = new Blob([csvContent], { type: 'text/csv' });
+                  const url = window.URL.createObjectURL(blob);
+                  const a = document.createElement('a');
+                  a.href = url;
+                  a.download = `staff-${staff.name.replace(/\s+/g, '-')}-complete-report.csv`;
+                  document.body.appendChild(a);
+                  a.click();
+                  window.URL.revokeObjectURL(url);
+                  document.body.removeChild(a);
+                }}
+                className="inline-flex items-center gap-1 text-black hover:text-gray-900 text-xs"
+              >
+                <FileSpreadsheet className="w-3 h-3" />
+                Export Complete Report
+              </button>
+            )}
           </div>
         </div>
       </div>
