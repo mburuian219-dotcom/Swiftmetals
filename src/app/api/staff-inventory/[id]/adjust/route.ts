@@ -6,10 +6,11 @@ const prisma = new PrismaClient();
 
 export async function POST(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }  // Changed: params is now a Promise
 ) {
   try {
-    const inventoryId = parseInt(params.id);
+    const { id } = await params;  // Await the params first
+    const inventoryId = parseInt(id);
     const body = await request.json();
     
     const { 
@@ -47,7 +48,10 @@ export async function POST(
       include: {
         product: {
           include: {
-            stock: true
+            stock: {
+              orderBy: { createdAt: 'desc' },
+              take: 1
+            }
           }
         },
         staff: true
@@ -92,7 +96,7 @@ export async function POST(
     }
 
     // Perform adjustment
-    return await prisma.$transaction(async (tx) => {
+    const result = await prisma.$transaction(async (tx) => {
       let newQuantityGiven = inventory.quantityGiven;
       
       // Update inventory
@@ -106,8 +110,7 @@ export async function POST(
         where: { id: inventoryId },
         data: {
           quantityGiven: newQuantityGiven,
-          // You could add an adjustmentNotes field
-          // adjustmentNotes: `${action === 'ADD' ? 'Added' : 'Removed'} ${quantity} items. Reason: ${reason || 'No reason provided'}`
+          updatedAt: new Date()
         }
       });
 
@@ -115,8 +118,11 @@ export async function POST(
       const stockAdjustment = action === 'ADD' ? -quantity : quantity; // ADD: take from stock, REMOVE: return to stock
       
       const stockItem = await tx.stock.findFirst({
-        where: { productId: inventory.productId }
+        where: { productId: inventory.productId },
+        orderBy: { createdAt: 'desc' }
       });
+
+      let ledgerEntry = null;
 
       if (stockItem) {
         await tx.stock.update({
@@ -126,47 +132,81 @@ export async function POST(
             updatedAt: new Date()
           }
         });
+
+        // Create ledger entry
+        ledgerEntry = await tx.cashledger.create({
+          data: {
+            date: new Date(),
+            description: `${action === 'ADD' ? 'Added' : 'Removed'} ${quantity} x ${inventory.product.name} ${action === 'ADD' ? 'to' : 'from'} ${inventory.staff.name}. ${reason ? `Reason: ${reason}` : ''}`,
+            type: action === 'ADD' ? 'OUT' : 'IN', // OUT for adding to staff, IN for removing from staff
+            category: 'STAFF_INVENTORY_ADJUSTMENT',
+            amount: Math.abs(stockAdjustment) * (stockItem?.costPrice || inventory.product.productionCost || 0),
+            relatedTo: 'STAFF_INVENTORY',
+            affectedAccounts: 'STOCK',
+            referenceId: inventoryId,
+            referenceType: 'STAFF_INVENTORY',
+            createdAt: new Date(),
+            updatedAt: new Date()
+          }
+        });
       }
 
-      // Create ledger entry
-      await tx.cashledger.create({
-        data: {
-          date: new Date(),
-          description: `${action === 'ADD' ? 'Added' : 'Removed'} ${quantity} x ${inventory.product.name} ${action === 'ADD' ? 'to' : 'from'} ${inventory.staff.name}. ${reason ? `Reason: ${reason}` : ''}`,
-          type: action === 'ADD' ? 'OUT' : 'IN', // OUT for adding to staff, IN for removing from staff
-          category: 'STAFF_INVENTORY_ADJUSTMENT',
-          amount: Math.abs(stockAdjustment) * (stockItem?.costPrice || inventory.product.productionCost || 0),
-          relatedTo: 'STAFF_INVENTORY',
-          affectedAccounts: 'STOCK',
-          referenceId: inventoryId,
-          referenceType: 'STAFF_INVENTORY',
-          createdAt: new Date(),
-          updatedAt: new Date()
-        }
-      });
+      return { updatedInventory, ledgerEntry, stockItem };
+    });
 
-      return NextResponse.json({
-        success: true,
-        data: {
-          inventory: updatedInventory,
-          adjustment: {
-            action,
-            quantity,
-            previousQuantity: inventory.quantityGiven,
-            newQuantity: newQuantityGiven,
-            reason,
-            adjustedBy,
-            adjustedAt: new Date()
-          }
+    // Calculate new available quantity after adjustment
+    const newAvailable = result.updatedInventory.quantityGiven - inventory.quantitySold - inventory.quantityReturned;
+
+    return NextResponse.json({
+      success: true,
+      data: {
+        inventory: result.updatedInventory,
+        adjustment: {
+          action,
+          quantity,
+          previousQuantity: inventory.quantityGiven,
+          newQuantity: result.updatedInventory.quantityGiven,
+          previousAvailable: currentAvailable,
+          newAvailable,
+          reason,
+          adjustedBy,
+          adjustedAt: new Date()
         },
-        message: `Successfully ${action === 'ADD' ? 'added' : 'removed'} ${quantity} items`
-      });
+        stockInfo: {
+          productId: inventory.productId,
+          productName: inventory.product.name,
+          stockBefore: result.stockItem ? result.stockItem.quantity - (action === 'ADD' ? -quantity : quantity) : 0,
+          stockAfter: result.stockItem ? result.stockItem.quantity : 0,
+          adjustment: action === 'ADD' ? -quantity : quantity
+        }
+      },
+      message: `Successfully ${action === 'ADD' ? 'added' : 'removed'} ${quantity} items`
     });
 
   } catch (error: any) {
     console.error('Adjustment error:', error);
+    
+    // Handle specific Prisma errors
+    if (error.code === 'P2025') {
+      return NextResponse.json(
+        { success: false, error: 'Inventory not found' },
+        { status: 404 }
+      );
+    }
+    
+    if (error.code === 'P2002') {
+      return NextResponse.json(
+        { success: false, error: 'Database constraint violation' },
+        { status: 400 }
+      );
+    }
+
     return NextResponse.json(
-      { success: false, error: error.message || 'Failed to adjust inventory' },
+      { 
+        success: false, 
+        error: error.message || 'Failed to adjust inventory',
+        details: process.env.NODE_ENV === 'development' ? error.toString() : undefined
+      },
       { status: 500 }
     );
   } finally {
