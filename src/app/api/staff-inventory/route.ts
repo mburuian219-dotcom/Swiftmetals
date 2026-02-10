@@ -24,11 +24,6 @@ function isDateInCurrentWeek(date: Date) {
   return date >= weekStartDate && date <= weekEndDate;
 }
 
-// Helper: Format date for database query
-function formatDateForDB(date: Date) {
-  return date.toISOString();
-}
-
 // GET all staff inventory assignments
 export async function GET(req: NextRequest) {
   try {
@@ -197,7 +192,7 @@ export async function POST(req: NextRequest) {
   }
 }
 
-// Handle single inventory assignment (UPDATED for weekly tracking)
+// Handle single inventory assignment
 async function handleAssignInventory(data: any) {
   // Validation
   if (!data.staffId || !data.productId || !data.quantityGiven) {
@@ -259,7 +254,7 @@ async function handleAssignInventory(data: any) {
     );
   }
 
-  // NEW: Check for duplicate weekly assignment
+  // Check for duplicate weekly assignment
   const weekStartDate = data.weekStartDate ? new Date(data.weekStartDate) : null;
   const weekEndDate = data.weekEndDate ? new Date(data.weekEndDate) : null;
   
@@ -281,7 +276,7 @@ async function handleAssignInventory(data: any) {
     }
   }
 
-  // Check for existing assignment to same staff and product (without weekly dates)
+  // Check for existing assignment to same staff and product
   const existingAssignment = await prisma.staffInventory.findFirst({
     where: {
       staffId,
@@ -316,7 +311,7 @@ async function handleAssignInventory(data: any) {
       }
     });
   } else {
-    // Create new staff inventory record with weekly dates
+    // Create new staff inventory record
     staffInventory = await prisma.staffInventory.create({
       data: {
         staffId,
@@ -344,13 +339,6 @@ async function handleAssignInventory(data: any) {
       }
     });
   }
-
-  console.log(`📦 Assigned inventory:`, {
-    staff: staff.name,
-    product: product.name,
-    quantity: quantityGiven,
-    week: weekStartDate ? `${weekStartDate.toDateString()} - ${weekEndDate?.toDateString()}` : 'No week specified'
-  });
 
   return NextResponse.json(staffInventory, { status: 201 });
 }
@@ -416,31 +404,14 @@ async function handleReturnInventory(data: any) {
     },
     include: {
       staff: true,
-      product: true,
-      saleItems: {
-        include: {
-          sale: {
-            include: {
-              customer: true
-            }
-          }
-        }
-      }
+      product: true
     }
-  });
-
-  console.log(`🔄 Returned inventory:`, {
-    staff: inventory.staff.name,
-    product: inventory.product.name,
-    quantityReturned: quantityReturned,
-    totalReturned: updatedInventory.quantityReturned,
-    week: inventory.weekStartDate ? `${inventory.weekStartDate.toDateString()} - ${inventory.weekEndDate?.toDateString()}` : 'No week specified'
   });
 
   return NextResponse.json(updatedInventory);
 }
 
-// Handle bulk inventory return (UPDATED to use inventory ID)
+// Handle bulk inventory return
 async function handleBulkReturnInventory(data: any) {
   if (!data.items || !Array.isArray(data.items) || data.items.length === 0) {
     return NextResponse.json(
@@ -455,7 +426,7 @@ async function handleBulkReturnInventory(data: any) {
   for (const item of data.items) {
     try {
       const quantityReturned = parseInt(item.quantityReturned);
-      const inventoryId = parseInt(item.inventoryId); // Changed from assignmentId to inventoryId
+      const inventoryId = parseInt(item.inventoryId);
 
       if (isNaN(quantityReturned) || isNaN(inventoryId)) {
         errors.push(`Invalid data for item: ${JSON.stringify(item)}`);
@@ -495,16 +466,7 @@ async function handleBulkReturnInventory(data: any) {
         },
         include: {
           staff: true,
-          product: true,
-          saleItems: {
-            include: {
-              sale: {
-                include: {
-                  customer: true
-                }
-              }
-            }
-          }
+          product: true
         }
       });
 
@@ -523,7 +485,7 @@ async function handleBulkReturnInventory(data: any) {
   });
 }
 
-// Handle bulk assignment of inventory to staff (UPDATED for weekly tracking)
+// Handle bulk assignment of inventory to staff
 async function handleBulkAssignInventory(data: any) {
   // Validation
   if (!data.staffId || !data.items || !Array.isArray(data.items) || data.items.length === 0) {
@@ -599,12 +561,12 @@ async function handleBulkAssignInventory(data: any) {
     });
   }
 
-  // Create assignments in transaction
+  // Create assignments
   const results = [];
   
   try {
     for (const item of validatedItems) {
-      // Check for existing assignment to same staff and product in same week
+      // Check for existing assignment
       const existingAssignment = await prisma.staffInventory.findFirst({
         where: {
           staffId,
@@ -626,20 +588,11 @@ async function handleBulkAssignInventory(data: any) {
           },
           include: {
             staff: true,
-            product: true,
-            saleItems: {
-              include: {
-                sale: {
-                  include: {
-                    customer: true
-                  }
-                }
-              }
-            }
+            product: true
           }
         });
       } else {
-        // Create new staff inventory record with weekly dates
+        // Create new staff inventory record
         staffInventory = await prisma.staffInventory.create({
           data: {
             staffId,
@@ -654,32 +607,13 @@ async function handleBulkAssignInventory(data: any) {
           },
           include: {
             staff: true,
-            product: true,
-            saleItems: {
-              include: {
-                sale: {
-                  include: {
-                    customer: true
-                  }
-                }
-              }
-            }
+            product: true
           }
         });
       }
       
       results.push(staffInventory);
     }
-
-    // Log the bulk assignment
-    console.log(`Bulk assignment to staff ${staff.name}:`, {
-      totalItems: results.length,
-      week: weekStartDate ? `${weekStartDate.toDateString()} - ${weekEndDate?.toDateString()}` : 'No week specified',
-      items: results.map(r => ({
-        product: r.product.name,
-        quantity: r.quantityGiven
-      }))
-    });
 
     return NextResponse.json({
       success: true,
@@ -697,7 +631,7 @@ async function handleBulkAssignInventory(data: any) {
   }
 }
 
-// NEW: Handle close week
+// Handle close week
 async function handleCloseWeek(data: any) {
   try {
     const staffId = data.staffId ? parseInt(data.staffId) : null;
@@ -747,7 +681,6 @@ async function handleCloseWeek(data: any) {
       });
     }
 
-    const updates = [];
     const closedAssignments = [];
     let totalItemsReturned = 0;
 
@@ -757,7 +690,7 @@ async function handleCloseWeek(data: any) {
       
       if (remaining > 0) {
         // Update inventory to mark remaining as returned
-        const updatedInventory = await prisma.staffInventory.update({
+        await prisma.staffInventory.update({
           where: { id: inventory.id },
           data: {
             quantityReturned: inventory.quantityReturned + remaining,
@@ -775,11 +708,8 @@ async function handleCloseWeek(data: any) {
           quantitySold: inventory.quantitySold,
           quantityReturnedBefore: inventory.quantityReturned,
           quantityReturnedNow: remaining,
-          newTotalReturned: updatedInventory.quantityReturned,
           remainingBefore: remaining
         });
-
-        console.log(`✅ Closed inventory ${inventory.id}: Returned ${remaining} ${inventory.product.name}`);
       }
     }
 
@@ -803,8 +733,7 @@ async function handleCloseWeek(data: any) {
         totalAssignmentsProcessed: currentWeekInventory.length,
         assignmentsClosed: closedAssignments.length,
         totalItemsReturned
-      },
-      timestamp: new Date().toISOString()
+      }
     });
 
   } catch (error: any) {
@@ -812,15 +741,14 @@ async function handleCloseWeek(data: any) {
     return NextResponse.json(
       { 
         error: "Failed to close week", 
-        details: error.message,
-        stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+        details: error.message
       },
       { status: 500 }
     );
   }
 }
 
-// Complete an assignment (mark as returned all remaining)
+// Complete an assignment
 export async function PATCH(req: NextRequest) {
   try {
     const data = await req.json();
@@ -861,24 +789,8 @@ export async function PATCH(req: NextRequest) {
       },
       include: {
         staff: true,
-        product: true,
-        saleItems: {
-          include: {
-            sale: {
-              include: {
-                customer: true
-              }
-            }
-          }
-        }
+        product: true
       }
-    });
-
-    console.log(`✅ Completed assignment:`, {
-      staff: inventory.staff.name,
-      product: inventory.product.name,
-      returned: remaining,
-      week: inventory.weekStartDate ? `${inventory.weekStartDate.toDateString()} - ${inventory.weekEndDate?.toDateString()}` : 'No week specified'
     });
 
     return NextResponse.json({
@@ -905,10 +817,12 @@ export async function PATCH(req: NextRequest) {
   }
 }
 
-// PUT update inventory assignment (UPDATED for weekly tracking)
+// PUT update inventory assignment - FIXED VERSION (No transactions)
 export async function PUT(req: NextRequest) {
   try {
     const data = await req.json();
+    
+    console.log('PUT request received:', data);
     
     if (!data.id) {
       return NextResponse.json(
@@ -919,9 +833,21 @@ export async function PUT(req: NextRequest) {
 
     const inventoryId = parseInt(data.id);
     
-    // Get current inventory assignment
+    // Get current inventory assignment with MINIMAL includes
     const inventory = await prisma.staffInventory.findUnique({
-      where: { id: inventoryId }
+      where: { id: inventoryId },
+      include: {
+        staff: {
+          select: { id: true, name: true }
+        },
+        product: {
+          select: { 
+            id: true, 
+            name: true,
+            productionCost: true
+          }
+        }
+      }
     });
 
     if (!inventory) {
@@ -931,54 +857,16 @@ export async function PUT(req: NextRequest) {
       );
     }
 
-    // Prepare update data
-    const updateData: any = {
-      updatedAt: new Date()
-    };
+    // Check if this is an adjustment request
+    const isAdjustment = data.adjustType && data.adjustQuantity;
     
-    if (data.quantitySold !== undefined) {
-      const quantitySold = parseInt(data.quantitySold);
-      if (!isNaN(quantitySold) && quantitySold >= 0) {
-        updateData.quantitySold = quantitySold;
-      }
-    }
-    
-    if (data.quantityReturned !== undefined) {
-      const quantityReturned = parseInt(data.quantityReturned);
-      if (!isNaN(quantityReturned) && quantityReturned >= 0) {
-        updateData.quantityReturned = quantityReturned;
-      }
+    if (isAdjustment) {
+      return await handleAdjustment(inventory, data, inventoryId);
     }
 
-    // Update weekly dates if provided
-    if (data.weekStartDate !== undefined) {
-      updateData.weekStartDate = data.weekStartDate ? new Date(data.weekStartDate) : null;
-    }
-    
-    if (data.weekEndDate !== undefined) {
-      updateData.weekEndDate = data.weekEndDate ? new Date(data.weekEndDate) : null;
-    }
+    // Handle regular update
+    return await handleRegularUpdate(inventory, data, inventoryId);
 
-    // Update inventory record
-    const updatedInventory = await prisma.staffInventory.update({
-      where: { id: inventoryId },
-      data: updateData,
-      include: {
-        staff: true,
-        product: true,
-        saleItems: {
-          include: {
-            sale: {
-              include: {
-                customer: true
-              }
-            }
-          }
-        }
-      }
-    });
-
-    return NextResponse.json(updatedInventory);
   } catch (error: any) {
     console.error("Error updating inventory:", error);
     
@@ -989,11 +877,251 @@ export async function PUT(req: NextRequest) {
       );
     }
 
+    if (error.message?.includes('stock')) {
+      return NextResponse.json(
+        { error: error.message },
+        { status: 400 }
+      );
+    }
+
     return NextResponse.json(
       { error: "Failed to update inventory" },
       { status: 500 }
     );
   }
+}
+
+// Handle adjustment WITHOUT transaction
+async function handleAdjustment(inventory: any, data: any, inventoryId: number) {
+  const { adjustType, adjustQuantity, adjustReason } = data;
+  const quantity = parseInt(adjustQuantity);
+  
+  console.log(`Handling ${adjustType} adjustment for inventory ${inventoryId}, quantity: ${quantity}`);
+
+  if (!['add', 'remove'].includes(adjustType)) {
+    return NextResponse.json(
+      { error: 'Adjustment type must be "add" or "remove"' },
+      { status: 400 }
+    );
+  }
+
+  if (isNaN(quantity) || quantity <= 0) {
+    return NextResponse.json(
+      { error: 'Quantity must be a positive number' },
+      { status: 400 }
+    );
+  }
+
+  const currentGiven = inventory.quantityGiven;
+  const currentSold = inventory.quantitySold || 0;
+  const currentReturned = inventory.quantityReturned || 0;
+  const availableToRemove = currentGiven - currentSold - currentReturned;
+
+  // Validate adjustment
+  if (adjustType === 'add') {
+    // Check stock availability with a simple query
+    const stockItem = await prisma.stock.findFirst({
+      where: { productId: inventory.productId },
+      select: { quantity: true, costPrice: true }
+    });
+    
+    if (!stockItem || stockItem.quantity < quantity) {
+      return NextResponse.json(
+        { error: `Cannot add ${quantity} items. Only ${stockItem?.quantity || 0} available in stock.` },
+        { status: 400 }
+      );
+    }
+  } else if (adjustType === 'remove') {
+    if (quantity > availableToRemove) {
+      return NextResponse.json(
+        { error: `Cannot remove ${quantity} items. Only ${availableToRemove} available to remove.` },
+        { status: 400 }
+      );
+    }
+  }
+
+  // Calculate new quantity
+  const newQuantityGiven = adjustType === 'add' 
+    ? currentGiven + quantity 
+    : currentGiven - quantity;
+
+  try {
+    // 1. Update inventory - SIMPLE UPDATE
+    const updatedInventory = await prisma.staffInventory.update({
+      where: { id: inventoryId },
+      data: {
+        quantityGiven: newQuantityGiven,
+        updatedAt: new Date()
+      },
+      select: {
+        id: true,
+        staffId: true,
+        productId: true,
+        quantityGiven: true,
+        quantitySold: true,
+        quantityReturned: true,
+        updatedAt: true
+      }
+    });
+
+    // 2. Adjust stock
+    const stockAdjustment = adjustType === 'add' ? -quantity : quantity;
+    
+    const stockItem = await prisma.stock.findFirst({
+      where: { productId: inventory.productId }
+    });
+
+    if (stockItem) {
+      await prisma.stock.update({
+        where: { id: stockItem.id },
+        data: {
+          quantity: { increment: stockAdjustment },
+          updatedAt: new Date()
+        }
+      });
+
+      // 3. Create ledger entry
+      try {
+        await prisma.cashledger.create({
+          data: {
+            date: new Date(),
+            description: adjustType === 'add'
+              ? `Added ${quantity} ${inventory.product.name} to ${inventory.staff.name}${adjustReason ? `: ${adjustReason}` : ''}`
+              : `Removed ${quantity} ${inventory.product.name} from ${inventory.staff.name}${adjustReason ? `: ${adjustReason}` : ''}`,
+            type: adjustType === 'add' ? 'OUT' : 'IN',
+            category: 'STAFF_INVENTORY_ADJUSTMENT',
+            amount: Math.abs(quantity) * (stockItem.costPrice || inventory.product.productionCost || 0),
+            relatedTo: 'STAFF_INVENTORY',
+            affectedAccounts: 'STOCK',
+            referenceId: inventoryId,
+            referenceType: 'STAFF_INVENTORY',
+            createdAt: new Date(),
+            updatedAt: new Date()
+          }
+        });
+      } catch (ledgerError) {
+        console.log("Ledger entry failed, but inventory was updated:", ledgerError);
+      }
+    }
+
+    // Calculate remaining after update
+    const remaining = newQuantityGiven - currentSold - currentReturned;
+    
+    const responseData = {
+      ...updatedInventory,
+      remaining,
+      sellThroughRate: newQuantityGiven > 0 
+        ? (currentSold / newQuantityGiven) * 100 
+        : 0,
+      adjustment: {
+        type: adjustType,
+        quantity,
+        previousQuantity: currentGiven,
+        newQuantity: newQuantityGiven,
+        reason: adjustReason
+      }
+    };
+
+    return NextResponse.json({
+      success: true,
+      data: responseData,
+      message: `Successfully ${adjustType === 'add' ? 'added' : 'removed'} ${quantity} items`
+    });
+
+  } catch (error: any) {
+    console.error("Error in handleAdjustment:", error);
+    throw error;
+  }
+}
+
+// Handle regular update WITHOUT transaction
+async function handleRegularUpdate(inventory: any, data: any, inventoryId: number) {
+  const {
+    quantityGiven,
+    quantitySold,
+    quantityReturned,
+    weekStartDate,
+    weekEndDate
+  } = data;
+
+  console.log('Handling regular update for inventory:', inventoryId);
+
+  // Prepare update data
+  const updateData: any = {
+    updatedAt: new Date()
+  };
+  
+  if (quantityGiven !== undefined) {
+    const newGiven = parseInt(quantityGiven);
+    if (!isNaN(newGiven) && newGiven >= 0) {
+      // Validate that new quantityGiven is not less than items already sold + returned
+      const currentUsed = (inventory.quantitySold || 0) + (inventory.quantityReturned || 0);
+      if (newGiven < currentUsed) {
+        return NextResponse.json(
+          { error: `New assigned quantity (${newGiven}) cannot be less than items already sold/returned (${currentUsed})` },
+          { status: 400 }
+        );
+      }
+      updateData.quantityGiven = newGiven;
+    }
+  }
+  
+  if (quantitySold !== undefined) {
+    const newSold = parseInt(quantitySold);
+    if (!isNaN(newSold) && newSold >= 0) {
+      updateData.quantitySold = newSold;
+    }
+  }
+  
+  if (quantityReturned !== undefined) {
+    const newReturned = parseInt(quantityReturned);
+    if (!isNaN(newReturned) && newReturned >= 0) {
+      updateData.quantityReturned = newReturned;
+    }
+  }
+
+  // Update weekly dates if provided
+  if (weekStartDate !== undefined) {
+    updateData.weekStartDate = weekStartDate ? new Date(weekStartDate) : null;
+  }
+  
+  if (weekEndDate !== undefined) {
+    updateData.weekEndDate = weekEndDate ? new Date(weekEndDate) : null;
+  }
+
+  // Simple update without transaction
+  const updatedInventory = await prisma.staffInventory.update({
+    where: { id: inventoryId },
+    data: updateData,
+    select: {
+      id: true,
+      staffId: true,
+      productId: true,
+      quantityGiven: true,
+      quantitySold: true,
+      quantityReturned: true,
+      weekStartDate: true,
+      weekEndDate: true,
+      updatedAt: true
+    }
+  });
+
+  // Calculate remaining
+  const remaining = updatedInventory.quantityGiven - updatedInventory.quantitySold - updatedInventory.quantityReturned;
+  
+  const responseData = {
+    ...updatedInventory,
+    remaining,
+    sellThroughRate: updatedInventory.quantityGiven > 0 
+      ? (updatedInventory.quantitySold / updatedInventory.quantityGiven) * 100 
+      : 0
+  };
+
+  return NextResponse.json({
+    success: true,
+    data: responseData,
+    message: 'Inventory updated successfully'
+  });
 }
 
 // DELETE inventory assignment
@@ -1038,13 +1166,6 @@ export async function DELETE(req: NextRequest) {
     // Delete inventory record
     await prisma.staffInventory.delete({
       where: { id: inventoryId }
-    });
-
-    console.log(`🗑️ Deleted inventory assignment:`, {
-      staff: inventory.staff.name,
-      product: inventory.product.name,
-      quantity: inventory.quantityGiven,
-      week: inventory.weekStartDate ? `${inventory.weekStartDate.toDateString()} - ${inventory.weekEndDate?.toDateString()}` : 'No week specified'
     });
 
     return NextResponse.json({ 

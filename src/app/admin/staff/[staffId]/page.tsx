@@ -20,7 +20,6 @@ import {
   Download,
   Printer,
   CalendarDays,
-  Clock,
   Hash,
   TrendingUp,
   TrendingDown,
@@ -102,6 +101,7 @@ interface Product {
   category?: string;
   image?: string;
   inStock?: boolean;
+  stock?: Stock[];
 }
 
 interface Stock {
@@ -303,7 +303,7 @@ const StaffDetailsPage = () => {
     }, 5000);
   };
 
-  // FIXED: Fetch staff details with better error handling and response parsing
+  // FIXED: Fetch staff details with better error handling
   const fetchStaffDetails = useCallback(async () => {
     if (!staffId) return;
 
@@ -314,18 +314,16 @@ const StaffDetailsPage = () => {
     try {
       console.log(`Fetching staff details for ID: ${staffId}`);
       
-      // Try multiple endpoint variations
+      // Try your specific endpoints
       const endpoints = [
         `/api/staff/${staffId}/inventory`,
-        `/api/staff/${staffId}?include=inventories,sales`,
-        `/api/staff/${staffId}?withInventory=true`,
-        `/api/staff-inventory?staffId=${staffId}`
+        `/api/staff/${staffId}?include=inventories,sales`
       ];
 
       let response = null;
       let data = null;
 
-      // Try each endpoint until one works
+      // Try each endpoint
       for (const endpoint of endpoints) {
         try {
           console.log(`Trying endpoint: ${endpoint}`);
@@ -343,7 +341,7 @@ const StaffDetailsPage = () => {
       }
 
       if (!response || !response.ok) {
-        throw new Error("Failed to fetch staff inventory from all endpoints");
+        throw new Error("Failed to fetch staff inventory");
       }
 
       // Handle different response structures
@@ -359,26 +357,17 @@ const StaffDetailsPage = () => {
         // Response wrapped in data property
         const responseData = data.data;
         staffData = responseData.staff || responseData;
-        inventories = responseData.inventories || responseData.staffInventories || responseData.inventory || [];
+        inventories = responseData.inventories || responseData.staffInventories || [];
         sales = responseData.sales || [];
       } else if (data.staff) {
         // Staff data at root
         staffData = data.staff;
-        inventories = data.staff.staffInventories || data.staff.inventories || data.inventories || [];
-        sales = data.staff.sales || data.sales || [];
-      } else if (Array.isArray(data)) {
-        // Direct array of inventories
-        inventories = data;
-        // Fetch staff info separately
-        const staffResponse = await fetch(`/api/staff/${staffId}`);
-        if (staffResponse.ok) {
-          const staffResult = await staffResponse.json();
-          staffData = staffResult.data?.staff || staffResult.staff || staffResult;
-        }
+        inventories = data.staff.staffInventories || [];
+        sales = data.staff.sales || [];
       } else {
         // Assume data is staff object
         staffData = data;
-        inventories = data.staffInventories || data.inventories || [];
+        inventories = data.staffInventories || [];
         sales = data.sales || [];
       }
 
@@ -407,7 +396,7 @@ const StaffDetailsPage = () => {
       console.error("Error in fetchStaffDetails:", err);
       handleError(err, "Failed to load staff details");
       
-      // Set empty data to prevent UI errors
+      // Set empty data
       setStaff({
         id: parseInt(staffId),
         name: "Staff Member",
@@ -422,90 +411,201 @@ const StaffDetailsPage = () => {
     }
   }, [staffId]);
 
-  // Fetch available stock for a product
+  // FIXED: Fetch available stock for a product
   const fetchProductStock = async (productId: number): Promise<number> => {
     try {
-      console.log(`Fetching stock for product ${productId}`);
-      const response = await fetch(`/api/products/${productId}/stock`);
+      console.log(`Fetching stock for product ID: ${productId}`);
       
-      if (!response.ok) {
-        console.log("Stock API response not ok, trying alternative");
-        // Try alternative endpoint
-        const altResponse = await fetch(`/api/stock?productId=${productId}`);
-        if (altResponse.ok) {
-          const altData = await altResponse.json();
-          const stockItem = Array.isArray(altData) 
-            ? altData.find((s: Stock) => s.productId === productId)
-            : altData.data?.find((s: Stock) => s.productId === productId);
-          return stockItem?.quantity || 0;
+      // Check if we already have the stock data from fetchAllStockData
+      const stockItem = stockData.find(stock => stock.productId === productId);
+      if (stockItem) {
+        console.log(`Found stock in local state: ${stockItem.quantity}`);
+        return stockItem.quantity;
+      }
+      
+      // Try the direct stock API first
+      try {
+        const response = await fetch(`/api/stock?productId=${productId}`);
+        if (response.ok) {
+          const data = await response.json();
+          console.log("Direct stock API response:", data);
+          
+          if (Array.isArray(data)) {
+            const productStock = data.find((s: any) => s.productId === productId);
+            if (productStock?.quantity !== undefined) {
+              console.log(`Found stock from direct API: ${productStock.quantity}`);
+              return productStock.quantity;
+            }
+          } else if (data?.quantity !== undefined) {
+            console.log(`Found stock from direct API (single): ${data.quantity}`);
+            return data.quantity;
+          } else if (data?.data?.quantity !== undefined) {
+            console.log(`Found stock from direct API (nested): ${data.data.quantity}`);
+            return data.data.quantity;
+          }
         }
-        throw new Error('Failed to fetch stock information');
-      }
-
-      const data = await response.json();
-      console.log("Stock data:", data);
-      
-      // Handle different response formats
-      if (data.data !== undefined) {
-        return data.data.availableStock || data.data.quantity || 0;
-      }
-      if (data.quantity !== undefined) {
-        return data.quantity;
-      }
-      if (data.availableStock !== undefined) {
-        return data.availableStock;
+      } catch (stockError) {
+        console.log("Direct stock API failed");
       }
       
-      return data?.stock?.quantity || data?.quantity || 0;
+      // Try the products API
+      try {
+        const response = await fetch(`/api/products/${productId}`);
+        if (response.ok) {
+          const data = await response.json();
+          console.log("Products API response:", data);
+          
+          // Check different response structures
+          const stockQuantity = 
+            data?.stock?.[0]?.quantity ||
+            data?.data?.stock?.[0]?.quantity ||
+            data?.quantity ||
+            data?.data?.quantity ||
+            data?.availableStock ||
+            data?.data?.availableStock ||
+            0;
+          
+          if (stockQuantity > 0) {
+            console.log(`Found stock from products API: ${stockQuantity}`);
+            return stockQuantity;
+          }
+        }
+      } catch (productError) {
+        console.log("Products API failed");
+      }
+      
+      // Try the inventory API
+      try {
+        const response = await fetch(`/api/inventory?productId=${productId}`);
+        if (response.ok) {
+          const data = await response.json();
+          console.log("Inventory API response:", data);
+          
+          if (data?.quantity !== undefined) {
+            console.log(`Found stock from inventory API: ${data.quantity}`);
+            return data.quantity;
+          }
+        }
+      } catch (inventoryError) {
+        console.log("Inventory API failed");
+      }
+      
+      console.log(`No stock found for product ${productId}, returning 0`);
+      return 0;
+      
     } catch (err) {
       console.error('Error fetching stock:', err);
       return 0;
     }
   };
 
-  // Fetch all stock data
+  // FIXED: Fetch all stock data
   const fetchAllStockData = async () => {
     try {
-      console.log("Fetching all stock data");
-      const response = await fetch('/api/stock');
-      if (!response.ok) {
-        console.log("Stock API failed, trying /api/products/stock");
-        // Try alternative endpoint
-        const altResponse = await fetch('/api/products/stock');
-        if (altResponse.ok) {
-          const altData = await altResponse.json();
-          setStockData(altData.data || altData.stock || altData);
-          return;
+      console.log("Fetching all stock data...");
+      
+      // Try multiple endpoints
+      const endpoints = [
+        '/api/stock',
+        '/api/products/stock',
+        '/api/inventory'
+      ];
+      
+      let stockDataResult: Stock[] = [];
+      
+      for (const endpoint of endpoints) {
+        try {
+          console.log(`Trying endpoint: ${endpoint}`);
+          const response = await fetch(endpoint);
+          
+          if (response.ok) {
+            const data = await response.json();
+            console.log(`Response from ${endpoint}:`, data);
+            
+            // Handle different response structures
+            if (Array.isArray(data)) {
+              stockDataResult = data.map((item: any) => ({
+                id: item.id,
+                productId: item.productId,
+                quantity: item.quantity || 0,
+                costPrice: item.costPrice || 0,
+                sellingPrice: item.sellingPrice || 0,
+                product: item.product
+              }));
+              break;
+            } else if (data.data && Array.isArray(data.data)) {
+              stockDataResult = data.data.map((item: any) => ({
+                id: item.id,
+                productId: item.productId,
+                quantity: item.quantity || 0,
+                costPrice: item.costPrice || 0,
+                sellingPrice: item.sellingPrice || 0,
+                product: item.product
+              }));
+              break;
+            } else if (data.stock && Array.isArray(data.stock)) {
+              stockDataResult = data.stock;
+              break;
+            }
+          }
+        } catch (err) {
+          console.log(`Endpoint ${endpoint} failed:`, err);
+          continue;
         }
-        throw new Error('Failed to fetch stock data');
       }
       
-      const data = await response.json();
-      console.log("All stock data:", data);
-      
-      // Handle different response formats
-      if (data.data) {
-        setStockData(data.data);
-      } else if (Array.isArray(data)) {
-        setStockData(data);
-      } else if (data.stock) {
-        setStockData(data.stock);
-      } else {
-        setStockData([]);
+      // If we got stock data, also extract from staff inventory
+      if (staff && weeklyPerformance.length > 0) {
+        try {
+          // Extract stock from all inventory items
+          const allInventoryItems = weeklyPerformance.flatMap(week => week.inventory);
+          const stockFromInventory: Stock[] = [];
+          
+          allInventoryItems.forEach(item => {
+            if (item.product && item.product.stock && item.product.stock.length > 0) {
+              const stockItem = item.product.stock[0];
+              if (!stockDataResult.find(s => s.productId === stockItem.productId)) {
+                stockFromInventory.push(stockItem);
+              }
+            }
+          });
+          
+          // Add inventory stock to results
+          stockDataResult = [...stockDataResult, ...stockFromInventory];
+        } catch (err) {
+          console.log("Could not extract stock from inventory:", err);
+        }
       }
+      
+      console.log("Final stock data to set:", stockDataResult);
+      setStockData(stockDataResult);
+      
+      // Also update available stock for any currently editing item
+      if (editingItem) {
+        const stockItem = stockDataResult.find(stock => stock.productId === editingItem.productId);
+        setAvailableStock(stockItem ? stockItem.quantity : 0);
+      }
+      
     } catch (error) {
       console.error('Error fetching stock data:', error);
       setStockData([]);
     }
   };
 
-  // Get available stock from state
+  // FIXED: Get available stock from state
   const getAvailableStock = (productId: number): number => {
     const stockItem = stockData.find(stock => stock.productId === productId);
-    return stockItem ? stockItem.quantity : 0;
+    
+    if (stockItem) {
+      console.log(`Found stock for product ${productId}: ${stockItem.quantity}`);
+      return stockItem.quantity;
+    }
+    
+    console.log(`Stock not found in state for product ${productId}`);
+    return 0;
   };
 
-  // FIXED: Process weekly data with better error handling
+  // FIXED: Process weekly data
   const processWeeklyData = (inventories: StaffInventory[], sales: Sale[]) => {
     console.log("Processing weekly data with inventories:", inventories);
     console.log("Processing weekly data with sales:", sales);
@@ -520,11 +620,8 @@ const StaffDetailsPage = () => {
     const now = new Date();
     
     // Group inventories by week
-    inventories.forEach((inventory, index) => {
-      if (!inventory) {
-        console.log(`Skipping null inventory at index ${index}`);
-        return;
-      }
+    inventories.forEach((inventory) => {
+      if (!inventory) return;
 
       // Handle missing week dates - assign to current week
       let weekStartDate: Date;
@@ -548,7 +645,7 @@ const StaffDetailsPage = () => {
         const isUpcoming = now < weekStartDate;
         
         weeklyMap.set(weekKey, {
-          week: `Week ${weekStartDate.getDate()} ${weekStartDate.toLocaleDateString('en-KE', { month: 'short' })}`,
+          week: `Week ${formatDateShort(weekStartDate)}`,
           weekStart: weekStartDate,
           weekEnd: weekEndDate,
           totalGiven: 0,
@@ -618,10 +715,17 @@ const StaffDetailsPage = () => {
     
     // Fetch current stock
     try {
+      console.log(`Fetching stock for product ${item.productId}...`);
       const stock = await fetchProductStock(item.productId);
-      console.log("Available stock for product:", stock);
+      console.log(`Stock fetched: ${stock}`);
       setAvailableStock(stock);
       setStockError(null);
+      
+      // If stock is 0, try to refresh stock data
+      if (stock === 0) {
+        console.log("Stock is 0, refreshing stock data...");
+        await fetchAllStockData();
+      }
     } catch (err) {
       console.error("Error fetching stock:", err);
       setStockError("Unable to fetch stock information");
@@ -629,7 +733,7 @@ const StaffDetailsPage = () => {
     }
   };
 
-  // Handle save edit
+  // FIXED: Handle save edit
   const handleSaveEdit = async () => {
     if (!editingItem) return;
 
@@ -639,18 +743,14 @@ const StaffDetailsPage = () => {
       setStockError(null);
 
       const newQuantityGiven = parseInt(editForm.quantityGiven) || 0;
-      const quantityDifference = newQuantityGiven - (editingItem.quantityGiven || 0);
-
-      // Check if we're adding more items than available stock
-      if (quantityDifference > 0 && quantityDifference > availableStock) {
-        setStockError(`Cannot add ${quantityDifference} items. Only ${availableStock} available in stock.`);
-        return;
-      }
-
-      // Validate quantities
       const newQuantitySold = parseInt(editForm.quantitySold) || 0;
       const newQuantityReturned = parseInt(editForm.quantityReturned) || 0;
+      
+      const currentGiven = editingItem.quantityGiven || 0;
+      const currentSold = editingItem.quantitySold || 0;
+      const currentReturned = editingItem.quantityReturned || 0;
 
+      // Validate quantities
       if (newQuantitySold > newQuantityGiven) {
         setStockError("Sold quantity cannot exceed assigned quantity");
         return;
@@ -661,63 +761,48 @@ const StaffDetailsPage = () => {
         return;
       }
 
-      // Prepare update data
-      const updateData: any = {
-        quantityGiven: newQuantityGiven,
-        quantitySold: newQuantitySold,
-        quantityReturned: newQuantityReturned
-      };
+      // Calculate adjustments
+      const quantityGivenDiff = newQuantityGiven - currentGiven;
+      const quantitySoldDiff = newQuantitySold - currentSold;
+      const quantityReturnedDiff = newQuantityReturned - currentReturned;
 
-      // Only include dates if they're provided
-      if (editForm.weekStartDate) {
-        updateData.weekStartDate = editForm.weekStartDate;
-      }
-      if (editForm.weekEndDate) {
-        updateData.weekEndDate = editForm.weekEndDate;
-      }
-
-      // If adding items, include stock adjustment
-      if (quantityDifference > 0) {
-        updateData.stockAdjustment = -quantityDifference;
-        updateData.productId = editingItem.productId;
-      }
-
-      console.log("Updating inventory with data:", updateData);
-
-      // Try multiple endpoints for update
-      const endpoints = [
-        `/api/staff-inventory/${editingItem.id}/update`,
-        `/api/staff-inventory/${editingItem.id}`,
-        `/api/inventory/${editingItem.id}`
-      ];
-
-      let success = false;
-      let responseData: any = null;
-
-      for (const endpoint of endpoints) {
-        try {
-          const response = await fetch(endpoint, {
-            method: 'PUT',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify(updateData),
-          });
-
-          if (response.ok) {
-            responseData = await response.json();
-            console.log(`Update successful via ${endpoint}:`, responseData);
-            success = true;
-            break;
-          }
-        } catch (err) {
-          console.log(`Endpoint ${endpoint} failed:`, err);
-          continue;
+      // Check if we're adding more items than available stock
+      if (quantityGivenDiff > 0) {
+        // Get fresh stock data
+        const currentStock = await fetchProductStock(editingItem.productId);
+        console.log(`Current stock for validation: ${currentStock}, Diff: ${quantityGivenDiff}`);
+        
+        if (quantityGivenDiff > currentStock) {
+          setStockError(`Cannot add ${quantityGivenDiff} items. Only ${currentStock} available in stock.`);
+          return;
         }
       }
 
-      if (!success) {
-        throw new Error('Failed to update assignment via all endpoints');
+      // Prepare update data
+      const updateData = {
+        id: editingItem.id,
+        quantityGiven: newQuantityGiven,
+        quantitySold: newQuantitySold,
+        quantityReturned: newQuantityReturned,
+        weekStartDate: editForm.weekStartDate || editingItem.weekStartDate,
+        weekEndDate: editForm.weekEndDate || editingItem.weekEndDate
+      };
+
+      console.log("Updating inventory with data:", updateData);
+
+      // Call the API
+      const response = await fetch(`/api/staff-inventory`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(updateData),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || data.message || 'Failed to update assignment');
       }
 
       setSuccess('Assignment updated successfully!');
@@ -747,68 +832,18 @@ const StaffDetailsPage = () => {
     setError(null);
 
     try {
-      // First get inventory details
-      let inventory = null;
-      const inventoryEndpoints = [
-        `/api/staff-inventory/${id}`,
-        `/api/inventory/${id}`
-      ];
+      // Use the staff-inventory DELETE endpoint
+      const response = await fetch(`/api/staff-inventory?id=${id}`, {
+        method: 'DELETE',
+      });
 
-      for (const endpoint of inventoryEndpoints) {
-        try {
-          const response = await fetch(endpoint);
-          if (response.ok) {
-            const data = await response.json();
-            inventory = data.data || data;
-            break;
-          }
-        } catch (err) {
-          console.log(`Failed to fetch from ${endpoint}:`, err);
-        }
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to delete assignment');
       }
 
-      if (!inventory) {
-        throw new Error('Failed to fetch inventory details');
-      }
-
-      const remainingItems = (inventory.quantityGiven || 0) - (inventory.quantitySold || 0) - (inventory.quantityReturned || 0);
-
-      // Try multiple delete endpoints
-      const deleteEndpoints = [
-        `/api/staff-inventory/${id}?restoreStock=true&quantityToRestore=${remainingItems}&productId=${inventory.productId}`,
-        `/api/staff-inventory/${id}?returnToStock=true`,
-        `/api/inventory/${id}?returnToStock=true`
-      ];
-
-      let deleteSuccess = false;
-
-      for (const endpoint of deleteEndpoints) {
-        try {
-          const response = await fetch(endpoint, {
-            method: 'DELETE',
-            headers: {
-              'Content-Type': 'application/json',
-            }
-          });
-
-          const data = await response.json();
-
-          if (response.ok && (data.success || !data.error)) {
-            console.log(`Delete successful via ${endpoint}:`, data);
-            deleteSuccess = true;
-            break;
-          }
-        } catch (err) {
-          console.log(`Delete endpoint ${endpoint} failed:`, err);
-          continue;
-        }
-      }
-
-      if (!deleteSuccess) {
-        throw new Error('Failed to delete assignment');
-      }
-
-      setSuccess(`Assignment deleted successfully! ${remainingItems} items returned to stock.`);
+      setSuccess(`Assignment deleted successfully! Items returned to stock.`);
       
       // Refresh data
       await Promise.all([
@@ -822,6 +857,35 @@ const StaffDetailsPage = () => {
     } finally {
       setActionLoading(false);
     }
+  };
+
+  // FIXED: Filter inventory in week details
+  const getFilteredInventory = () => {
+    if (!selectedWeek) return [];
+    
+    // First, filter by week dates to only show items from this week
+    const weekInventory = selectedWeek.inventory.filter(inv => {
+      const invWeekStart = inv.weekStartDate ? new Date(inv.weekStartDate) : null;
+      const invWeekEnd = inv.weekEndDate ? new Date(inv.weekEndDate) : null;
+      
+      if (!invWeekStart || !invWeekEnd) return false;
+      
+      // Check if inventory dates match the selected week
+      const isSameWeek = 
+        invWeekStart.getTime() === selectedWeek.weekStart.getTime() &&
+        invWeekEnd.getTime() === selectedWeek.weekEnd.getTime();
+      
+      return isSameWeek;
+    });
+    
+    // Then apply search filter if any
+    if (!searchProductQuery) return weekInventory;
+    
+    const query = searchProductQuery.toLowerCase();
+    return weekInventory.filter(inv => 
+      inv.product?.name?.toLowerCase().includes(query) ||
+      inv.product?.category?.toLowerCase().includes(query)
+    );
   };
 
   // Handle return items
@@ -846,47 +910,28 @@ const StaffDetailsPage = () => {
       // Calculate new returned quantity
       const newQuantityReturned = currentReturned + returnQty;
       
-      // Try multiple update endpoints
+      // Use the API
       const updateData = {
+        id: selectedInventory.id,
         quantityReturned: newQuantityReturned,
-        productId: selectedInventory.productId,
-        staffId: selectedInventory.staffId
+        returnReason: returnReason || "Defective/Damaged"
       };
 
-      const endpoints = [
-        `/api/staff-inventory/${selectedInventory.id}/update`,
-        `/api/staff-inventory/${selectedInventory.id}/return`,
-        `/api/inventory/${selectedInventory.id}/return`
-      ];
+      const response = await fetch(`/api/staff-inventory`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(updateData),
+      });
 
-      let success = false;
-
-      for (const endpoint of endpoints) {
-        try {
-          const response = await fetch(endpoint, {
-            method: adjustType === 'add' ? 'PUT' : 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify(updateData),
-          });
-
-          if (response.ok) {
-            const data = await response.json();
-            console.log(`Return successful via ${endpoint}:`, data);
-            success = true;
-            break;
-          }
-        } catch (err) {
-          console.log(`Endpoint ${endpoint} failed:`, err);
-          continue;
-        }
+      if (!response.ok) {
+        const data = await response.json();
+        throw new Error(data.error || 'Failed to process return');
       }
 
-      if (!success) {
-        throw new Error('Failed to process return');
-      }
-
+      const data = await response.json();
+      
       setSuccess(`${returnQty} items returned successfully!`);
       setShowReturnModal(false);
       setSelectedInventory(null);
@@ -904,7 +949,7 @@ const StaffDetailsPage = () => {
     }
   };
 
-  // Handle add/remove items
+  // FIXED: Handle add/remove items
   const handleAdjustItems = async () => {
     if (!selectedInventory || !adjustQuantity) {
       setError("Please enter quantity");
@@ -918,25 +963,26 @@ const StaffDetailsPage = () => {
     }
 
     try {
-      // Check stock availability for adding items
+      // Get the actual available stock from the server
+      const availableStockFromServer = await fetchProductStock(selectedInventory.productId);
+      console.log(`Available stock for product ${selectedInventory.productId}: ${availableStockFromServer}`);
+      
       if (adjustType === 'add') {
-        const available = await fetchProductStock(selectedInventory.productId);
-        if (adjustQty > available) {
-          setError(`Cannot add ${adjustQty} items. Only ${available} available in stock.`);
+        if (adjustQty > availableStockFromServer) {
+          setError(`Cannot add ${adjustQty} items. Only ${availableStockFromServer} available in stock.`);
+          
+          // Refresh stock data
+          await fetchAllStockData();
           return;
         }
       }
 
-      // Calculate new quantity
+      // Calculate current remaining
       const currentGiven = selectedInventory.quantityGiven || 0;
       const currentSold = selectedInventory.quantitySold || 0;
       const currentReturned = selectedInventory.quantityReturned || 0;
       const remaining = currentGiven - currentSold - currentReturned;
       
-      const newQuantityGiven = adjustType === 'add' 
-        ? currentGiven + adjustQty
-        : currentGiven - adjustQty;
-
       // Check if we're removing more than available
       if (adjustType === 'remove') {
         if (adjustQty > remaining) {
@@ -945,49 +991,30 @@ const StaffDetailsPage = () => {
         }
       }
 
-      // Prepare update data
-      const updateData: any = {
-        quantityGiven: newQuantityGiven,
-        productId: selectedInventory.productId
+      // Prepare update data - use the simple format
+      const updateData = {
+        id: selectedInventory.id, // Required for the API
+        adjustType, // 'add' or 'remove'
+        adjustQuantity: adjustQty,
+        adjustReason: adjustReason || undefined
       };
 
-      if (adjustType === 'add') {
-        updateData.stockAdjustment = -adjustQty;
-      }
+      console.log("Sending adjustment request:", updateData);
 
-      // Try multiple endpoints
-      const endpoints = [
-        `/api/staff-inventory/${selectedInventory.id}/update`,
-        `/api/staff-inventory/${selectedInventory.id}`,
-        `/api/inventory/${selectedInventory.id}`
-      ];
+      // Call the staff-inventory API PUT endpoint
+      const response = await fetch(`/api/staff-inventory`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(updateData),
+      });
 
-      let success = false;
+      const data = await response.json();
+      console.log("API Response:", data);
 
-      for (const endpoint of endpoints) {
-        try {
-          const response = await fetch(endpoint, {
-            method: 'PUT',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify(updateData),
-          });
-
-          if (response.ok) {
-            const data = await response.json();
-            console.log(`Adjust successful via ${endpoint}:`, data);
-            success = true;
-            break;
-          }
-        } catch (err) {
-          console.log(`Endpoint ${endpoint} failed:`, err);
-          continue;
-        }
-      }
-
-      if (!success) {
-        throw new Error('Failed to adjust inventory');
+      if (!response.ok) {
+        throw new Error(data.error || data.message || `Failed to adjust inventory. Status: ${response.status}`);
       }
 
       setSuccess(`${adjustType === 'add' ? 'Added' : 'Removed'} ${adjustQty} items successfully!`);
@@ -996,9 +1023,10 @@ const StaffDetailsPage = () => {
       setAdjustQuantity('');
       setAdjustReason('');
       
+      // Refresh data
       await Promise.all([
         fetchStaffDetails(),
-        fetchAllStockData()
+        fetchAllStockData() // Make sure to refresh stock data
       ]);
 
     } catch (error: any) {
@@ -1014,6 +1042,7 @@ const StaffDetailsPage = () => {
     setLoadingCloseWeek(weekToClose.week);
     
     try {
+      // Use your API endpoint
       const response = await fetch(`/api/staff/${staffId}/close-week`, {
         method: 'POST',
         headers: {
@@ -1029,44 +1058,15 @@ const StaffDetailsPage = () => {
       });
 
       if (!response.ok) {
-        // Try alternative endpoint
-        const altResponse = await fetch(`/api/week/close`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            staffId: parseInt(staffId),
-            weekStart: weekToClose.weekStart.toISOString(),
-            weekEnd: weekToClose.weekEnd.toISOString()
-          }),
-        });
-
-        if (!altResponse.ok) {
-          const errorData = await response.json().catch(() => ({}));
-          throw new Error(errorData.error || 'Failed to close week');
-        }
-
-        const data = await altResponse.json();
-        
-        setSuccess(`Week closed successfully!`);
-        setShowCloseWeekModal(false);
-        setWeekToClose(null);
-        
-        // Try to generate CSV if data is available
-        if (data.returnedItems && data.returnedItems.length > 0) {
-          generateReturnItemsCSV(data.returnedItems, weekToClose);
-        }
-        
-        await Promise.all([
-          fetchStaffDetails(),
-          fetchAllStockData()
-        ]);
-        return;
+        throw new Error('Failed to close week');
       }
 
       const data = await response.json();
       
+      if (data.success === false) {
+        throw new Error(data.error || 'Failed to close week');
+      }
+
       setSuccess(`Week closed successfully! ${data.summary?.itemsMarked || 0} items marked as returned.`);
       setShowCloseWeekModal(false);
       setWeekToClose(null);
@@ -1126,8 +1126,6 @@ const StaffDetailsPage = () => {
     a.click();
     window.URL.revokeObjectURL(url);
     document.body.removeChild(a);
-    
-    setSuccess(`Week closed and CSV downloaded with ${returnedItems.length} returned items.`);
   };
 
   // Export weekly report
@@ -1149,11 +1147,20 @@ const StaffDetailsPage = () => {
       ['Sell-through Rate', `${week.sellThroughRate.toFixed(1)}%`],
       ['Total Revenue', formatCurrency(week.totalRevenue)],
       [],
-      ['Inventory Details'],
+      ['Inventory Details (This Week Only)'],
       ['Product Name', 'Category', 'Assigned', 'Sold', 'Returned', 'Remaining', 'Sell-through %']
     ];
     
-    week.inventory.forEach((inventory) => {
+    // Only include items from this week
+    const weekInventory = week.inventory.filter(inv => {
+      const invWeekStart = inv.weekStartDate ? new Date(inv.weekStartDate) : null;
+      const invWeekEnd = inv.weekEndDate ? new Date(inv.weekEndDate) : null;
+      return invWeekStart && invWeekEnd && 
+             invWeekStart.getTime() === week.weekStart.getTime() &&
+             invWeekEnd.getTime() === week.weekEnd.getTime();
+    });
+    
+    weekInventory.forEach((inventory) => {
       const quantityGiven = inventory.quantityGiven || 0;
       const quantitySold = inventory.quantitySold || 0;
       const quantityReturned = inventory.quantityReturned || 0;
@@ -1174,11 +1181,11 @@ const StaffDetailsPage = () => {
     
     if (week.totalReturned > 0) {
       csvContent.push([]);
-      csvContent.push(['Returned Items Summary']);
+      csvContent.push(['Returned Items Summary (This Week)']);
       csvContent.push(['Total Items Returned', week.totalReturned.toString()]);
       
-      // Group returned items by product
-      const returnedByProduct = week.inventory.filter(inv => (inv.quantityReturned || 0) > 0);
+      // Group returned items by product from this week only
+      const returnedByProduct = weekInventory.filter(inv => (inv.quantityReturned || 0) > 0);
       returnedByProduct.forEach((inventory) => {
         csvContent.push([
           inventory.product?.name || 'Unknown',
@@ -1222,6 +1229,14 @@ const StaffDetailsPage = () => {
     });
   };
 
+  // Format short date for week label
+  const formatDateShort = (date: Date) => {
+    return date.toLocaleDateString('en-KE', {
+      day: '2-digit',
+      month: 'short'
+    });
+  };
+
   // Filter weekly performance
   const filteredWeeklyPerformance = weeklyPerformance.filter(week => {
     if (searchQuery) {
@@ -1239,19 +1254,6 @@ const StaffDetailsPage = () => {
     
     return true;
   });
-
-  // Filter assigned items in week details
-  const getFilteredInventory = () => {
-    if (!selectedWeek) return [];
-    
-    if (!searchProductQuery) return selectedWeek.inventory;
-    
-    const query = searchProductQuery.toLowerCase();
-    return selectedWeek.inventory.filter(inv => 
-      inv.product?.name?.toLowerCase().includes(query) ||
-      inv.product?.category?.toLowerCase().includes(query)
-    );
-  };
 
   // Calculate total stats
   const calculateTotalStats = () => {
@@ -1276,16 +1278,6 @@ const StaffDetailsPage = () => {
     loadData();
   }, [fetchStaffDetails]);
 
-  // Debug: Log when weeklyPerformance changes
-  useEffect(() => {
-    console.log("Weekly performance updated:", weeklyPerformance);
-  }, [weeklyPerformance]);
-
-  // Debug: Log when staff changes
-  useEffect(() => {
-    console.log("Staff updated:", staff);
-  }, [staff]);
-
   if (loading) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 p-4">
@@ -1294,7 +1286,6 @@ const StaffDetailsPage = () => {
             <div className="text-center">
               <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500 mx-auto"></div>
               <div className="mt-4 text-black">Loading staff details...</div>
-              <div className="text-xs text-gray-500 mt-2">Fetching inventory data for staff ID: {staffId}</div>
             </div>
           </div>
         </div>
@@ -1312,10 +1303,6 @@ const StaffDetailsPage = () => {
               <div>
                 <div className="font-semibold text-red-800">Error Loading Staff Details</div>
                 <div className="text-red-700 mt-1">{error}</div>
-                <div className="text-sm text-gray-600 mt-2">
-                  Staff ID: {staffId}<br />
-                  Please check if the staff member exists and has inventory assigned.
-                </div>
                 <button
                   onClick={() => router.push('/admin/staff')}
                   className="mt-4 inline-flex items-center gap-2 px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors shadow-sm"
@@ -1338,7 +1325,6 @@ const StaffDetailsPage = () => {
           <div className="bg-yellow-50 border border-yellow-100 rounded-xl p-8 text-center shadow-sm">
             <User className="w-16 h-16 text-yellow-400 mx-auto mb-4" />
             <div className="text-xl font-semibold text-black mb-2">Staff Not Found</div>
-            <div className="text-black mb-6">The staff member you're looking for doesn't exist or has been removed.</div>
             <button
               onClick={() => router.push('/admin/staff')}
               className="inline-flex items-center gap-2 px-6 py-3 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors font-medium shadow-sm"
@@ -1544,7 +1530,7 @@ const StaffDetailsPage = () => {
             </div>
           </div>
 
-          {/* Search and Filter - Only show if there's data */}
+          {/* Search and Filter */}
           {weeklyPerformance.length > 0 && (
             <div className="px-4 sm:px-6 py-3 border-b border-gray-200 bg-gray-50">
               <div className="flex flex-col sm:flex-row gap-2">
@@ -1857,6 +1843,23 @@ const StaffDetailsPage = () => {
                         </div>
                       )}
                     </div>
+
+                    {/* Debug Stock Info */}
+                    <div className="mt-2 p-2 bg-gray-100 rounded text-xs">
+                      <div className="font-medium">Stock Information:</div>
+                      <div>Product ID: {editingItem.productId}</div>
+                      <div>Stock in state: {stockData.find(s => s.productId === editingItem.productId)?.quantity || 0}</div>
+                      <button 
+                        onClick={async () => {
+                          const freshStock = await fetchProductStock(editingItem.productId);
+                          setAvailableStock(freshStock);
+                          await fetchAllStockData();
+                        }}
+                        className="mt-1 px-2 py-1 bg-blue-100 text-blue-700 rounded text-xs"
+                      >
+                        Refresh Stock Data
+                      </button>
+                    </div>
                   </div>
 
                   {stockError && (
@@ -2076,7 +2079,7 @@ const StaffDetailsPage = () => {
                 </div>
 
                 {/* Search Bar for Assigned Items */}
-                {selectedWeek.inventory.length > 0 && (
+                {getFilteredInventory().length > 0 && (
                   <div className="px-4 sm:px-6 pb-4">
                     <div className="bg-gray-50 border border-gray-200 rounded-lg p-3">
                       <div className="relative">
@@ -2098,35 +2101,27 @@ const StaffDetailsPage = () => {
                         )}
                       </div>
                       <div className="text-xs text-black mt-2">
-                        {getFilteredInventory().length} of {selectedWeek.inventory.length} items shown
+                        {getFilteredInventory().length} items assigned this week
                       </div>
                     </div>
                   </div>
                 )}
 
-                {/* Inventory Section */}
+                {/* Inventory Section - SHOWING ONLY THIS WEEK'S ITEMS */}
                 <div className="px-4 sm:px-6 pb-6">
                   <div className="flex items-center justify-between mb-4">
-                    <div className="text-lg font-semibold text-black">Assigned Items</div>
+                    <div className="text-lg font-semibold text-black">Assigned Items (This Week)</div>
                     <div className="text-sm text-black">
-                      {selectedWeek.inventory.length} products
+                      {getFilteredInventory().length} products
                     </div>
                   </div>
                   
-                  {selectedWeek.inventory.length === 0 ? (
+                  {getFilteredInventory().length === 0 ? (
                     <div className="text-center py-8">
                       <Package className="w-12 h-12 text-gray-300 mx-auto mb-3" />
                       <div className="text-black font-medium">No items assigned for this week</div>
                       <div className="text-sm text-black mt-1">
                         All items have been processed or returned
-                      </div>
-                    </div>
-                  ) : getFilteredInventory().length === 0 ? (
-                    <div className="text-center py-8">
-                      <Search className="w-12 h-12 text-gray-300 mx-auto mb-3" />
-                      <div className="text-black font-medium">No items found</div>
-                      <div className="text-sm text-black mt-1">
-                        Try a different search term
                       </div>
                     </div>
                   ) : (
@@ -2268,11 +2263,11 @@ const StaffDetailsPage = () => {
                   )}
                 </div>
 
-                {/* Returned Items Summary */}
+                {/* Returned Items Summary - This Week Only */}
                 {selectedWeek.totalReturned > 0 && (
                   <div className="px-4 sm:px-6 pb-6">
                     <div className="flex items-center justify-between mb-4">
-                      <div className="text-lg font-semibold text-black">Returned Items</div>
+                      <div className="text-lg font-semibold text-black">Returned Items (This Week)</div>
                       <div className="text-sm text-black">
                         {selectedWeek.totalReturned} items returned
                       </div>
@@ -2280,7 +2275,7 @@ const StaffDetailsPage = () => {
                     
                     <div className="bg-orange-50 border border-orange-200 rounded-xl p-4">
                       <div className="space-y-3">
-                        {selectedWeek.inventory
+                        {getFilteredInventory()
                           .filter(inv => (inv.quantityReturned || 0) > 0)
                           .map((inventory) => (
                             <div key={inventory.id} className="flex items-center justify-between">
@@ -2305,7 +2300,7 @@ const StaffDetailsPage = () => {
                 {selectedWeek.sales.length > 0 && (
                   <div className="px-4 sm:px-6 pb-6">
                     <div className="flex items-center justify-between mb-4">
-                      <div className="text-lg font-semibold text-black">Sales</div>
+                      <div className="text-lg font-semibold text-black">Sales (This Week)</div>
                       <div className="text-sm text-black">
                         {selectedWeek.sales.length} transactions
                       </div>
@@ -2548,6 +2543,24 @@ const StaffDetailsPage = () => {
                         )}
                       </div>
                     )}
+
+                    {/* Debug Stock Info */}
+                    <div className="mt-2 p-2 bg-gray-100 rounded text-xs">
+                      <div className="font-medium">Stock Information:</div>
+                      <div>Product ID: {selectedInventory.productId}</div>
+                      <div>Stock in local state: {availableStock}</div>
+                      <button 
+                        onClick={async () => {
+                          const freshStock = await fetchProductStock(selectedInventory.productId);
+                          console.log("Fresh stock:", freshStock);
+                          setAvailableStock(freshStock);
+                          await fetchAllStockData();
+                        }}
+                        className="mt-1 px-2 py-1 bg-blue-100 text-blue-700 rounded text-xs"
+                      >
+                        Refresh Stock Data
+                      </button>
+                    </div>
                   </div>
                   
                   <div>
