@@ -305,7 +305,7 @@ export async function GET(
             }
           },
           take: 10,
-          orderBy: { createdAt: 'desc' }
+          orderBy: { id: 'desc' } // FIXED: Changed from createdAt to id
         }
       }
     });
