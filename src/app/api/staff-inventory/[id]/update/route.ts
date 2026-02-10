@@ -3,6 +3,10 @@ import { PrismaClient } from '@prisma/client';
 
 const prisma = new PrismaClient();
 
+// ======================
+// HELPER FUNCTIONS
+// ======================
+
 // Helper function to validate inventory exists
 async function getInventoryWithDetails(id: number) {
   return await prisma.staffInventory.findUnique({
@@ -18,15 +22,28 @@ async function getInventoryWithDetails(id: number) {
   });
 }
 
+// Helper to calculate stock availability
+async function getAvailableStock(productId: number) {
+  const stockItem = await prisma.stock.findFirst({
+    where: { productId },
+    orderBy: { createdAt: 'desc' }
+  });
+  return stockItem?.quantity || 0;
+}
+
+// ======================
+// PUT - UPDATE INVENTORY
+// ======================
 export async function PUT(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const inventoryId = parseInt(params.id);
+    const { id } = await params;
+    const inventoryId = parseInt(id);
     const body = await request.json();
     
-    console.log('=== UPDATE REQUEST ===');
+    console.log('=== UPDATE STAFF INVENTORY ===');
     console.log('Inventory ID:', inventoryId);
     console.log('Request body:', body);
 
@@ -65,7 +82,15 @@ export async function PUT(
     }
     
     // Handle FULL UPDATE (all fields)
-    return await handleFullUpdate(existingInventory, body, inventoryId);
+    if (isFullUpdate) {
+      return await handleFullUpdate(existingInventory, body, inventoryId);
+    }
+
+    // If no valid update type, return error
+    return NextResponse.json(
+      { success: false, error: 'No valid update data provided' },
+      { status: 400 }
+    );
 
   } catch (error: any) {
     console.error('Error in update:', error);
@@ -91,6 +116,256 @@ export async function PUT(
         error: error.message || 'Failed to update inventory',
         details: process.env.NODE_ENV === 'development' ? error.toString() : undefined
       },
+      { status: 500 }
+    );
+  } finally {
+    await prisma.$disconnect();
+  }
+}
+
+// ======================
+// DELETE - DELETE INVENTORY
+// ======================
+export async function DELETE(
+  request: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  try {
+    const { id } = await params;
+    const inventoryId = parseInt(id);
+    
+    if (!inventoryId || isNaN(inventoryId)) {
+      return NextResponse.json(
+        { success: false, error: 'Invalid inventory ID' },
+        { status: 400 }
+      );
+    }
+
+    // Get inventory details
+    const inventory = await prisma.staffInventory.findUnique({
+      where: { id: inventoryId },
+      include: {
+        product: true,
+        staff: true,
+        saleItems: true
+      }
+    });
+
+    if (!inventory) {
+      return NextResponse.json(
+        { success: false, error: 'Inventory assignment not found' },
+        { status: 404 }
+      );
+    }
+
+    // Check if there are sales
+    if (inventory.quantitySold > 0) {
+      return NextResponse.json(
+        { 
+          success: false, 
+          error: 'Cannot delete assignment with sales. Please use the return function instead.' 
+        },
+        { status: 400 }
+      );
+    }
+
+    // Check if there are linked sale items
+    if (inventory.saleItems && inventory.saleItems.length > 0) {
+      return NextResponse.json(
+        { 
+          success: false, 
+          error: 'Cannot delete assignment with linked sales. Please remove sales first.' 
+        },
+        { status: 400 }
+      );
+    }
+
+    // Calculate remaining items to return to stock
+    const remaining = inventory.quantityGiven - inventory.quantitySold - inventory.quantityReturned;
+    
+    // Start transaction
+    const result = await prisma.$transaction(async (tx) => {
+      // Return remaining items to stock
+      if (remaining > 0) {
+        const stockItem = await tx.stock.findFirst({
+          where: { productId: inventory.productId }
+        });
+
+        if (stockItem) {
+          await tx.stock.update({
+            where: { id: stockItem.id },
+            data: {
+              quantity: { increment: remaining },
+              updatedAt: new Date()
+            }
+          });
+        } else {
+          await tx.stock.create({
+            data: {
+              productId: inventory.productId,
+              name: inventory.product?.name || 'Product',
+              quantity: remaining,
+              costPrice: inventory.product?.productionCost || 0,
+              sellingPrice: inventory.product?.price || 0,
+              supplier: 'Return from Staff',
+              notes: `Returned from deleted assignment (ID: ${inventoryId})`,
+              createdAt: new Date(),
+              updatedAt: new Date()
+            }
+          });
+        }
+
+        // Create ledger entry
+        await tx.cashledger.create({
+          data: {
+            date: new Date(),
+            description: `Stock returned from deleted assignment: ${remaining} x ${inventory.product?.name || 'Product'} from ${inventory.staff?.name || 'Staff'}`,
+            type: 'IN',
+            category: 'INVENTORY_RETURN',
+            amount: remaining * (inventory.product?.productionCost || 0),
+            relatedTo: 'STAFF_INVENTORY',
+            affectedAccounts: 'STOCK',
+            referenceId: inventoryId,
+            referenceType: 'STAFF_INVENTORY',
+            createdAt: new Date(),
+            updatedAt: new Date()
+          }
+        });
+      }
+
+      // Delete the inventory assignment
+      await tx.staffInventory.delete({
+        where: { id: inventoryId }
+      });
+
+      return { deleted: true, itemsReturned: remaining };
+    });
+
+    return NextResponse.json({
+      success: true,
+      message: `Assignment deleted successfully. ${remaining} items returned to stock.`,
+      data: result
+    });
+
+  } catch (error: any) {
+    console.error('Error deleting inventory:', error);
+    
+    if (error.code === 'P2025') {
+      return NextResponse.json(
+        { success: false, error: 'Inventory assignment not found' },
+        { status: 404 }
+      );
+    }
+
+    return NextResponse.json(
+      { success: false, error: error.message || 'Failed to delete inventory' },
+      { status: 500 }
+    );
+  } finally {
+    await prisma.$disconnect();
+  }
+}
+
+// ======================
+// GET - FETCH INVENTORY
+// ======================
+export async function GET(
+  request: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  try {
+    const { id } = await params;
+    const inventoryId = parseInt(id);
+    
+    if (!inventoryId || isNaN(inventoryId)) {
+      return NextResponse.json(
+        { success: false, error: 'Invalid inventory ID' },
+        { status: 400 }
+      );
+    }
+
+    const inventory = await prisma.staffInventory.findUnique({
+      where: { id: inventoryId },
+      include: {
+        product: {
+          include: {
+            stock: {
+              orderBy: { createdAt: 'desc' },
+              take: 1
+            }
+          }
+        },
+        staff: true,
+        saleItems: {
+          include: {
+            sale: {
+              include: {
+                customer: true
+              }
+            }
+          },
+          take: 10,
+          orderBy: { createdAt: 'desc' }
+        }
+      }
+    });
+
+    if (!inventory) {
+      return NextResponse.json(
+        { success: false, error: 'Inventory assignment not found' },
+        { status: 404 }
+      );
+    }
+
+    // Calculate metrics
+    const remaining = inventory.quantityGiven - inventory.quantitySold - inventory.quantityReturned;
+    const availableStock = inventory.product?.stock?.[0]?.quantity || 0;
+    const totalValue = inventory.quantityGiven * (inventory.product?.price || 0);
+    const soldValue = inventory.quantitySold * (inventory.product?.price || 0);
+    const utilizationRate = inventory.quantityGiven > 0 
+      ? (inventory.quantitySold / inventory.quantityGiven) * 100 
+      : 0;
+
+    // Get recent sales summary
+    const recentSales = inventory.saleItems.map(item => ({
+      saleId: item.saleId,
+      date: item.sale?.date,
+      customer: item.sale?.customer?.name,
+      quantity: item.quantity,
+      amount: item.total
+    }));
+
+    return NextResponse.json({
+      success: true,
+      data: {
+        ...inventory,
+        remaining,
+        availableStock,
+        totalValue,
+        soldValue,
+        utilizationRate: Math.round(utilizationRate),
+        metrics: {
+          assigned: inventory.quantityGiven,
+          sold: inventory.quantitySold,
+          returned: inventory.quantityReturned,
+          remaining,
+          availableStock
+        },
+        recentSales,
+        summary: {
+          productName: inventory.product?.name,
+          staffName: inventory.staff?.name,
+          weekRange: `${inventory.weekStartDate ? new Date(inventory.weekStartDate).toLocaleDateString() : 'N/A'} - ${inventory.weekEndDate ? new Date(inventory.weekEndDate).toLocaleDateString() : 'N/A'}`,
+          createdAt: inventory.createdAt,
+          lastUpdated: inventory.updatedAt
+        }
+      }
+    });
+
+  } catch (error: any) {
+    console.error('Error fetching inventory:', error);
+    return NextResponse.json(
+      { success: false, error: error.message || 'Failed to fetch inventory' },
       { status: 500 }
     );
   } finally {
@@ -125,8 +400,7 @@ async function handleAdjustment(existingInventory: any, body: any, inventoryId: 
   // Validate adjustment
   if (adjustType === 'add') {
     // Check stock availability
-    const stockItem = existingInventory.product.stock?.[0];
-    const availableStock = stockItem ? stockItem.quantity : 0;
+    const availableStock = await getAvailableStock(existingInventory.productId);
     
     if (availableStock < quantity) {
       throw new Error(`Cannot add ${quantity} items. Only ${availableStock} available in stock.`);
@@ -420,14 +694,23 @@ async function handleFullUpdate(existingInventory: any, body: any, inventoryId: 
   });
 }
 
-// DELETE endpoint
-export async function DELETE(
+// ======================
+// PATCH - PARTIAL UPDATE
+// ======================
+export async function PATCH(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const inventoryId = parseInt(params.id);
+    const { id } = await params;
+    const inventoryId = parseInt(id);
+    const body = await request.json();
     
+    console.log('=== PATCH STAFF INVENTORY ===');
+    console.log('Inventory ID:', inventoryId);
+    console.log('Request body:', body);
+
+    // Validate inventory ID
     if (!inventoryId || isNaN(inventoryId)) {
       return NextResponse.json(
         { success: false, error: 'Invalid inventory ID' },
@@ -435,176 +718,100 @@ export async function DELETE(
       );
     }
 
-    // Get inventory details
-    const inventory = await prisma.staffInventory.findUnique({
+    // Check if inventory exists
+    const existingInventory = await prisma.staffInventory.findUnique({
+      where: { id: inventoryId }
+    });
+
+    if (!existingInventory) {
+      return NextResponse.json(
+        { success: false, error: 'Inventory assignment not found' },
+        { status: 404 }
+      );
+    }
+
+    // Prepare update data
+    const updateData: any = {
+      updatedAt: new Date()
+    };
+
+    // Only update provided fields
+    if (body.quantitySold !== undefined) {
+      const newSold = parseInt(body.quantitySold);
+      if (isNaN(newSold) || newSold < 0) {
+        throw new Error('Sold quantity must be a non-negative number');
+      }
+      
+      // Validate sold doesn't exceed assigned minus returned
+      const maxSellable = existingInventory.quantityGiven - existingInventory.quantityReturned;
+      if (newSold > maxSellable) {
+        throw new Error(`Sold quantity (${newSold}) cannot exceed assigned (${existingInventory.quantityGiven}) minus returned (${existingInventory.quantityReturned}) = ${maxSellable}`);
+      }
+      
+      updateData.quantitySold = newSold;
+    }
+
+    if (body.quantityReturned !== undefined) {
+      const newReturned = parseInt(body.quantityReturned);
+      if (isNaN(newReturned) || newReturned < 0) {
+        throw new Error('Returned quantity must be a non-negative number');
+      }
+      
+      // Validate returned doesn't exceed assigned minus sold
+      const maxReturnable = existingInventory.quantityGiven - existingInventory.quantitySold;
+      if (newReturned > maxReturnable) {
+        throw new Error(`Returned quantity (${newReturned}) cannot exceed assigned (${existingInventory.quantityGiven}) minus sold (${existingInventory.quantitySold}) = ${maxReturnable}`);
+      }
+      
+      updateData.quantityReturned = newReturned;
+    }
+
+    if (body.weekStartDate !== undefined) {
+      updateData.weekStartDate = new Date(body.weekStartDate);
+    }
+
+    if (body.weekEndDate !== undefined) {
+      updateData.weekEndDate = new Date(body.weekEndDate);
+    }
+
+    // Update inventory
+    const updatedInventory = await prisma.staffInventory.update({
       where: { id: inventoryId },
+      data: updateData,
       include: {
         product: true,
         staff: true
       }
     });
 
-    if (!inventory) {
-      return NextResponse.json(
-        { success: false, error: 'Inventory assignment not found' },
-        { status: 404 }
-      );
-    }
-
-    // Check if there are sales
-    if (inventory.quantitySold > 0) {
-      return NextResponse.json(
-        { 
-          success: false, 
-          error: 'Cannot delete assignment with sales. Please use the return function instead.' 
-        },
-        { status: 400 }
-      );
-    }
-
-    // Calculate remaining items to return to stock
-    const remaining = inventory.quantityGiven - inventory.quantitySold - inventory.quantityReturned;
-    
-    // Start transaction
-    const result = await prisma.$transaction(async (tx) => {
-      // Return remaining items to stock
-      if (remaining > 0) {
-        const stockItem = await tx.stock.findFirst({
-          where: { productId: inventory.productId }
-        });
-
-        if (stockItem) {
-          await tx.stock.update({
-            where: { id: stockItem.id },
-            data: {
-              quantity: { increment: remaining },
-              updatedAt: new Date()
-            }
-          });
-        } else {
-          await tx.stock.create({
-            data: {
-              productId: inventory.productId,
-              name: inventory.product?.name || 'Product',
-              quantity: remaining,
-              costPrice: inventory.product?.productionCost || 0,
-              sellingPrice: inventory.product?.price || 0,
-              supplier: 'Return from Staff',
-              notes: `Returned from deleted assignment (ID: ${inventoryId})`,
-              createdAt: new Date(),
-              updatedAt: new Date()
-            }
-          });
-        }
-
-        // Create ledger entry
-        await tx.cashledger.create({
-          data: {
-            date: new Date(),
-            description: `Stock returned from deleted assignment: ${remaining} x ${inventory.product?.name || 'Product'} from ${inventory.staff?.name || 'Staff'}`,
-            type: 'IN',
-            category: 'INVENTORY_RETURN',
-            amount: remaining * (inventory.product?.productionCost || 0),
-            relatedTo: 'STAFF_INVENTORY',
-            affectedAccounts: 'STOCK',
-            referenceId: inventoryId,
-            referenceType: 'STAFF_INVENTORY',
-            createdAt: new Date(),
-            updatedAt: new Date()
-          }
-        });
-      }
-
-      // Delete the inventory assignment
-      await tx.staffInventory.delete({
-        where: { id: inventoryId }
-      });
-
-      return { deleted: true, itemsReturned: remaining };
-    });
-
-    return NextResponse.json({
-      success: true,
-      message: `Assignment deleted successfully. ${remaining} items returned to stock.`,
-      data: result
-    });
-
-  } catch (error: any) {
-    console.error('Error deleting inventory:', error);
-    
-    if (error.code === 'P2025') {
-      return NextResponse.json(
-        { success: false, error: 'Inventory assignment not found' },
-        { status: 404 }
-      );
-    }
-
-    return NextResponse.json(
-      { success: false, error: error.message || 'Failed to delete inventory' },
-      { status: 500 }
-    );
-  } finally {
-    await prisma.$disconnect();
-  }
-}
-
-// GET endpoint
-export async function GET(
-  request: NextRequest,
-  { params }: { params: { id: string } }
-) {
-  try {
-    const inventoryId = parseInt(params.id);
-    
-    if (!inventoryId || isNaN(inventoryId)) {
-      return NextResponse.json(
-        { success: false, error: 'Invalid inventory ID' },
-        { status: 400 }
-      );
-    }
-
-    const inventory = await prisma.staffInventory.findUnique({
-      where: { id: inventoryId },
-      include: {
-        product: {
-          include: {
-            stock: true
-          }
-        },
-        staff: true,
-        saleItems: {
-          include: {
-            sale: true
-          }
-        }
-      }
-    });
-
-    if (!inventory) {
-      return NextResponse.json(
-        { success: false, error: 'Inventory assignment not found' },
-        { status: 404 }
-      );
-    }
-
-    // Calculate remaining and available stock
-    const remaining = inventory.quantityGiven - inventory.quantitySold - inventory.quantityReturned;
-    const availableStock = inventory.product?.stock?.[0]?.quantity || 0;
+    // Calculate remaining
+    const remaining = updatedInventory.quantityGiven - updatedInventory.quantitySold - updatedInventory.quantityReturned;
 
     return NextResponse.json({
       success: true,
       data: {
-        ...inventory,
-        remaining,
-        availableStock,
-        totalValue: inventory.quantityGiven * (inventory.product?.price || 0)
-      }
+        ...updatedInventory,
+        remaining
+      },
+      message: 'Inventory partially updated successfully'
     });
 
   } catch (error: any) {
-    console.error('Error fetching inventory:', error);
+    console.error('Error in PATCH:', error);
+    
+    if (error.code === 'P2025') {
+      return NextResponse.json(
+        { success: false, error: 'Inventory not found' },
+        { status: 404 }
+      );
+    }
+
     return NextResponse.json(
-      { success: false, error: error.message || 'Failed to fetch inventory' },
+      { 
+        success: false, 
+        error: error.message || 'Failed to update inventory',
+        details: process.env.NODE_ENV === 'development' ? error.toString() : undefined
+      },
       { status: 500 }
     );
   } finally {
