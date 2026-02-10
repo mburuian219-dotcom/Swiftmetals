@@ -243,6 +243,9 @@ async function checkProductAvailabilityForStaff(
         available: inv.quantityGiven - inv.quantitySold - inv.quantityReturned
       }));
       
+      // Ensure message is always a string, not undefined
+      const errorMessage = `Insufficient availability. You can sell ${availableForCurrentStaff} max (${currentStaffAvailable} from assigned + ${unassignedQuantity} unassigned)`;
+      
       return {
         productId,
         productName,
@@ -255,18 +258,23 @@ async function checkProductAvailabilityForStaff(
           otherStaffAssigned,
           unassignedQuantity
         },
-        message: `Insufficient availability. You can sell ${availableForCurrentStaff} max (${currentStaffAvailable} from assigned + ${unassignedQuantity} unassigned)`
+        message: errorMessage // Always a string
       };
     }
     
   } catch (error: any) {
     console.error("❌ Error checking product availability:", error);
+    
+    // Ensure error case also returns a string message
+    const errorMessage = error.message || 'Unknown error checking availability';
+    
     return {
       productId,
       productName: `Product ID ${productId}`,
       canSell: false,
       availableQuantity: 0,
-      error: error.message
+      error: errorMessage,
+      message: errorMessage // Add message property for consistency
     };
   }
 }
@@ -279,7 +287,13 @@ async function validateProductsForStaffSale(
   weekEnd: Date
 ) {
   const availabilityChecks = [];
-  const insufficientItems = [];
+  const insufficientItems: Array<{
+    productId: number;
+    productName: string;
+    requestedQuantity: number;
+    availableQuantity: number;
+    message: string;
+  }> = []; // Add explicit type annotation
   
   for (const item of items) {
     const check = await checkProductAvailabilityForStaff(
@@ -296,13 +310,15 @@ async function validateProductsForStaffSale(
     });
     
     if (!check.canSell) {
+      // Ensure message is always a string
+      const message = check.message || `Insufficient availability for product ${check.productName}`;
+      
       insufficientItems.push({
         productId: item.productId,
         productName: check.productName,
         requestedQuantity: item.quantity,
         availableQuantity: check.availableQuantity,
-        message: check.message,
-        otherStaffInventories: check.otherStaffInventories || []
+        message: message // Now always a string
       });
     }
   }
