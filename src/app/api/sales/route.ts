@@ -3,11 +3,16 @@ import prisma from "@/lib/prisma";
 
 // ================== Helper Functions ==================
 
-// Define interfaces at the top level
-interface ValidationError {
+// Define interfaces
+interface AvailabilityCheckResult {
   productId: number;
-  productName?: string;
-  error: string;
+  productName: string;
+  canSell: boolean;
+  availableQuantity: number;
+  availableFrom?: 'ASSIGNED_STOCK' | 'UNASSIGNED_STOCK';
+  message: string;
+  error?: string;
+  unassignedStock?: number;
 }
 
 interface StaffDeductionResult {
@@ -16,8 +21,6 @@ interface StaffDeductionResult {
   status: string;
   quantityDeducted: number;
   staffInventoryId: number | null;
-  availableBefore?: number;
-  availableAfter?: number;
   message: string;
 }
 
@@ -116,7 +119,7 @@ async function findOrCreateStaff(userEmail: string, userName?: string) {
 // Get current week range (Monday to Sunday)
 function getCurrentWeekRange() {
   const now = new Date();
-  const dayOfWeek = now.getDay(); // 0 = Sunday, 1 = Monday, ...
+  const dayOfWeek = now.getDay();
   
   // Calculate Monday of current week
   let diffToMonday = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
@@ -132,16 +135,18 @@ function getCurrentWeekRange() {
   return { weekStart, weekEnd };
 }
 
-// Check if product quantity is available for a specific staff
+// ================== CORRECTED AVAILABILITY CHECK ==================
+
+// Check product availability with CORRECT unassigned calculation
 async function checkProductAvailabilityForStaff(
   productId: number, 
   currentStaffId: number, 
   requestedQuantity: number,
   weekStart: Date, 
   weekEnd: Date
-) {
+): Promise<AvailabilityCheckResult> {
   try {
-    // Get product info for better error messages
+    // Get product info
     const product = await prisma.product.findUnique({
       where: { id: productId },
       select: { name: true }
@@ -149,8 +154,30 @@ async function checkProductAvailabilityForStaff(
     
     const productName = product?.name || `Product ID ${productId}`;
     
-    // Find staff inventory for this product in current week
-    const staffInventories = await prisma.staffInventory.findMany({
+    // Find if current staff has assignment
+    const currentStaffAssignment = await prisma.staffInventory.findFirst({
+      where: {
+        staffId: currentStaffId,
+        productId: productId,
+        weekStartDate: {
+          lte: weekEnd
+        },
+        weekEndDate: {
+          gte: weekStart
+        }
+      }
+    });
+    
+    // Get total main stock
+    const mainStockItem = await prisma.stock.findFirst({
+      where: { productId: productId },
+      orderBy: { createdAt: "desc" },
+    });
+    
+    const totalMainStock = mainStockItem ? mainStockItem.quantity : 0;
+    
+    // Find ALL staff assignments for this product
+    const allStaffAssignments = await prisma.staffInventory.findMany({
       where: {
         productId: productId,
         weekStartDate: {
@@ -159,141 +186,115 @@ async function checkProductAvailabilityForStaff(
         weekEndDate: {
           gte: weekStart
         }
-      },
-      include: {
-        staff: true
       }
     });
     
-    // Find current staff's inventory
-    const currentStaffInventory = staffInventories.find(
-      inv => inv.staffId === currentStaffId
-    );
+    // CORRECTED: Calculate REMAINING assigned stock (original - sold - returned)
+    let totalRemainingAssigned = 0;
+    for (const assignment of allStaffAssignments) {
+      const remaining = assignment.quantityGiven - 
+                       assignment.quantitySold - 
+                       assignment.quantityReturned;
+      totalRemainingAssigned += Math.max(0, remaining); // Don't go negative
+    }
     
-    // Find other staff inventories
-    const otherStaffInventories = staffInventories.filter(
-      inv => inv.staffId !== currentStaffId
-    );
+    // CORRECTED: Unassigned = Total - Remaining Assigned
+    const unassignedStock = Math.max(0, totalMainStock - totalRemainingAssigned);
     
-    // Calculate total assigned to current staff
-    const currentStaffAssigned = currentStaffInventory ? 
-      currentStaffInventory.quantityGiven : 0;
-    
-    // Calculate total assigned to other staff
-    const otherStaffAssigned = otherStaffInventories.reduce(
-      (sum, inv) => sum + inv.quantityGiven, 0
-    );
-    
-    // Calculate available for current staff (excluding what they've already sold)
-    const currentStaffAvailable = currentStaffInventory ? 
-      currentStaffInventory.quantityGiven - 
-      currentStaffInventory.quantitySold - 
-      currentStaffInventory.quantityReturned : 0;
-    
-    // Calculate total available in main stock
-    const mainStockItem = await prisma.stock.findFirst({
-      where: { productId: productId },
-      orderBy: { createdAt: "desc" },
-    });
-    
-    const mainStockAvailable = mainStockItem ? mainStockItem.quantity : 0;
-    
-    // Calculate unassigned quantity (total main stock - all assigned to staff)
-    const unassignedQuantity = Math.max(0, mainStockAvailable - 
-      (currentStaffAssigned + otherStaffAssigned));
-    
-    // Calculate how much current staff can sell
-    let availableForCurrentStaff = currentStaffAvailable + unassignedQuantity;
-    
-    console.log(`📊 Availability check for ${productName}:`, {
+    console.log(`📊 CORRECTED Availability check for ${productName}:`, {
       productId,
-      currentStaffId,
-      requestedQuantity,
-      currentStaffAssigned,
-      currentStaffAvailable,
-      otherStaffAssigned,
-      mainStockAvailable,
-      unassignedQuantity,
-      availableForCurrentStaff
+      staffId: currentStaffId,
+      totalMainStock,
+      totalAssignments: allStaffAssignments.length,
+      totalRemainingAssigned,
+      unassignedStock,
+      requestedQuantity
     });
     
-    // Check if current staff can sell this quantity
-    if (availableForCurrentStaff >= requestedQuantity) {
-      return {
-        productId,
-        productName,
-        canSell: true,
-        availableQuantity: availableForCurrentStaff,
-        breakdown: {
-          fromAssigned: Math.min(requestedQuantity, currentStaffAvailable),
-          fromUnassigned: Math.max(0, requestedQuantity - currentStaffAvailable),
-          currentStaffAssigned,
-          currentStaffAvailable,
-          otherStaffAssigned,
-          unassignedQuantity
-        },
-        message: `Available: ${availableForCurrentStaff} (${currentStaffAvailable} from assigned + ${unassignedQuantity} unassigned)`
-      };
-    } else {
-      // Find which other staff has this product assigned
-      const otherStaffWithInventory = otherStaffInventories.map(inv => ({
-        staffId: inv.staff.id,
-        staffName: inv.staff.name,
-        assigned: inv.quantityGiven,
-        available: inv.quantityGiven - inv.quantitySold - inv.quantityReturned
-      }));
+    // ========== RULE 1: STAFF HAS ASSIGNMENT ==========
+    if (currentStaffAssignment) {
+      // This staff can ONLY sell from their REMAINING assigned quantity
+      const staffAvailable = Math.max(0,
+        currentStaffAssignment.quantityGiven - 
+        currentStaffAssignment.quantitySold - 
+        currentStaffAssignment.quantityReturned
+      );
       
-      // Ensure message is always a string, not undefined
-      const errorMessage = `Insufficient availability. You can sell ${availableForCurrentStaff} max (${currentStaffAvailable} from assigned + ${unassignedQuantity} unassigned)`;
-      
-      return {
-        productId,
-        productName,
-        canSell: false,
-        availableQuantity: availableForCurrentStaff,
-        otherStaffInventories: otherStaffWithInventory,
-        breakdown: {
-          currentStaffAssigned,
-          currentStaffAvailable,
-          otherStaffAssigned,
-          unassignedQuantity
-        },
-        message: errorMessage // Always a string
-      };
+      if (staffAvailable >= requestedQuantity) {
+        return {
+          productId,
+          productName,
+          canSell: true,
+          availableQuantity: staffAvailable,
+          availableFrom: 'ASSIGNED_STOCK',
+          unassignedStock: unassignedStock,
+          message: `Available: ${staffAvailable} from your assigned stock`
+        };
+      } else {
+        return {
+          productId,
+          productName,
+          canSell: false,
+          availableQuantity: staffAvailable,
+          availableFrom: 'ASSIGNED_STOCK',
+          unassignedStock: unassignedStock,
+          message: `Cannot sell ${requestedQuantity}. You only have ${staffAvailable} available from your assigned stock.`
+        };
+      }
+    }
+    // ========== RULE 2: STAFF HAS NO ASSIGNMENT ==========
+    else {
+      // This staff can ONLY sell from unassigned stock
+      if (unassignedStock >= requestedQuantity) {
+        return {
+          productId,
+          productName,
+          canSell: true,
+          availableQuantity: unassignedStock,
+          availableFrom: 'UNASSIGNED_STOCK',
+          message: `Available: ${unassignedStock} from unassigned stock`
+        };
+      } else {
+        return {
+          productId,
+          productName,
+          canSell: false,
+          availableQuantity: unassignedStock,
+          availableFrom: 'UNASSIGNED_STOCK',
+          message: `Cannot sell ${requestedQuantity}. Only ${unassignedStock} available in unassigned stock.`
+        };
+      }
     }
     
   } catch (error: any) {
     console.error("❌ Error checking product availability:", error);
-    
-    // Ensure error case also returns a string message
-    const errorMessage = error.message || 'Unknown error checking availability';
-    
     return {
       productId,
       productName: `Product ID ${productId}`,
       canSell: false,
       availableQuantity: 0,
-      error: errorMessage,
-      message: errorMessage // Add message property for consistency
+      error: error.message,
+      message: error.message
     };
   }
 }
 
 // Validate multiple products for staff
 async function validateProductsForStaffSale(
-  items: Array<{productId: number, quantity: number, productName?: string}>,
+  items: Array<{productId: number, quantity: number}>,
   currentStaffId: number,
   weekStart: Date,
   weekEnd: Date
 ) {
-  const availabilityChecks = [];
+  const availabilityChecks: AvailabilityCheckResult[] = [];
   const insufficientItems: Array<{
     productId: number;
     productName: string;
     requestedQuantity: number;
     availableQuantity: number;
     message: string;
-  }> = []; // Add explicit type annotation
+    availableFrom?: string;
+  }> = [];
   
   for (const item of items) {
     const check = await checkProductAvailabilityForStaff(
@@ -304,21 +305,16 @@ async function validateProductsForStaffSale(
       weekEnd
     );
     
-    availabilityChecks.push({
-      ...check,
-      requestedQuantity: item.quantity
-    });
+    availabilityChecks.push(check);
     
     if (!check.canSell) {
-      // Ensure message is always a string
-      const message = check.message || `Insufficient availability for product ${check.productName}`;
-      
       insufficientItems.push({
         productId: item.productId,
         productName: check.productName,
         requestedQuantity: item.quantity,
         availableQuantity: check.availableQuantity,
-        message: message // Now always a string
+        message: check.message,
+        availableFrom: check.availableFrom
       });
     }
   }
@@ -331,37 +327,34 @@ async function validateProductsForStaffSale(
   };
 }
 
-// Smart inventory processing with allocation
-async function processSmartInventoryForStaffSale(
+// ================== CORRECTED INVENTORY PROCESSING ==================
+
+// Process inventory with CORRECT unassigned calculation
+async function processInventoryForStaffSale(
   saleId: number, 
   staffId: number, 
   items: Array<{productId: number, quantity: number}>
 ) {
   try {
-    console.log(`🔍 Processing smart inventory for sale ${saleId}, staff ${staffId}`);
+    console.log(`🔍 Processing inventory for sale ${saleId}, staff ${staffId}`);
     
     const { weekStart, weekEnd } = getCurrentWeekRange();
-    
-    console.log(`📅 Current week: ${weekStart.toLocaleDateString()} - ${weekEnd.toLocaleDateString()}`);
     
     const staffTrackingResults: StaffDeductionResult[] = [];
     const mainStockResults: MainStockDeductionResult[] = [];
     
-    let totalTrackedForStaff = 0;
-    let totalDeductedFromMain = 0;
-    
     for (const item of items) {
-      // Get product name for better logging
+      // Get product name
       const product = await prisma.product.findUnique({
         where: { id: item.productId },
         select: { name: true }
       });
       
       const productName = product?.name || `Product ${item.productId}`;
-      console.log(`🛍️ Processing item: ${productName}, Quantity ${item.quantity}`);
+      console.log(`🛍️ Processing: ${productName}, Quantity: ${item.quantity}`);
       
-      // ========== STEP 1: FIND STAFF INVENTORY ==========
-      const staffInventory = await prisma.staffInventory.findFirst({
+      // Find staff assignment
+      const staffAssignment = await prisma.staffInventory.findFirst({
         where: {
           staffId: staffId,
           productId: item.productId,
@@ -371,22 +364,10 @@ async function processSmartInventoryForStaffSale(
           weekEndDate: {
             gte: weekStart
           }
-        },
-        orderBy: {
-          createdAt: 'desc'
         }
       });
       
-      let staffTrackingResult: StaffDeductionResult = {
-        productId: item.productId,
-        productName,
-        status: 'NO_STAFF_INVENTORY',
-        quantityDeducted: 0,
-        staffInventoryId: null,
-        message: ''
-      };
-      
-      // ========== STEP 2: CHECK MAIN STOCK ==========
+      // Check main stock
       const mainStockItem = await prisma.stock.findFirst({
         where: { productId: item.productId },
         orderBy: { createdAt: "desc" },
@@ -400,68 +381,94 @@ async function processSmartInventoryForStaffSale(
         throw new Error(`Not enough stock for ${productName}. Available: ${mainStockItem.quantity}, Requested: ${item.quantity}`);
       }
       
-      // ========== STEP 3: SMART ALLOCATION ==========
-      if (staffInventory) {
-        // Calculate available in staff's assigned inventory
-        const staffAvailable = staffInventory.quantityGiven - 
-                              staffInventory.quantitySold - 
-                              staffInventory.quantityReturned;
+      let staffTrackingResult: StaffDeductionResult = {
+        productId: item.productId,
+        productName,
+        status: 'NO_ASSIGNMENT',
+        quantityDeducted: 0,
+        staffInventoryId: null,
+        message: ''
+      };
+      
+      // ========== PROCESS BASED ON ASSIGNMENT ==========
+      if (staffAssignment) {
+        // Staff has assignment - check if they have enough remaining
+        const staffAvailable = Math.max(0,
+          staffAssignment.quantityGiven - 
+          staffAssignment.quantitySold - 
+          staffAssignment.quantityReturned
+        );
         
-        // Use from staff's assigned inventory first
-        const fromStaffInventory = Math.min(item.quantity, staffAvailable);
-        const fromUnassigned = Math.max(0, item.quantity - staffAvailable);
-        
-        console.log(`📊 Smart allocation for ${productName}:`, {
-          requested: item.quantity,
-          fromStaffInventory,
-          fromUnassigned,
-          staffAvailable
-        });
-        
-        if (fromStaffInventory > 0) {
-          // Update staff inventory tracking
-          const updatedStaffInventory = await prisma.staffInventory.update({
-            where: { id: staffInventory.id },
+        if (staffAvailable >= item.quantity) {
+          // Update staff assignment
+          await prisma.staffInventory.update({
+            where: { id: staffAssignment.id },
             data: {
-              quantitySold: staffInventory.quantitySold + fromStaffInventory,
+              quantitySold: staffAssignment.quantitySold + item.quantity,
               updatedAt: new Date()
             }
           });
           
-          console.log(`📊 Updated staff tracking: Sold +${fromStaffInventory} = ${updatedStaffInventory.quantitySold} total sold`);
-          
-          totalTrackedForStaff += fromStaffInventory;
-          
           staffTrackingResult = {
             productId: item.productId,
             productName,
-            status: fromUnassigned > 0 ? 'PARTIAL_TRACKED' : 'TRACKED',
-            quantityDeducted: fromStaffInventory,
-            staffInventoryId: staffInventory.id,
-            availableBefore: staffAvailable,
-            availableAfter: staffAvailable - fromStaffInventory,
-            message: fromUnassigned > 0 
-              ? `Tracked ${fromStaffInventory} from assigned inventory, ${fromUnassigned} from unassigned stock`
-              : `Tracked ${fromStaffInventory} from assigned inventory`
+            status: 'ASSIGNED_STOCK_USED',
+            quantityDeducted: item.quantity,
+            staffInventoryId: staffAssignment.id,
+            message: `Sold ${item.quantity} from assigned stock`
           };
         } else {
-          staffTrackingResult = {
-            productId: item.productId,
-            productName,
-            status: 'NOT_TRACKED',
-            quantityDeducted: 0,
-            staffInventoryId: staffInventory.id,
-            message: `No available assigned inventory, using ${item.quantity} from unassigned stock`
-          };
+          throw new Error(
+            `Cannot sell ${item.quantity} ${productName}. ` +
+            `You only have ${staffAvailable} available from your assigned stock.`
+          );
         }
       } else {
-        staffTrackingResult.message = 'No staff inventory assignment - using unassigned stock';
+        // Staff has no assignment - check unassigned stock
+        
+        // Get all assignments to calculate unassigned stock
+        const allAssignments = await prisma.staffInventory.findMany({
+          where: {
+            productId: item.productId,
+            weekStartDate: {
+              lte: weekEnd
+            },
+            weekEndDate: {
+              gte: weekStart
+            }
+          }
+        });
+        
+        // Calculate remaining assigned stock
+        let totalRemainingAssigned = 0;
+        for (const assignment of allAssignments) {
+          const remaining = assignment.quantityGiven - 
+                           assignment.quantitySold - 
+                           assignment.quantityReturned;
+          totalRemainingAssigned += Math.max(0, remaining);
+        }
+        
+        // Calculate unassigned stock
+        const unassignedStock = Math.max(0, mainStockItem.quantity - totalRemainingAssigned);
+        
+        if (unassignedStock < item.quantity) {
+          throw new Error(
+            `Cannot sell ${item.quantity} ${productName}. ` +
+            `Only ${unassignedStock} available in unassigned stock.`
+          );
+        }
+        
+        staffTrackingResult = {
+          productId: item.productId,
+          productName,
+          status: 'UNASSIGNED_STOCK_USED',
+          quantityDeducted: 0,
+          staffInventoryId: null,
+          message: `Sold ${item.quantity} from unassigned stock`
+        };
       }
       
-      staffTrackingResults.push(staffTrackingResult);
-      
-      // ========== STEP 4: DEDUCT FROM MAIN STOCK ==========
-      // ALWAYS deduct from main stock (the actual inventory)
+      // ALWAYS deduct from main stock
       await prisma.stock.update({
         where: { id: mainStockItem.id },
         data: { 
@@ -470,9 +477,9 @@ async function processSmartInventoryForStaffSale(
         },
       });
       
-      console.log(`📉 Main stock updated: ${productName} -${item.quantity} = ${mainStockItem.quantity - item.quantity}`);
+      console.log(`📉 Main stock updated: ${productName} -${item.quantity}`);
       
-      totalDeductedFromMain += item.quantity;
+      staffTrackingResults.push(staffTrackingResult);
       
       mainStockResults.push({
         productId: item.productId,
@@ -484,8 +491,8 @@ async function processSmartInventoryForStaffSale(
         message: `Deducted ${item.quantity} from main stock`
       });
       
-      // ========== STEP 5: LINK SALE ITEM TO STAFF INVENTORY ==========
-      if (staffTrackingResult.staffInventoryId && staffTrackingResult.quantityDeducted > 0) {
+      // Link sale item to staff inventory if assignment used
+      if (staffTrackingResult.staffInventoryId) {
         const saleItemRecord = await prisma.saleitem.findFirst({
           where: {
             saleId: saleId,
@@ -501,35 +508,26 @@ async function processSmartInventoryForStaffSale(
               staffInventoryId: staffTrackingResult.staffInventoryId 
             }
           });
-          
-          console.log(`🔗 Linked sale item ${saleItemRecord.id} to staff tracking ${staffTrackingResult.staffInventoryId}`);
+          console.log(`🔗 Linked sale item to staff assignment ${staffTrackingResult.staffInventoryId}`);
         }
       }
     }
     
-    console.log(`✅ Completed smart inventory processing:`);
-    console.log(`   Staff Tracking: ${totalTrackedForStaff} items tracked`);
-    console.log(`   Main Stock: ${totalDeductedFromMain} items deducted`);
-    
     return {
       success: true,
       staffTracking: {
-        totalTracked: totalTrackedForStaff,
         results: staffTrackingResults
       },
       mainStockDeductions: {
-        totalDeducted: totalDeductedFromMain,
         results: mainStockResults
       },
       summary: {
-        totalItemsRequested: items.reduce((sum, item) => sum + item.quantity, 0),
-        trackedForStaff: totalTrackedForStaff,
-        deductedFromMain: totalDeductedFromMain
+        totalItemsRequested: items.reduce((sum, item) => sum + item.quantity, 0)
       }
     };
     
   } catch (error: any) {
-    console.error("❌ Error in smart inventory processing:", error);
+    console.error("❌ Error in inventory processing:", error);
     return {
       success: false,
       error: error.message
@@ -537,61 +535,57 @@ async function processSmartInventoryForStaffSale(
   }
 }
 
-// Deduct ONLY from main stock (for non-staff sales or when staff has no assigned inventory)
-async function deductFromMainStockOnly(items: Array<{productId: number, quantity: number}>) {
+// Process sale without staff (simple deduction)
+async function processSaleWithoutStaff(
+  items: Array<{productId: number, quantity: number}>
+) {
   try {
-    console.log("📦 Deducting from main stock only...");
+    console.log("📦 Processing sale without staff...");
     
-    const results: Array<{
-      productId: number;
-      productName: string;
-      status: string;
-      quantityDeducted: number;
-      previousQuantity: number;
-      newQuantity: number;
-    }> = [];
+    const results: MainStockDeductionResult[] = [];
     
     for (const item of items) {
-      // Get product name for better logging
+      // Get product info
       const product = await prisma.product.findUnique({
         where: { id: item.productId },
         select: { name: true }
       });
       
       const productName = product?.name || `Product ${item.productId}`;
-      console.log(`🛒 Processing main stock for ${productName}, quantity ${item.quantity}`);
       
-      const stockItem = await prisma.stock.findFirst({
+      // Check main stock
+      const mainStockItem = await prisma.stock.findFirst({
         where: { productId: item.productId },
         orderBy: { createdAt: "desc" },
       });
       
-      if (!stockItem) {
+      if (!mainStockItem) {
         throw new Error(`${productName} not found in main stock`);
       }
       
-      if (stockItem.quantity < item.quantity) {
-        throw new Error(`Not enough stock for ${productName}. Available: ${stockItem.quantity}, Requested: ${item.quantity}`);
+      if (mainStockItem.quantity < item.quantity) {
+        throw new Error(`Not enough stock for ${productName}. Available: ${mainStockItem.quantity}, Requested: ${item.quantity}`);
       }
       
       // Deduct from main stock
       await prisma.stock.update({
-        where: { id: stockItem.id },
+        where: { id: mainStockItem.id },
         data: { 
-          quantity: stockItem.quantity - item.quantity,
+          quantity: mainStockItem.quantity - item.quantity,
           updatedAt: new Date()
         },
       });
       
-      console.log(`📉 Main stock updated: ${productName} -${item.quantity} = ${stockItem.quantity - item.quantity}`);
+      console.log(`📉 Main stock updated: ${productName} -${item.quantity}`);
       
       results.push({
         productId: item.productId,
         productName,
-        status: 'SUCCESS',
+        status: 'MAIN_STOCK_USED',
         quantityDeducted: item.quantity,
-        previousQuantity: stockItem.quantity,
-        newQuantity: stockItem.quantity - item.quantity
+        previousQuantity: mainStockItem.quantity,
+        newQuantity: mainStockItem.quantity - item.quantity,
+        message: `Deducted ${item.quantity} from main stock`
       });
     }
     
@@ -599,13 +593,12 @@ async function deductFromMainStockOnly(items: Array<{productId: number, quantity
       success: true,
       results,
       summary: {
-        totalItemsDeducted: items.reduce((sum, item) => sum + item.quantity, 0),
-        deductionSource: 'MAIN_STOCK_ONLY'
+        totalItemsDeducted: items.reduce((sum, item) => sum + item.quantity, 0)
       }
     };
     
   } catch (error: any) {
-    console.error("❌ Error deducting from main stock:", error);
+    console.error("❌ Error processing sale:", error);
     return {
       success: false,
       error: error.message
@@ -613,14 +606,70 @@ async function deductFromMainStockOnly(items: Array<{productId: number, quantity
   }
 }
 
-function processSale(sale: any) {
-  const totalPaid = sale.payment
-    .filter((p: any) => p.status === "CLEARED" || p.status === "COMPLETED")
-    .reduce((sum: number, p: any) => sum + p.amount, 0);
+// Restore inventory after sale update/delete
+async function restoreInventoryForSale(sale: any) {
+  try {
+    console.log(`🔄 Restoring inventory for sale ${sale.id}...`);
+    
+    const { weekStart, weekEnd } = getCurrentWeekRange();
+    
+    for (const item of sale.saleitem) {
+      // Restore main stock
+      const stockItem = await prisma.stock.findFirst({
+        where: { productId: item.productId },
+        orderBy: { createdAt: "desc" },
+      });
+      
+      if (stockItem) {
+        await prisma.stock.update({
+          where: { id: stockItem.id },
+          data: { 
+            quantity: stockItem.quantity + item.quantity,
+            updatedAt: new Date()
+          }
+        });
+        console.log(`📈 Restored ${item.quantity} items to main stock for product ${item.productId}`);
+      }
+      
+      // Restore staff inventory tracking if it was used
+      if (item.staffInventoryId && sale.createdById) {
+        const staffInventory = await prisma.staffInventory.findUnique({
+          where: { id: item.staffInventoryId }
+        });
+        
+        if (staffInventory && staffInventory.staffId === sale.createdById) {
+          const newQuantitySold = Math.max(0, staffInventory.quantitySold - item.quantity);
+          await prisma.staffInventory.update({
+            where: { id: item.staffInventoryId },
+            data: {
+              quantitySold: newQuantitySold,
+              updatedAt: new Date()
+            }
+          });
+          console.log(`🔄 Restored ${item.quantity} items to staff tracking ${item.staffInventoryId}`);
+        }
+      }
+    }
+    
+    console.log("✅ Inventory restoration completed");
+  } catch (error: any) {
+    console.error("❌ Error restoring inventory:", error);
+    throw error;
+  }
+}
 
-  const pendingPayments = sale.payment.filter((p: any) => 
+// ================== SALE PROCESSING HELPER ==================
+
+function processSale(sale: any) {
+  if (!sale) return null;
+  
+  const totalPaid = sale.payment
+    ?.filter((p: any) => p.status === "CLEARED" || p.status === "COMPLETED")
+    ?.reduce((sum: number, p: any) => sum + p.amount, 0) || 0;
+
+  const pendingPayments = sale.payment?.filter((p: any) => 
     p.status === "PENDING" || p.status === "BOUNCED"
-  );
+  ) || [];
   const remainingAmount = sale.amount - totalPaid;
 
   let status: "UNPAID" | "PARTIAL" | "PAID" = "UNPAID";
@@ -629,8 +678,8 @@ function processSale(sale: any) {
 
   return {
     ...sale,
-    saleitems: sale.saleitem,
-    payments: sale.payment,
+    saleitems: sale.saleitem || [],
+    payments: sale.payment || [],
     totalPaid,
     remainingAmount,
     status,
@@ -639,6 +688,8 @@ function processSale(sale: any) {
     staff: sale.staff || null
   };
 }
+
+// ================== API ROUTES ==================
 
 // ================== GET ALL SALES ==================
 export async function GET(req: NextRequest) {
@@ -649,6 +700,7 @@ export async function GET(req: NextRequest) {
     const customerId = searchParams.get('customerId');
     const startDate = searchParams.get('startDate');
     const endDate = searchParams.get('endDate');
+    const status = searchParams.get('status');
     
     // Build where clause
     const where: any = {};
@@ -664,6 +716,10 @@ export async function GET(req: NextRequest) {
     
     if (customerId) {
       where.customerId = parseInt(customerId);
+    }
+    
+    if (status) {
+      where.status = status;
     }
     
     if (startDate || endDate) {
@@ -688,6 +744,8 @@ export async function GET(req: NextRequest) {
         },
         payment: true,
         staff: true,
+        paymentschedule: true,
+        smsreminder: true,
       },
       orderBy: { createdAt: "desc" },
     });
@@ -695,11 +753,14 @@ export async function GET(req: NextRequest) {
     return NextResponse.json(sales.map(processSale));
   } catch (err: any) {
     console.error("❌ Fetch sales error:", err);
-    return NextResponse.json([], { status: 500 });
+    return NextResponse.json({ 
+      error: "Failed to fetch sales",
+      details: err.message 
+    }, { status: 500 });
   }
 }
 
-// ================== CREATE SALE (WITH SMART ALLOCATION) ==================
+// ================== CREATE SALE ==================
 export async function POST(req: NextRequest) {
   try {
     const data = await req.json();
@@ -707,19 +768,17 @@ export async function POST(req: NextRequest) {
     console.log("📨 Creating sale...");
     console.log("📊 Sale items:", data.saleItems);
     
-    // ✅ EXTRACT USER INFO
+    // Extract user info
     let userId = "";
     let userEmail = "";
     let userName = "";
     
-    // Check for structured auth info first
     if (data.authInfo) {
       userId = data.authInfo.userId || data.authInfo.uid || "";
       userEmail = data.authInfo.email || "";
       userName = data.authInfo.name || data.authInfo.displayName || "";
     }
     
-    // If no structured auth info, check individual fields
     if (!userEmail) {
       const possibleEmailFields = ['email', 'userEmail', 'createdBy', 'userName', 'user'];
       for (const field of possibleEmailFields) {
@@ -746,23 +805,18 @@ export async function POST(req: NextRequest) {
         .replace(/\b\w/g, (l: string) => l.toUpperCase());
     }
     
-    // If still no email, use a placeholder
     if (!userEmail) {
       userEmail = userId ? `${userId}@firebase.uid` : "unknown@example.com";
     }
     
-    // ALWAYS normalize the email
     const normalizedUserEmail = normalizeEmail(userEmail);
     
     console.log("👤 Extracted user info:", {
-      userId: userId,
       userEmail: normalizedUserEmail,
-      userName: userName,
-      isFirebaseUid: isFirebaseUid(userId),
-      isValidEmail: isValidEmail(normalizedUserEmail)
+      userName: userName
     });
     
-    // ✅ CRITICAL: Find or create staff record
+    // Find or create staff
     let staffRecord = null;
     let staffId: number | null = null;
     
@@ -770,12 +824,8 @@ export async function POST(req: NextRequest) {
       staffRecord = await findOrCreateStaff(normalizedUserEmail, userName);
       if (staffRecord) {
         staffId = staffRecord.id;
-        console.log(`✅ Sale will be linked to staff: ${staffRecord.name} (ID: ${staffRecord.id})`);
-      } else {
-        console.log(`⚠️ Could not find/create staff for: ${normalizedUserEmail}`);
+        console.log(`✅ Sale linked to staff: ${staffRecord.name} (ID: ${staffRecord.id})`);
       }
-    } else {
-      console.log(`ℹ️ Skipping staff lookup for: ${normalizedUserEmail} (not a valid email)`);
     }
 
     // Validate required fields
@@ -785,14 +835,14 @@ export async function POST(req: NextRequest) {
     if (!customerId || isNaN(customerId)) {
       return NextResponse.json({ 
         error: "Invalid customer ID",
-        details: "Customer ID is required and must be a valid number"
+        details: "Customer ID is required"
       }, { status: 400 });
     }
 
     if (!amount || isNaN(amount) || amount <= 0) {
       return NextResponse.json({ 
         error: "Invalid amount",
-        details: "Sale amount is required and must be greater than 0"
+        details: "Sale amount is required"
       }, { status: 400 });
     }
 
@@ -827,19 +877,10 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // ✅ CHECK 1: SMART AVAILABILITY VALIDATION
+    // Check availability if staff exists
     const { weekStart, weekEnd } = getCurrentWeekRange();
-    let hasInsufficientItems = false;
-    let insufficientItemsInfo: Array<{
-      productId: number;
-      productName: string;
-      requestedQuantity: number;
-      availableQuantity: number;
-      message: string;
-    }> = [];
     
     if (staffId) {
-      // Check availability for this staff
       const availabilityValidation = await validateProductsForStaffSale(
         data.saleItems.map((item: any) => ({
           productId: item.productId,
@@ -850,50 +891,27 @@ export async function POST(req: NextRequest) {
         weekEnd
       );
       
-      hasInsufficientItems = availabilityValidation.hasInsufficientItems;
-      insufficientItemsInfo = availabilityValidation.insufficientItems;
-      
-      console.log("🔍 Smart availability validation:", {
-        staffId,
-        staffName: staffRecord?.name,
-        totalItems: data.saleItems.length,
-        insufficientItems: insufficientItemsInfo.length,
-        canProceed: availabilityValidation.canProceed
-      });
-      
-      // ❌ BLOCK SALE if insufficient items found
-      if (hasInsufficientItems) {
+      if (availabilityValidation.hasInsufficientItems) {
         console.error("🚫 INSUFFICIENT AVAILABILITY:", {
           staffId,
-          staffName: staffRecord?.name,
-          insufficientItems: insufficientItemsInfo
+          insufficientItems: availabilityValidation.insufficientItems
         });
         
-        // Format error messages for each insufficient item
-        const errorMessages = insufficientItemsInfo.map(item => 
-          `• ${item.productName} (ID: ${item.productId}) - Requested: ${item.requestedQuantity}, Available: ${item.availableQuantity}`
+        const errorMessages = availabilityValidation.insufficientItems.map(item => 
+          `• ${item.productName}: ${item.message}`
         );
         
         return NextResponse.json({ 
           error: "INSUFFICIENT AVAILABILITY",
           details: "You don't have enough availability to sell these items",
-          insufficientItems: insufficientItemsInfo,
-          staffAttemptingSale: {
-            id: staffId,
-            name: staffRecord?.name,
-            email: normalizedUserEmail
-          },
-          message: `The following items have insufficient availability:\n${errorMessages.join('\n')}`,
-          validationResults: availabilityValidation.availabilityChecks
+          insufficientItems: availabilityValidation.insufficientItems,
+          message: `The following items have insufficient availability:\n${errorMessages.join('\n')}`
         }, { status: 400 });
       }
     }
 
-    // ✅ CHECK 2: MAIN STOCK VALIDATION (ALWAYS check main stock for ALL sales)
-    console.log("🔍 Validating main stock availability...");
-    
+    // Check main stock availability
     for (const item of data.saleItems) {
-      // Check main stock availability (ALWAYS required)
       const stockItem = await prisma.stock.findFirst({
         where: { productId: item.productId },
         orderBy: { createdAt: "desc" },
@@ -945,7 +963,7 @@ export async function POST(req: NextRequest) {
         paidAt: p.paidAt ? new Date(p.paidAt) : new Date(),
       })) || [];
 
-    // ✅ Create sale with PROPER email and staff ID
+    // Create sale
     const newSale = await prisma.sale.create({
       data: {
         customerId,
@@ -980,17 +998,14 @@ export async function POST(req: NextRequest) {
       createdBy: newSale.createdBy,
       createdById: newSale.createdById,
       customer: newSale.customer?.name,
-      amount: newSale.amount,
-      staffLinked: staffRecord ? `${staffRecord.name} (ID: ${staffRecord.id})` : 'None'
+      amount: newSale.amount
     });
 
-    // ✅ PROCESS INVENTORY WITH SMART ALLOCATION
+    // Process inventory
     let inventoryResult = null;
     
     if (staffId) {
-      // ✅ Use smart inventory processing for staff sales
-      console.log("🤖 Processing inventory with smart allocation...");
-      inventoryResult = await processSmartInventoryForStaffSale(
+      inventoryResult = await processInventoryForStaffSale(
         newSale.id, 
         staffId, 
         data.saleItems.map((item: any) => ({
@@ -998,45 +1013,26 @@ export async function POST(req: NextRequest) {
           quantity: item.quantity
         }))
       );
-      
-      if (!inventoryResult.success) {
-        console.error("❌ Inventory processing failed:", inventoryResult.error);
-        // Rollback sale creation
-        await prisma.sale.delete({ where: { id: newSale.id } });
-        return NextResponse.json({ 
-          error: "FAILED TO PROCESS INVENTORY",
-          details: inventoryResult.error,
-          message: "Sale created but inventory processing failed. Sale has been rolled back."
-        }, { status: 500 });
-      }
-      
-      console.log("✅ Smart inventory processing completed");
-      
     } else {
-      // ✅ No staff - deduct ONLY from main stock
-      console.log("📦 Deducting from main stock only (no staff)...");
-      inventoryResult = await deductFromMainStockOnly(
+      inventoryResult = await processSaleWithoutStaff(
         data.saleItems.map((item: any) => ({
           productId: item.productId,
           quantity: item.quantity
         }))
       );
-      
-      if (!inventoryResult.success) {
-        console.error("❌ Main stock deduction failed:", inventoryResult.error);
-        // Rollback sale creation
-        await prisma.sale.delete({ where: { id: newSale.id } });
-        return NextResponse.json({ 
-          error: "FAILED TO DEDUCT FROM MAIN STOCK",
-          details: inventoryResult.error,
-          message: "Sale created but stock deduction failed. Sale has been rolled back."
-        }, { status: 500 });
-      }
-      
-      console.log("✅ Main stock deductions completed successfully");
+    }
+    
+    if (!inventoryResult.success) {
+      console.error("❌ Inventory processing failed:", inventoryResult.error);
+      await prisma.sale.delete({ where: { id: newSale.id } });
+      return NextResponse.json({ 
+        error: "FAILED TO PROCESS INVENTORY",
+        details: inventoryResult.error,
+        message: "Sale created but inventory processing failed. Sale has been rolled back."
+      }, { status: 500 });
     }
 
-    // Fetch the complete sale with updated inventory links
+    // Fetch complete sale
     const completeSale = await prisma.sale.findUnique({
       where: { id: newSale.id },
       include: {
@@ -1061,20 +1057,13 @@ export async function POST(req: NextRequest) {
       inventoryProcessing: {
         result: inventoryResult,
         staffId,
-        staffName: staffRecord?.name,
-        summary: inventoryResult.summary
-      },
-      availabilityValidation: {
-        passed: true,
-        message: "All items are available for sale",
-        insufficientItems: []
+        staffName: staffRecord?.name
       }
     }, { status: 201 });
     
   } catch (err: any) {
     console.error("❌ Sale creation error:", err);
     
-    // Format error response based on error type
     let errorMessage = "Failed to create sale";
     let statusCode = 500;
     
@@ -1084,9 +1073,6 @@ export async function POST(req: NextRequest) {
     } else if (err.code === 'P2003') {
       errorMessage = "Foreign key constraint failed";
       statusCode = 400;
-    } else if (err.message?.includes('prisma')) {
-      errorMessage = "Database error";
-      statusCode = 500;
     }
     
     return NextResponse.json({ 
@@ -1148,7 +1134,7 @@ export async function PUT(req: NextRequest) {
       return NextResponse.json({ error: "Sale ID is required" }, { status: 400 });
     }
 
-    // ✅ Get user info
+    // Get user info
     let userEmail = "";
     let userName = "";
     let userId = "";
@@ -1181,6 +1167,7 @@ export async function PUT(req: NextRequest) {
     
     const normalizedUserEmail = normalizeEmail(userEmail);
     
+    // Get existing sale
     const existingSale = await prisma.sale.findUnique({
       where: { id },
       include: { 
@@ -1198,7 +1185,7 @@ export async function PUT(req: NextRequest) {
       return NextResponse.json({ error: "Sale not found" }, { status: 404 });
     }
 
-    // ✅ If sale has no staff link, try to link it now
+    // Link to staff if not already linked
     let staffId = existingSale.createdById;
     let staffRecord = existingSale.staff;
     
@@ -1210,58 +1197,18 @@ export async function PUT(req: NextRequest) {
       }
     }
 
-    // ✅ RESTORE INVENTORY FROM OLD SALE ITEMS FIRST
+    // Restore inventory from old sale items first
     console.log(`🔄 Restoring inventory for sale update ${id}...`);
-    
-    // Get current week range for inventory restoration
-    const { weekStart, weekEnd } = getCurrentWeekRange();
-    
-    for (const oldItem of existingSale.saleitem) {
-      // Restore main stock (ALWAYS restore main stock)
-      const stockItem = await prisma.stock.findFirst({
-        where: { productId: oldItem.productId },
-        orderBy: { createdAt: "desc" },
-      });
-      
-      if (stockItem) {
-        await prisma.stock.update({
-          where: { id: stockItem.id },
-          data: { 
-            quantity: stockItem.quantity + oldItem.quantity,
-            updatedAt: new Date()
-          }
-        });
-        console.log(`📈 Restored ${oldItem.quantity} items to main stock for product ${oldItem.productId}`);
-      }
-      
-      // Restore staff inventory tracking if it was used
-      if (oldItem.staffInventoryId && existingSale.createdById) {
-        const staffInventory = await prisma.staffInventory.findUnique({
-          where: { id: oldItem.staffInventoryId }
-        });
-        
-        if (staffInventory && staffInventory.staffId === existingSale.createdById) {
-          const newQuantitySold = Math.max(0, staffInventory.quantitySold - oldItem.quantity);
-          await prisma.staffInventory.update({
-            where: { id: oldItem.staffInventoryId },
-            data: {
-              quantitySold: newQuantitySold,
-              updatedAt: new Date()
-            }
-          });
-          console.log(`🔄 Restored ${oldItem.quantity} items to staff tracking ${oldItem.staffInventoryId}`);
-        }
-      }
-    }
+    await restoreInventoryForSale(existingSale);
 
     const newItems = data.saleItems || existingSale.saleitem;
     const recalculatedAmount = newItems.reduce((sum: number, item: any) => sum + item.price * item.quantity, 0);
 
-    // ✅ CHECK AVAILABILITY FOR UPDATES
+    // Check availability for updates
+    const { weekStart, weekEnd } = getCurrentWeekRange();
     const validationErrors: string[] = [];
     
     if (data.saleItems && staffId) {
-      // Check availability for new items
       for (const item of data.saleItems) {
         const availabilityCheck = await checkProductAvailabilityForStaff(
           item.productId,
@@ -1279,9 +1226,15 @@ export async function PUT(req: NextRequest) {
       }
       
       if (validationErrors.length > 0) {
-        // Re-apply the old inventory deductions since update failed
+        // Re-apply the old inventory deductions
         console.log("❌ Update failed, reapplying old inventory deductions...");
-        await reapplyOldInventoryDeductions(existingSale);
+        await restoreInventoryForSale({
+          ...existingSale,
+          saleitem: existingSale.saleitem.map(item => ({
+            ...item,
+            quantity: -item.quantity // Negative to deduct again
+          }))
+        });
         
         return NextResponse.json({ 
           error: "Insufficient availability for update",
@@ -1310,10 +1263,8 @@ export async function PUT(req: NextRequest) {
       updateData.createdById = staffId;
     }
 
-    // Also update createdBy if it's not normalized or contains UID
-    if (existingSale.createdBy && 
-        (existingSale.createdBy !== normalizedUserEmail || 
-         isFirebaseUid(existingSale.createdBy))) {
+    // Also update createdBy if it's not normalized
+    if (existingSale.createdBy && existingSale.createdBy !== normalizedUserEmail) {
       updateData.createdBy = normalizedUserEmail;
     }
 
@@ -1341,8 +1292,7 @@ export async function PUT(req: NextRequest) {
       
       // Apply inventory deduction for new items
       if (staffId) {
-        // Use smart inventory processing
-        await processSmartInventoryForStaffSale(
+        await processInventoryForStaffSale(
           id, 
           staffId, 
           data.saleItems.map((item: any) => ({
@@ -1351,8 +1301,7 @@ export async function PUT(req: NextRequest) {
           }))
         );
       } else {
-        // Deduct only from main stock
-        await deductFromMainStockOnly(
+        await processSaleWithoutStaff(
           data.saleItems.map((item: any) => ({
             productId: item.productId,
             quantity: item.quantity
@@ -1384,7 +1333,6 @@ export async function PUT(req: NextRequest) {
       createdBy: updated?.createdBy,
       createdById: updated?.createdById,
       staffLinked: updated?.staff?.name || 'None',
-      isEmail: isValidEmail(updated?.createdBy || '')
     });
 
     return NextResponse.json(processSale(updated));
@@ -1395,52 +1343,6 @@ export async function PUT(req: NextRequest) {
       error: "Failed to update sale",
       details: err.message 
     }, { status: 500 });
-  }
-}
-
-// Helper function to reapply old inventory deductions
-async function reapplyOldInventoryDeductions(sale: any) {
-  try {
-    console.log(`🔄 Reapplying inventory deductions for sale ${sale.id}...`);
-    
-    for (const item of sale.saleitem) {
-      // Deduct from main stock
-      const stockItem = await prisma.stock.findFirst({
-        where: { productId: item.productId },
-        orderBy: { createdAt: "desc" },
-      });
-      
-      if (stockItem) {
-        await prisma.stock.update({
-          where: { id: stockItem.id },
-          data: { 
-            quantity: stockItem.quantity - item.quantity,
-            updatedAt: new Date()
-          }
-        });
-      }
-      
-      // Update staff tracking if applicable
-      if (item.staffInventoryId && sale.createdById) {
-        const staffInventory = await prisma.staffInventory.findUnique({
-          where: { id: item.staffInventoryId }
-        });
-        
-        if (staffInventory && staffInventory.staffId === sale.createdById) {
-          await prisma.staffInventory.update({
-            where: { id: item.staffInventoryId },
-            data: {
-              quantitySold: staffInventory.quantitySold + item.quantity,
-              updatedAt: new Date()
-            }
-          });
-        }
-      }
-    }
-    
-    console.log("✅ Old inventory deductions reapplied");
-  } catch (error: any) {
-    console.error("❌ Error reapplying inventory deductions:", error);
   }
 }
 
@@ -1502,65 +1404,8 @@ export async function DELETE(req: NextRequest) {
     console.log(`🗑️ Sale ${id} deleted by: ${normalizedUserEmail}`);
     console.log(`   Sale was linked to staff: ${sale.staff?.name || 'None'} (ID: ${sale.createdById || 'None'})`);
 
-    // ✅ 1. RESTORE MAIN STOCK (always restore since we might have deducted from it)
-    console.log("🔄 Restoring main stock...");
-    for (const item of sale.saleitem) {
-      const stockItem = await prisma.stock.findFirst({
-        where: { productId: item.productId },
-        orderBy: { createdAt: "desc" },
-      });
-      if (stockItem) {
-        await prisma.stock.update({
-          where: { id: stockItem.id },
-          data: { 
-            quantity: stockItem.quantity + item.quantity,
-            updatedAt: new Date()
-          },
-        });
-        console.log(`📈 Stock restored: Product ${item.productId} +${item.quantity} = ${stockItem.quantity + item.quantity}`);
-      }
-    }
-
-    // ✅ 2. RESTORE STAFF INVENTORY TRACKING (if staff exists and inventory was used)
-    if (sale.createdById) {
-      console.log(`🔄 Checking for staff tracking to restore for staff ID: ${sale.createdById}`);
-      
-      try {
-        for (const item of sale.saleitem) {
-          if (item.staffInventoryId) {
-            // Find the staff inventory
-            const staffInventory = await prisma.staffInventory.findUnique({
-              where: { id: item.staffInventoryId }
-            });
-            
-            if (staffInventory) {
-              // Check if the staff member still has access to this inventory
-              if (staffInventory.staffId !== sale.createdById) {
-                console.warn(`⚠️ Warning: Sale ${id} was created by staff ${sale.createdById}, but item ${item.id} uses inventory from staff ${staffInventory.staffId}. Skipping restoration.`);
-                continue;
-              }
-              
-              // Restore the sold quantity
-              const newQuantitySold = Math.max(0, staffInventory.quantitySold - item.quantity);
-              await prisma.staffInventory.update({
-                where: { id: item.staffInventoryId },
-                data: {
-                  quantitySold: newQuantitySold,
-                  updatedAt: new Date()
-                }
-              });
-              
-              console.log(`🔄 Restored ${item.quantity} items to staff tracking ${item.staffInventoryId}: ${staffInventory.quantitySold} -> ${newQuantitySold}`);
-            }
-          }
-        }
-        console.log("✅ Staff tracking restoration completed");
-      } catch (restoreError: any) {
-        console.error("❌ Error restoring staff tracking:", restoreError);
-      }
-    } else {
-      console.log("ℹ️ No staff ID, skipping staff tracking restoration");
-    }
+    // Restore inventory
+    await restoreInventoryForSale(sale);
 
     // Delete the sale
     await prisma.sale.delete({ where: { id } });
@@ -1613,6 +1458,8 @@ export async function PATCH(req: NextRequest) {
     if (data.dueDate !== undefined) updateData.dueDate = new Date(data.dueDate);
     if (data.paymentMethod !== undefined) updateData.paymentMethod = data.paymentMethod;
     if (data.notes !== undefined) updateData.notes = data.notes;
+    if (data.checkDepositDate !== undefined) updateData.checkDepositDate = new Date(data.checkDepositDate);
+    if (data.isCheckDeposited !== undefined) updateData.isCheckDeposited = data.isCheckDeposited;
 
     const updated = await prisma.sale.update({
       where: { id },
