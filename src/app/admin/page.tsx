@@ -48,6 +48,31 @@ interface Product {
   category?: string;
 }
 
+interface StaffInventory {
+  id: number;
+  staffId: number;
+  productId: number;
+  quantityGiven: number;
+  quantitySold: number;
+  quantityReturned: number;
+  staff: {
+    id: number;
+    name: string;
+  };
+  product: {
+    id: number;
+    name: string;
+    price: number;
+  };
+}
+
+interface Staff {
+  id: number;
+  name: string;
+  email?: string;
+  phone?: string;
+}
+
 interface QuickSaleItem {
   productId: number;
   productName: string;
@@ -128,6 +153,17 @@ export default function AdminDashboard() {
   const [stockError, setStockError] = useState<string | null>(null);
   const [bankBalance, setBankBalance] = useState<number | null>(null);
   const [currentUser, setCurrentUser] = useState<{ uid: string; email: string } | null>(null);
+
+  // New state for staff inventory
+  const [staffInventories, setStaffInventories] = useState<StaffInventory[]>([]);
+  const [staffList, setStaffList] = useState<Staff[]>([]);
+  const [showStaffInventory, setShowStaffInventory] = useState(false);
+  const [selectedStaff, setSelectedStaff] = useState<Staff | null>(null);
+  const [inventoryLoading, setInventoryLoading] = useState(false);
+  const [assignProductMode, setAssignProductMode] = useState(false);
+  const [selectedProductForAssign, setSelectedProductForAssign] = useState<Product | null>(null);
+  const [assignQuantity, setAssignQuantity] = useState<number>(1);
+  const [assignStaffId, setAssignStaffId] = useState<number | null>(null);
 
   useEffect(() => {
     fetchCurrentUser().then(user => setCurrentUser(user));
@@ -236,14 +272,38 @@ export default function AdminDashboard() {
       stats: "Last updated 2d ago",
     },
     {
-      title: "staff",
+      title: "Staff",
       description: "View and manage your staff.",
       href: "/admin/staff", 
-      icon: Phone,
-      color: "bg-gray-600",
-      stats: "Last updated 2d ago",
+      icon: Users,
+      color: "bg-indigo-600",
+      stats: "Manage staff inventory",
     },
   ];
+
+  // Fetch staff inventory data
+  const fetchStaffInventory = useCallback(async () => {
+    setInventoryLoading(true);
+    try {
+      // Fetch staff inventory
+      const inventoryRes = await fetch("/api/staff-inventory").catch(() => null);
+      if (inventoryRes && inventoryRes.ok) {
+        const inventoryData = await inventoryRes.json();
+        setStaffInventories(Array.isArray(inventoryData) ? inventoryData : []);
+      }
+
+      // Fetch staff list
+      const staffRes = await fetch("/api/staff").catch(() => null);
+      if (staffRes && staffRes.ok) {
+        const staffData = await staffRes.json();
+        setStaffList(Array.isArray(staffData) ? staffData : []);
+      }
+    } catch (error) {
+      console.error("Error fetching staff inventory:", error);
+    } finally {
+      setInventoryLoading(false);
+    }
+  }, []);
 
   const fetchDashboardData = useCallback(async () => {
     setIsLoading(true);
@@ -531,7 +591,8 @@ export default function AdminDashboard() {
 
   useEffect(() => {
     fetchDashboardData();
-  }, [fetchDashboardData]);
+    fetchStaffInventory();
+  }, [fetchDashboardData, fetchStaffInventory]);
 
   useEffect(() => {
     if (!showQuickSale) return;
@@ -584,14 +645,73 @@ export default function AdminDashboard() {
     return product.stock?.quantity || 0;
   };
 
+  // Calculate assigned inventory for a product
+  const getAssignedInventory = (productId: number) => {
+    return staffInventories
+      .filter(inv => inv.productId === productId)
+      .reduce((sum, inv) => sum + (inv.quantityGiven - inv.quantitySold - inv.quantityReturned), 0);
+  };
+
+  // Calculate available (unassigned) inventory for a product
+  const getAvailableInventory = (product: Product) => {
+    const totalStock = getProductStock(product);
+    const assigned = getAssignedInventory(product.id);
+    return Math.max(0, totalStock - assigned);
+  };
+
   const isLowStock = (product: Product) => {
-    const stock = getProductStock(product);
-    return stock <= 5;
+    const available = getAvailableInventory(product);
+    return available <= 5;
   };
 
   const isOutOfStock = (product: Product) => {
-    const stock = getProductStock(product);
-    return stock === 0;
+    const available = getAvailableInventory(product);
+    return available === 0;
+  };
+
+  const handleAssignToStaff = async () => {
+    if (!selectedProductForAssign || !assignStaffId || assignQuantity <= 0) {
+      setSaleError("Please select staff and enter valid quantity");
+      return;
+    }
+
+    const availableStock = getAvailableInventory(selectedProductForAssign);
+    if (assignQuantity > availableStock) {
+      setSaleError(`Only ${availableStock} units available to assign`);
+      return;
+    }
+
+    try {
+      const response = await fetch("/api/staff-inventory", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          staffId: assignStaffId,
+          productId: selectedProductForAssign.id,
+          quantityGiven: assignQuantity
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error("Failed to assign inventory");
+      }
+
+      await fetchStaffInventory(); // Refresh inventory data
+      setAssignProductMode(false);
+      setSelectedProductForAssign(null);
+      setAssignQuantity(1);
+      setAssignStaffId(null);
+      setSaleSuccess("✅ Inventory assigned to staff successfully!");
+      setTimeout(() => setSaleSuccess(null), 3000);
+    } catch (error: any) {
+      console.error("Error assigning inventory:", error);
+      setSaleError(error.message || "Failed to assign inventory");
+    }
+  };
+
+  const getStaffName = (staffId: number) => {
+    const staff = staffList.find(s => s.id === staffId);
+    return staff?.name || "Unknown";
   };
 
   const handleImportFromContacts = async () => {
@@ -897,6 +1017,18 @@ export default function AdminDashboard() {
       return;
     }
 
+    // Check if any items are out of stock or low stock
+    for (const item of saleItems) {
+      const product = products.find(p => p.id === item.productId);
+      if (product) {
+        const available = getAvailableInventory(product);
+        if (available < item.quantity) {
+          setSaleError(`Insufficient available stock for ${product.name}. Available: ${available}`);
+          return;
+        }
+      }
+    }
+
     const totalAmount = calculateTotalAmount();
 
     if (paymentOption === "partial") {
@@ -1046,7 +1178,10 @@ export default function AdminDashboard() {
           setAmountPaid("");
           setPartialPayment({ cash: "", bank_transfer: "", till: "" });
 
-          setTimeout(() => fetchDashboardData().catch(console.error), 1000);
+          setTimeout(() => {
+            fetchDashboardData().catch(console.error);
+            fetchStaffInventory().catch(console.error);
+          }, 1000);
 
           setTimeout(() => {
             setSaleSuccess(null);
@@ -1211,12 +1346,12 @@ export default function AdminDashboard() {
       return;
     }
 
-    const stock = getProductStock(currentProduct);
+    const available = getAvailableInventory(currentProduct);
     const existingItem = saleItems.find(i => i.productId === currentProduct.id);
     const totalQuantity = (existingItem?.quantity || 0) + currentQuantity;
 
-    if (totalQuantity > stock) {
-      const errorMsg = `Insufficient stock for ${currentProduct.name}. Available: ${stock}, Requested: ${totalQuantity}`;
+    if (totalQuantity > available) {
+      const errorMsg = `Insufficient available stock for ${currentProduct.name}. Available: ${available}, Requested: ${totalQuantity}`;
       setStockError(errorMsg);
       setSaleError(errorMsg);
       setTimeout(() => {
@@ -1320,6 +1455,8 @@ export default function AdminDashboard() {
                 <span className="hidden xs:inline">Sale</span>
               </button>
 
+              
+
               <div className="relative">
                 <button
                   onClick={() => setShowNotifications(!showNotifications)}
@@ -1404,6 +1541,226 @@ export default function AdminDashboard() {
           </div>
         </div>
       </div>
+
+      {/* Staff Inventory Modal */}
+      {showStaffInventory && (
+        <div className="fixed inset-0 bg-black/50 flex items-start justify-center p-2 sm:p-4 z-50 overflow-y-auto">
+          <div className="bg-white rounded-xl sm:rounded-2xl w-full max-w-4xl max-h-[90vh] overflow-y-auto shadow-2xl mt-4 sm:mt-0">
+            <div className="sticky top-0 bg-gradient-to-r from-indigo-600 to-indigo-700 text-white p-4 sm:p-6 rounded-t-xl sm:rounded-t-2xl z-10">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2 sm:gap-3">
+                  <Users className="w-6 h-6 sm:w-8 sm:h-8" />
+                  <div>
+                    <h2 className="text-lg sm:text-2xl font-bold">Staff Inventory</h2>
+                    <p className="text-indigo-100 text-xs sm:text-sm">Manage assigned and unassigned items</p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => {
+                    setShowStaffInventory(false);
+                    setAssignProductMode(false);
+                  }}
+                  type="button"
+                  className="text-white hover:bg-white/20 p-1.5 rounded-lg transition-colors"
+                >
+                  <X className="w-5 h-5 sm:w-6 sm:h-6" />
+                </button>
+              </div>
+            </div>
+
+            <div className="p-4 sm:p-6 space-y-6">
+              {/* Assign New Items Section */}
+              <div className="bg-indigo-50 border-2 border-indigo-200 rounded-lg p-4">
+                <h3 className="font-semibold text-indigo-900 mb-3 flex items-center gap-2">
+                  <Package className="w-4 h-4" />
+                  Assign Items to Staff
+                </h3>
+                
+                {!assignProductMode ? (
+                  <button
+                    onClick={() => setAssignProductMode(true)}
+                    className="w-full py-3 bg-white border-2 border-dashed border-indigo-300 rounded-lg text-indigo-700 hover:bg-indigo-100 transition-colors flex items-center justify-center gap-2"
+                  >
+                    <Plus className="w-4 h-4" />
+                    Assign New Item
+                  </button>
+                ) : (
+                  <div className="space-y-3">
+                    {/* Product Selection */}
+                    <div>
+                      <label className="block text-sm font-medium text-indigo-900 mb-1">
+                        Select Product *
+                      </label>
+                      <select
+                        value={selectedProductForAssign?.id || ""}
+                        onChange={(e) => {
+                          const product = products.find(p => p.id === parseInt(e.target.value));
+                          setSelectedProductForAssign(product || null);
+                        }}
+                        className="w-full px-3 py-2 border border-indigo-300 rounded-lg focus:border-indigo-500 text-black text-sm"
+                      >
+                        <option value="">Choose a product...</option>
+                        {products.map(product => {
+                          const available = getAvailableInventory(product);
+                          return (
+                            <option key={product.id} value={product.id} disabled={available === 0}>
+                              {product.name} - Available: {available} units
+                            </option>
+                          );
+                        })}
+                      </select>
+                    </div>
+
+                    {/* Staff Selection */}
+                    <div>
+                      <label className="block text-sm font-medium text-indigo-900 mb-1">
+                        Assign to Staff *
+                      </label>
+                      <select
+                        value={assignStaffId || ""}
+                        onChange={(e) => setAssignStaffId(parseInt(e.target.value))}
+                        className="w-full px-3 py-2 border border-indigo-300 rounded-lg focus:border-indigo-500 text-black text-sm"
+                      >
+                        <option value="">Select staff member...</option>
+                        {staffList.map(staff => (
+                          <option key={staff.id} value={staff.id}>
+                            {staff.name}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    {/* Quantity */}
+                    <div>
+                      <label className="block text-sm font-medium text-indigo-900 mb-1">
+                        Quantity *
+                      </label>
+                      <input
+                        type="number"
+                        min="1"
+                        max={selectedProductForAssign ? getAvailableInventory(selectedProductForAssign) : 1}
+                        value={assignQuantity}
+                        onChange={(e) => setAssignQuantity(Math.max(1, parseInt(e.target.value) || 1))}
+                        className="w-full px-3 py-2 border border-indigo-300 rounded-lg focus:border-indigo-500 text-black text-sm"
+                      />
+                      {selectedProductForAssign && (
+                        <p className="text-xs text-indigo-700 mt-1">
+                          Max available: {getAvailableInventory(selectedProductForAssign)} units
+                        </p>
+                      )}
+                    </div>
+
+                    {/* Action Buttons */}
+                    <div className="flex gap-2 pt-2">
+                      <button
+                        onClick={() => {
+                          setAssignProductMode(false);
+                          setSelectedProductForAssign(null);
+                          setAssignQuantity(1);
+                          setAssignStaffId(null);
+                        }}
+                        className="flex-1 px-3 py-2 border border-indigo-300 text-indigo-700 rounded-lg hover:bg-indigo-100"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        onClick={handleAssignToStaff}
+                        disabled={!selectedProductForAssign || !assignStaffId || assignQuantity <= 0}
+                        className="flex-1 px-3 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50"
+                      >
+                        Assign
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Current Assignments */}
+              <div>
+                <h3 className="font-semibold text-gray-900 mb-3 flex items-center gap-2">
+                  <Users className="w-4 h-4 text-indigo-600" />
+                  Current Staff Assignments
+                </h3>
+
+                {inventoryLoading ? (
+                  <div className="text-center py-8">
+                    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600 mx-auto"></div>
+                    <p className="text-sm text-gray-600 mt-2">Loading inventory...</p>
+                  </div>
+                ) : staffInventories.length === 0 ? (
+                  <div className="text-center py-8 bg-gray-50 rounded-lg border-2 border-dashed">
+                    <Package className="w-12 h-12 text-gray-400 mx-auto mb-2" />
+                    <p className="text-gray-600">No items assigned yet</p>
+                  </div>
+                ) : (
+                  <div className="space-y-4">
+                    {staffList.map(staff => {
+                      const staffItems = staffInventories.filter(inv => inv.staffId === staff.id);
+                      if (staffItems.length === 0) return null;
+
+                      return (
+                        <div key={staff.id} className="border rounded-lg overflow-hidden">
+                          <div className="bg-gray-50 px-4 py-2 border-b">
+                            <h4 className="font-semibold text-gray-900">{staff.name}</h4>
+                          </div>
+                          <div className="divide-y">
+                            {staffItems.map(inv => {
+                              const remaining = inv.quantityGiven - inv.quantitySold - inv.quantityReturned;
+                              return (
+                                <div key={inv.id} className="px-4 py-3 flex justify-between items-center">
+                                  <div>
+                                    <p className="font-medium text-gray-900">{inv.product.name}</p>
+                                    <p className="text-xs text-gray-600">
+                                      Given: {inv.quantityGiven} | Sold: {inv.quantitySold} | 
+                                      Returned: {inv.quantityReturned}
+                                    </p>
+                                  </div>
+                                  <div className="text-right">
+                                    <span className={`text-sm font-bold ${
+                                      remaining > 0 ? 'text-green-600' : 'text-gray-400'
+                                    }`}>
+                                      Remaining: {remaining}
+                                    </span>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              {/* Unassigned Inventory Overview */}
+              <div className="bg-green-50 border border-green-200 rounded-lg p-4">
+                <h3 className="font-semibold text-green-900 mb-3 flex items-center gap-2">
+                  <Package className="w-4 h-4" />
+                  Available (Unassigned) Inventory
+                </h3>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  {products
+                    .filter(p => getAvailableInventory(p) > 0)
+                    .map(product => (
+                      <div key={product.id} className="bg-white rounded-lg p-3 border border-green-200">
+                        <div className="flex justify-between items-start">
+                          <div>
+                            <p className="font-medium text-gray-900">{product.name}</p>
+                            <p className="text-xs text-gray-600">Category: {product.category || 'Uncategorized'}</p>
+                          </div>
+                          <span className="bg-green-100 text-green-800 px-2 py-1 rounded-full text-sm font-bold">
+                            {getAvailableInventory(product)} units
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Enhanced Quick Sale Modal - Mobile Optimized */}
       {showQuickSale && (
@@ -1643,7 +2000,10 @@ export default function AdminDashboard() {
                     {showProductDropdown && !currentProduct && filteredProducts.length > 0 && (
                       <div className="absolute z-20 w-full mt-1 bg-white border-2 border-slate-200 rounded-lg shadow-xl max-h-48 overflow-y-auto">
                         {filteredProducts.map(product => {
-                          const stock = getProductStock(product);
+                          const assigned = getAssignedInventory(product.id);
+                          const available = getAvailableInventory(product);
+                          const total = getProductStock(product);
+                          
                           return (
                             <button
                               key={product.id}
@@ -1663,7 +2023,7 @@ export default function AdminDashboard() {
                               className="w-full text-left px-3 py-2 hover:bg-blue-50 border-b last:border-b-0 transition-colors text-sm"
                             >
                               <div className="flex justify-between items-start">
-                                <div className="min-w-0">
+                                <div className="min-w-0 flex-1">
                                   <div className="font-medium text-black truncate">{product.name}</div>
                                   <div className="text-xs text-black">
                                     {product.category && (
@@ -1671,9 +2031,19 @@ export default function AdminDashboard() {
                                         {product.category}
                                       </span>
                                     )}
-                                    Stock: {stock} | KSh {product.price?.toLocaleString() || 0}
+                                    <div className="mt-1 flex flex-wrap gap-2">
+                                      <span className="text-green-700">Available: {available}</span>
+                                      <span className="text-orange-700">Assigned: {assigned}</span>
+                                      <span className="text-gray-600">Total: {total}</span>
+                                    </div>
+                                    <span className="text-gray-600">KSh {product.price?.toLocaleString() || 0}</span>
                                   </div>
                                 </div>
+                                {available === 0 && (
+                                  <span className="text-xs bg-red-100 text-red-700 px-2 py-1 rounded-full ml-2 whitespace-nowrap">
+                                    Out of Stock
+                                  </span>
+                                )}
                               </div>
                             </button>
                           );
@@ -1684,7 +2054,7 @@ export default function AdminDashboard() {
 
                   {currentProduct && (
                     <div className="bg-blue-50 border-2 border-blue-200 rounded-lg p-3">
-                      {/* Stock Info and Restock Button */}
+                      {/* Enhanced Stock Info with Assigned/Available Breakdown */}
                       <div className={`mb-3 p-2 rounded-lg border-2 ${
                         isOutOfStock(currentProduct) 
                           ? 'bg-red-50 border-red-300' 
@@ -1713,17 +2083,22 @@ export default function AdminDashboard() {
                                   ? '⚠️ OUT OF STOCK' 
                                   : isLowStock(currentProduct)
                                   ? '⚠️ LOW STOCK'
-                                  : '✓ Available'}
+                                  : '✓ In Stock'}
                               </p>
-                              <p className={`text-xs mt-0.5 ${
-                                isOutOfStock(currentProduct) 
-                                  ? 'text-red-700' 
-                                  : isLowStock(currentProduct)
-                                  ? 'text-orange-700'
-                                  : 'text-green-700'
-                              }`}>
-                                Available: {getProductStock(currentProduct)} units
-                              </p>
+                              <div className="grid grid-cols-2 gap-x-2 gap-y-1 mt-1">
+                                <div className="text-xs">
+                                  <span className="text-green-700 font-medium">Available: </span>
+                                  <span className="font-bold">{getAvailableInventory(currentProduct)}</span>
+                                </div>
+                                <div className="text-xs">
+                                  <span className="text-orange-700 font-medium">Assigned: </span>
+                                  <span className="font-bold">{getAssignedInventory(currentProduct.id)}</span>
+                                </div>
+                                <div className="text-xs col-span-2">
+                                  <span className="text-gray-600 font-medium">Total Stock: </span>
+                                  <span className="font-bold">{getProductStock(currentProduct)}</span>
+                                </div>
+                              </div>
                             </div>
                           </div>
                           <button
@@ -1747,7 +2122,8 @@ export default function AdminDashboard() {
                         <div className="flex-1 min-w-0">
                           <div className="font-semibold text-blue-900 text-sm truncate">{currentProduct.name}</div>
                           <div className="text-xs text-blue-700">
-                            Available: {getProductStock(currentProduct)} | Price: KSh {currentProduct.price?.toLocaleString() || 0}
+                            Available: {getAvailableInventory(currentProduct)} | 
+                            Price: KSh {currentProduct.price?.toLocaleString() || 0}
                           </div>
                         </div>
                         <button 
@@ -1770,10 +2146,11 @@ export default function AdminDashboard() {
                             id="quantity-input"
                             type="number"
                             min="0"
+                            max={getAvailableInventory(currentProduct)}
                             value={currentQuantity}
                             onChange={(e) => {
                               const val = parseInt(e.target.value);
-                              setCurrentQuantity(isNaN(val) ? 0 : Math.max(0, val));
+                              setCurrentQuantity(isNaN(val) ? 0 : Math.max(0, Math.min(val, getAvailableInventory(currentProduct))));
                             }}
                             className="w-full px-2 py-1.5 border-2 border-slate-200 rounded-lg focus:border-blue-500 text-black placeholder-black text-sm"
                             onKeyDown={(e) => {
@@ -1782,6 +2159,9 @@ export default function AdminDashboard() {
                               }
                             }}
                           />
+                          <p className="text-xs text-gray-500 mt-1">
+                            Max: {getAvailableInventory(currentProduct)}
+                          </p>
                         </div>
                         <div>
                           <label className="block text-xs font-semibold text-black mb-1">Unit Price (KSh)</label>
@@ -2541,8 +2921,12 @@ export default function AdminDashboard() {
               <div className="bg-orange-50 border border-orange-200 rounded-lg p-3">
                 <div className="flex items-center justify-between">
                   <div>
-                    <p className="text-xs text-orange-700 font-medium">Current Stock</p>
-                    <p className="text-xl font-bold text-orange-900">{getProductStock(restockingProduct)} units</p>
+                    <p className="text-xs text-orange-700 font-medium">Current Stock Breakdown</p>
+                    <div className="mt-1 space-y-1">
+                      <p className="text-sm font-bold text-orange-900">Total: {getProductStock(restockingProduct)} units</p>
+                      <p className="text-xs text-green-700">Available: {getAvailableInventory(restockingProduct)} units</p>
+                      <p className="text-xs text-orange-700">Assigned: {getAssignedInventory(restockingProduct.id)} units</p>
+                    </div>
                   </div>
                   <Package className="w-8 h-8 sm:w-12 sm:h-12 text-orange-300" />
                 </div>
@@ -2625,9 +3009,14 @@ export default function AdminDashboard() {
                 {restockForm.quantity > 0 && (
                   <div className="bg-green-50 border border-green-200 rounded-lg p-3">
                     <p className="text-xs text-green-700 font-medium mb-1">After Restock:</p>
-                    <p className="text-lg font-bold text-green-900">
-                      {getProductStock(restockingProduct) + restockForm.quantity} units
-                    </p>
+                    <div className="space-y-1">
+                      <p className="text-lg font-bold text-green-900">
+                        Total: {getProductStock(restockingProduct) + restockForm.quantity} units
+                      </p>
+                      <p className="text-xs text-green-700">
+                        Available will increase by {restockForm.quantity} units
+                      </p>
+                    </div>
                   </div>
                 )}
               </div>
