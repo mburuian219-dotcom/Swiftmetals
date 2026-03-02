@@ -652,7 +652,7 @@ export default function AdminDashboard() {
       .reduce((sum, inv) => sum + (inv.quantityGiven - inv.quantitySold - inv.quantityReturned), 0);
   };
 
-  // Calculate available (unassigned) inventory for a product
+  // Calculate available (unassigned) inventory for a product - KEEP FOR DISPLAY ONLY
   const getAvailableInventory = (product: Product) => {
     const totalStock = getProductStock(product);
     const assigned = getAssignedInventory(product.id);
@@ -660,13 +660,13 @@ export default function AdminDashboard() {
   };
 
   const isLowStock = (product: Product) => {
-    const available = getAvailableInventory(product);
-    return available <= 5;
+    const totalStock = getProductStock(product);
+    return totalStock <= 5;
   };
 
   const isOutOfStock = (product: Product) => {
-    const available = getAvailableInventory(product);
-    return available === 0;
+    const totalStock = getProductStock(product);
+    return totalStock === 0;
   };
 
   const handleAssignToStaff = async () => {
@@ -1017,13 +1017,13 @@ export default function AdminDashboard() {
       return;
     }
 
-    // Check if any items are out of stock or low stock
+    // Check if any items are out of stock - NOW CHECKING TOTAL STOCK INSTEAD OF AVAILABLE
     for (const item of saleItems) {
       const product = products.find(p => p.id === item.productId);
       if (product) {
-        const available = getAvailableInventory(product);
-        if (available < item.quantity) {
-          setSaleError(`Insufficient available stock for ${product.name}. Available: ${available}`);
+        const totalStock = getProductStock(product);
+        if (totalStock < item.quantity) {
+          setSaleError(`Insufficient total stock for ${product.name}. Total stock: ${totalStock}`);
           return;
         }
       }
@@ -1346,12 +1346,13 @@ export default function AdminDashboard() {
       return;
     }
 
-    const available = getAvailableInventory(currentProduct);
+    // NOW CHECKING TOTAL STOCK INSTEAD OF AVAILABLE
+    const totalStock = getProductStock(currentProduct);
     const existingItem = saleItems.find(i => i.productId === currentProduct.id);
     const totalQuantity = (existingItem?.quantity || 0) + currentQuantity;
 
-    if (totalQuantity > available) {
-      const errorMsg = `Insufficient available stock for ${currentProduct.name}. Available: ${available}, Requested: ${totalQuantity}`;
+    if (totalQuantity > totalStock) {
+      const errorMsg = `Insufficient total stock for ${currentProduct.name}. Total stock: ${totalStock}, Requested: ${totalQuantity}`;
       setStockError(errorMsg);
       setSaleError(errorMsg);
       setTimeout(() => {
@@ -1455,7 +1456,7 @@ export default function AdminDashboard() {
                 <span className="hidden xs:inline">Sale</span>
               </button>
 
-              
+             
 
               <div className="relative">
                 <button
@@ -2032,14 +2033,14 @@ export default function AdminDashboard() {
                                       </span>
                                     )}
                                     <div className="mt-1 flex flex-wrap gap-2">
-                                      <span className="text-green-700">Available: {available}</span>
+                                      <span className="text-green-700">Unassigned: {available}</span>
                                       <span className="text-orange-700">Assigned: {assigned}</span>
                                       <span className="text-gray-600">Total: {total}</span>
                                     </div>
                                     <span className="text-gray-600">KSh {product.price?.toLocaleString() || 0}</span>
                                   </div>
                                 </div>
-                                {available === 0 && (
+                                {total === 0 && (
                                   <span className="text-xs bg-red-100 text-red-700 px-2 py-1 rounded-full ml-2 whitespace-nowrap">
                                     Out of Stock
                                   </span>
@@ -2054,7 +2055,7 @@ export default function AdminDashboard() {
 
                   {currentProduct && (
                     <div className="bg-blue-50 border-2 border-blue-200 rounded-lg p-3">
-                      {/* Enhanced Stock Info with Assigned/Available Breakdown */}
+                      {/* Enhanced Stock Info with Total Stock Display */}
                       <div className={`mb-3 p-2 rounded-lg border-2 ${
                         isOutOfStock(currentProduct) 
                           ? 'bg-red-50 border-red-300' 
@@ -2087,7 +2088,7 @@ export default function AdminDashboard() {
                               </p>
                               <div className="grid grid-cols-2 gap-x-2 gap-y-1 mt-1">
                                 <div className="text-xs">
-                                  <span className="text-green-700 font-medium">Available: </span>
+                                  <span className="text-green-700 font-medium">Unassigned: </span>
                                   <span className="font-bold">{getAvailableInventory(currentProduct)}</span>
                                 </div>
                                 <div className="text-xs">
@@ -2122,7 +2123,7 @@ export default function AdminDashboard() {
                         <div className="flex-1 min-w-0">
                           <div className="font-semibold text-blue-900 text-sm truncate">{currentProduct.name}</div>
                           <div className="text-xs text-blue-700">
-                            Available: {getAvailableInventory(currentProduct)} | 
+                            Total Stock: {getProductStock(currentProduct)} | 
                             Price: KSh {currentProduct.price?.toLocaleString() || 0}
                           </div>
                         </div>
@@ -2146,11 +2147,11 @@ export default function AdminDashboard() {
                             id="quantity-input"
                             type="number"
                             min="0"
-                            max={getAvailableInventory(currentProduct)}
+                            max={getProductStock(currentProduct)}
                             value={currentQuantity}
                             onChange={(e) => {
                               const val = parseInt(e.target.value);
-                              setCurrentQuantity(isNaN(val) ? 0 : Math.max(0, Math.min(val, getAvailableInventory(currentProduct))));
+                              setCurrentQuantity(isNaN(val) ? 0 : Math.max(0, Math.min(val, getProductStock(currentProduct))));
                             }}
                             className="w-full px-2 py-1.5 border-2 border-slate-200 rounded-lg focus:border-blue-500 text-black placeholder-black text-sm"
                             onKeyDown={(e) => {
@@ -2160,7 +2161,7 @@ export default function AdminDashboard() {
                             }}
                           />
                           <p className="text-xs text-gray-500 mt-1">
-                            Max: {getAvailableInventory(currentProduct)}
+                            Max: {getProductStock(currentProduct)}
                           </p>
                         </div>
                         <div>
@@ -2924,7 +2925,7 @@ export default function AdminDashboard() {
                     <p className="text-xs text-orange-700 font-medium">Current Stock Breakdown</p>
                     <div className="mt-1 space-y-1">
                       <p className="text-sm font-bold text-orange-900">Total: {getProductStock(restockingProduct)} units</p>
-                      <p className="text-xs text-green-700">Available: {getAvailableInventory(restockingProduct)} units</p>
+                      <p className="text-xs text-green-700">Unassigned: {getAvailableInventory(restockingProduct)} units</p>
                       <p className="text-xs text-orange-700">Assigned: {getAssignedInventory(restockingProduct.id)} units</p>
                     </div>
                   </div>
@@ -3014,7 +3015,7 @@ export default function AdminDashboard() {
                         Total: {getProductStock(restockingProduct) + restockForm.quantity} units
                       </p>
                       <p className="text-xs text-green-700">
-                        Available will increase by {restockForm.quantity} units
+                        Unassigned will increase by {restockForm.quantity} units
                       </p>
                     </div>
                   </div>
