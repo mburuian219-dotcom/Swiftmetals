@@ -9,7 +9,8 @@ import {
   UserPlus, Phone, Mail, Filter, DownloadCloud, Printer,
   ChevronDown, ChevronUp, MoreVertical, Eye, Edit, Trash,
   Users, Wallet, TrendingDown, TrendingUp as TrendUp,
-  UserCheck, UserX, MessageSquare, Bell
+  UserCheck, UserX, MessageSquare, Bell, MessageCircle,
+  Send, FileDown, FileSpreadsheet, ReceiptText
 } from "lucide-react";
 
 export interface Customer {
@@ -58,6 +59,54 @@ interface Payment {
   referenceId?: string;
   note?: string;
 }
+
+// Function to generate receipt download link
+const generateReceiptLink = (saleId: number): string => {
+  return `${window.location.origin}/api/receipt/${saleId}`;
+};
+
+// Generate statement download link (only outstanding sales)
+const generateOutstandingStatementLink = (customerId: number): string => {
+  return `${window.location.origin}/api/customer-receipt/${customerId}?status=outstanding`;
+};
+
+// Generate full statement download link (all sales)
+const generateFullStatementLink = (customerId: number): string => {
+  return `${window.location.origin}/api/customer-receipt/${customerId}`;
+};
+
+// Format phone to Kenya code
+const formatPhoneToKenyaCode = (phone: string): string => {
+  if (!phone) return '';
+  let cleaned = phone.replace(/\D/g, '');
+  
+  if (cleaned.startsWith('0') && cleaned.length === 10) {
+    return '254' + cleaned.slice(1);
+  }
+  
+  if (cleaned.startsWith('254')) {
+    return cleaned;
+  }
+  
+  if (phone.startsWith('+254')) {
+    return cleaned;
+  }
+  
+  return '254' + cleaned;
+};
+
+// Format currency
+const formatCurrency = (amount: number) =>
+  Number(amount || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+// Format date
+const formatDate = (dateString: string) => {
+  return new Date(dateString).toLocaleDateString("en-US", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+  });
+};
 
 // Search and Filter Bar Component
 const SearchBar = ({ onSearch, onFilter }: { onSearch: (query: string) => void, onFilter: () => void }) => {
@@ -111,20 +160,193 @@ const CreditManagement = ({
   onPaymentComplete: () => void;
 }) => {
   const [outstandingSales, setOutstandingSales] = useState<OutstandingSale[]>([]);
+  const [allSales, setAllSales] = useState<OutstandingSale[]>([]);
   const [loading, setLoading] = useState(false);
   const [paymentAmount, setPaymentAmount] = useState<string>("");
   const [paymentMethod, setPaymentMethod] = useState<string>("CASH");
   const [paymentNote, setPaymentNote] = useState<string>("");
   const [allocating, setAllocating] = useState(false);
   const [allocationPreview, setAllocationPreview] = useState<any[]>([]);
-  const [showSuccess, setShowSuccess] = useState(false);
-  const [paymentResult, setPaymentResult] = useState<any>(null);
   const [processingSaleId, setProcessingSaleId] = useState<number | null>(null);
   const [expanded, setExpanded] = useState(true);
+  
+  // States for message flow
+  const [showMessagePrompt, setShowMessagePrompt] = useState(false);
+  const [pendingMessage, setPendingMessage] = useState("");
+  const [pendingReceipt, setPendingReceipt] = useState("");
+  const [pendingPaymentResult, setPendingPaymentResult] = useState<any>(null);
+  const [showMessageDialog, setShowMessageDialog] = useState(false);
+  const [customMessage, setCustomMessage] = useState("");
+  const [showReceiptPreview, setShowReceiptPreview] = useState(false);
+  const [messageType, setMessageType] = useState<'whatsapp' | 'sms' | 'email'>('whatsapp');
+
+  // Generate receipt text
+  const generateReceipt = (
+    customerName: string,
+    previousBalance: number,
+    amountPaid: number,
+    newBalance: number,
+    sales: OutstandingSale[],
+    paymentMethod: string,
+    paymentReference?: string
+  ) => {
+    const date = new Date().toLocaleDateString('en-KE', {
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric'
+    });
+    const time = new Date().toLocaleTimeString('en-KE', {
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+    const receiptNumber = `RCP-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+    
+    let receipt = `═══════════════════════════════════════\n`;
+    receipt += `              PAYMENT RECEIPT              \n`;
+    receipt += `═══════════════════════════════════════\n`;
+    receipt += `Receipt No: ${receiptNumber}\n`;
+    receipt += `Date: ${date} ${time}\n`;
+    receipt += `Customer: ${customerName}\n`;
+    receipt += `───────────────────────────────────────\n\n`;
+    
+    receipt += `PAYMENT DETAILS:\n`;
+    receipt += `  Previous Balance: KSh ${previousBalance.toLocaleString()}\n`;
+    receipt += `  Amount Paid:      KSh ${amountPaid.toLocaleString()}\n`;
+    receipt += `  Payment Method:   ${paymentMethod}\n`;
+    if (paymentReference) {
+      receipt += `  Reference:        ${paymentReference}\n`;
+    }
+    receipt += `  New Balance:       KSh ${newBalance.toLocaleString()}\n\n`;
+    
+    if (sales.length > 0) {
+      receipt += `ITEMS PAID FOR:\n`;
+      receipt += `───────────────────────────────────────\n`;
+      
+      sales.forEach((sale, index) => {
+        const receiptLink = generateReceiptLink(sale.id);
+        receipt += `${index + 1}. Sale #${sale.id} (${new Date(sale.date).toLocaleDateString()})\n`;
+        receipt += `   Receipt Link: ${receiptLink}\n`;
+        
+        if (sale.saleitem && sale.saleitem.length > 0) {
+          sale.saleitem.forEach(item => {
+            if (item.product) {
+              receipt += `   • ${item.product.name.padEnd(20)} x${item.quantity} @ KSh ${item.price.toLocaleString()}\n`;
+            }
+          });
+        }
+        
+        const paidThisTime = Math.min(sale.remainingBalance, amountPaid);
+        receipt += `   Sale Total:      KSh ${sale.amount.toLocaleString()}\n`;
+        receipt += `   Paid Now:        KSh ${paidThisTime.toLocaleString()}\n`;
+        
+        if (sale.remainingBalance - paidThisTime > 0) {
+          receipt += `   Remaining:       KSh ${(sale.remainingBalance - paidThisTime).toLocaleString()}\n`;
+        } else {
+          receipt += `   Status:          ✅ FULLY PAID\n`;
+        }
+        receipt += `\n`;
+      });
+    }
+    
+    receipt += `═══════════════════════════════════════\n`;
+    receipt += `           PAYMENT SUMMARY           \n`;
+    receipt += `───────────────────────────────────────\n`;
+    receipt += `Total Paid:        KSh ${amountPaid.toLocaleString()}\n`;
+    receipt += `Payment Status:    ${newBalance === 0 ? '✅ FULLY PAID' : newBalance > 0 ? '⏳ PARTIAL PAYMENT' : '💰 OVERPAYMENT (CREDIT)'}\n`;
+    
+    if (newBalance < 0) {
+      receipt += `Credit Balance:    KSh ${Math.abs(newBalance).toLocaleString()}\n`;
+    }
+    
+    receipt += `───────────────────────────────────────\n`;
+    receipt += `       Thank you for your business!       \n`;
+    receipt += `              🙏 SWIFTMETALS 🙏            \n`;
+    receipt += `═══════════════════════════════════════\n`;
+    
+    return receipt;
+  };
+
+  // Message Templates with Receipt Links (like in debtors section)
+  const MESSAGE_TEMPLATES = {
+    FULL_PAYMENT: (name: string, amount: number, receipt: string, receiptLinks: { saleId: number, link: string }[]) => {
+      const links = receiptLinks.map(r => `• Sale #${r.saleId}: ${r.link}`).join('\n');
+      const statementLink = generateOutstandingStatementLink(customer!.id);
+      
+      return `Hello ${name},
+
+🎉 *PAYMENT CONFIRMATION - FULL SETTLEMENT*
+
+We are pleased to confirm that you have fully cleared your outstanding balance of KSh ${amount.toLocaleString()}!
+
+*RECEIPTS:*
+${links}
+
+*OUTSTANDING STATEMENT:*
+${statementLink}
+
+We truly appreciate your business and timely payment. It's customers like you who make our work worthwhile!
+
+We look forward to serving you again soon.
+
+Best regards,
+Swiftmetals Team ✨`;
+    },
+
+    PARTIAL_PAYMENT: (name: string, amount: number, remaining: number, receipt: string, receiptLinks: { saleId: number, link: string }[]) => {
+      const links = receiptLinks.map(r => `• Sale #${r.saleId}: ${r.link}`).join('\n');
+      const statementLink = generateOutstandingStatementLink(customer!.id);
+      
+      return `Hello ${name},
+
+💫 *PAYMENT CONFIRMATION - PARTIAL PAYMENT*
+
+Thank you for your payment of KSh ${amount.toLocaleString()}!
+
+*RECEIPTS:*
+${links}
+
+*OUTSTANDING STATEMENT:*
+${statementLink}
+
+Your remaining balance is KSh ${remaining.toLocaleString()}.
+
+We appreciate your effort to reduce your outstanding balance. Would you like to set up a payment plan for the remaining amount? Feel free to contact us.
+
+Thank you for your continued trust in us!
+
+Best regards,
+Swiftmetals Team`;
+    },
+
+    OVERPAYMENT: (name: string, amount: number, credit: number, receipt: string, receiptLinks: { saleId: number, link: string }[]) => {
+      const links = receiptLinks.map(r => `• Sale #${r.saleId}: ${r.link}`).join('\n');
+      const statementLink = generateFullStatementLink(customer!.id);
+      
+      return `Hello ${name},
+
+🙏 *PAYMENT CONFIRMATION - CREDIT CREATED*
+
+Thank you for your payment of KSh ${amount.toLocaleString()}!
+
+*RECEIPTS:*
+${links}
+
+*FULL STATEMENT:*
+${statementLink}
+
+Your account now has a credit balance of KSh ${credit.toLocaleString()}. This credit will be automatically applied to your future purchases.
+
+We're truly honored by your trust and generosity!
+
+Best regards,
+Swiftmetals Team`;
+    }
+  };
 
   useEffect(() => {
     if (customer) {
       fetchOutstandingSales();
+      fetchAllSales();
     }
   }, [customer]);
 
@@ -138,8 +360,8 @@ const CreditManagement = ({
       const data = await res.json();
       
       const sales = Array.isArray(data) ? data : (data.data || []);
+      
       const outstanding = sales
-        .filter((sale: any) => sale.status !== "PAID")
         .map((sale: any) => {
           const totalPaid = sale.payment?.reduce((sum: number, p: Payment) => 
             p.status === "CLEARED" ? sum + p.amount : sum, 0) || 0;
@@ -150,7 +372,7 @@ const CreditManagement = ({
             amount: sale.amount,
             paidAmount: totalPaid,
             remainingBalance: sale.amount - totalPaid,
-            status: sale.status,
+            status: totalPaid === 0 ? 'UNPAID' : totalPaid >= sale.amount ? 'PAID' : 'PARTIAL',
             paymentMethod: sale.paymentMethod,
             dueDate: sale.dueDate,
             saleitem: sale.saleitem
@@ -173,6 +395,41 @@ const CreditManagement = ({
     }
   };
 
+  const fetchAllSales = async () => {
+    if (!customer) return;
+    
+    try {
+      const res = await fetch(`/api/sales?customerId=${customer.id}`);
+      if (!res.ok) throw new Error("Failed to fetch sales");
+      const data = await res.json();
+      
+      const sales = Array.isArray(data) ? data : (data.data || []);
+      
+      const all = sales.map((sale: any) => {
+        const totalPaid = sale.payment?.reduce((sum: number, p: Payment) => 
+          p.status === "CLEARED" ? sum + p.amount : sum, 0) || 0;
+        
+        return {
+          id: sale.id,
+          date: sale.date,
+          amount: sale.amount,
+          paidAmount: totalPaid,
+          remainingBalance: sale.amount - totalPaid,
+          status: totalPaid === 0 ? 'UNPAID' : totalPaid >= sale.amount ? 'PAID' : 'PARTIAL',
+          paymentMethod: sale.paymentMethod,
+          dueDate: sale.dueDate,
+          saleitem: sale.saleitem
+        };
+      }).sort((a: OutstandingSale, b: OutstandingSale) => 
+        new Date(b.date).getTime() - new Date(a.date).getTime()
+      );
+      
+      setAllSales(all);
+    } catch (err) {
+      console.error("Error fetching all sales:", err);
+    }
+  };
+
   const calculatePreview = (amount: number, sales = outstandingSales) => {
     let remaining = amount;
     const preview = [];
@@ -188,7 +445,8 @@ const CreditManagement = ({
         willBeFullyPaid: allocAmount === sale.remainingBalance,
         remainingAfter: sale.remainingBalance - allocAmount,
         originalAmount: sale.amount,
-        paidAmount: sale.paidAmount
+        paidAmount: sale.paidAmount,
+        items: sale.saleitem
       });
       
       remaining -= allocAmount;
@@ -209,6 +467,16 @@ const CreditManagement = ({
     }
   };
 
+  const getTotalOutstanding = () => {
+    return outstandingSales.reduce((sum, sale) => sum + sale.remainingBalance, 0);
+  };
+
+  const getPaymentType = (amount: number, totalOutstanding: number) => {
+    if (amount > totalOutstanding) return 'overpayment';
+    if (amount === totalOutstanding) return 'full';
+    return 'partial';
+  };
+
   const processPayment = async () => {
     if (!customer) {
       alert("Please select a customer");
@@ -227,12 +495,13 @@ const CreditManagement = ({
     }
 
     setAllocating(true);
-    setPaymentResult(null);
     
     try {
       let remainingAmount = amount;
       const processedSales = [];
+      const paidSales = [];
       const failedSales = [];
+      const receiptLinks = [];
 
       for (const sale of outstandingSales) {
         if (remainingAmount <= 0) break;
@@ -253,8 +522,8 @@ const CreditManagement = ({
         const newPayment = {
           amount: paymentForThisSale,
           method: paymentMethod,
-          referenceId: paymentNote ? `Payment for ${customer.name}` : undefined,
-          note: paymentNote || `Auto-allocated payment of KSh ${paymentForThisSale}`
+          referenceId: paymentNote ? `PAY-${Date.now()}` : undefined,
+          note: paymentNote || `Payment of KSh ${paymentForThisSale} received`
         };
 
         const updateRes = await fetch(`/api/sales/${sale.id}`, {
@@ -278,10 +547,23 @@ const CreditManagement = ({
           fullyPaid: updatedSale.status === "PAID"
         });
 
+        receiptLinks.push({
+          saleId: sale.id,
+          link: generateReceiptLink(sale.id)
+        });
+
+        paidSales.push({
+          ...sale,
+          paidThisTime: paymentForThisSale
+        });
+
         remainingAmount -= paymentForThisSale;
       }
 
       let creditUpdate = null;
+      const totalOutstanding = getTotalOutstanding();
+      const paymentType = getPaymentType(amount, totalOutstanding);
+      
       if (remainingAmount > 0) {
         const creditRes = await fetch(`/api/customer`, {
           method: "PUT",
@@ -300,25 +582,55 @@ const CreditManagement = ({
         }
       }
 
-      setPaymentResult({
+      const newBalance = totalOutstanding - amount;
+
+      const receipt = generateReceipt(
+        customer.name,
+        totalOutstanding,
+        amount,
+        newBalance,
+        paidSales,
+        paymentMethod,
+        paymentNote || `PAY-${Date.now()}`
+      );
+
+      let message = '';
+      if (paymentType === 'full') {
+        message = MESSAGE_TEMPLATES.FULL_PAYMENT(customer.name, amount, receipt, receiptLinks);
+      } else if (paymentType === 'partial') {
+        message = MESSAGE_TEMPLATES.PARTIAL_PAYMENT(customer.name, amount, Math.abs(newBalance), receipt, receiptLinks);
+      } else if (paymentType === 'overpayment') {
+        const credit = amount - totalOutstanding;
+        message = MESSAGE_TEMPLATES.OVERPAYMENT(customer.name, amount, credit, receipt, receiptLinks);
+      }
+
+      const result = {
         processedSales,
         failedSales,
         creditUpdate,
         totalAmount: amount,
         allocatedAmount: amount - remainingAmount,
-        unallocatedAmount: remainingAmount
-      });
-
-      setShowSuccess(true);
+        unallocatedAmount: remainingAmount,
+        message,
+        receipt,
+        receiptLinks,
+        paymentType,
+        newBalance
+      };
       
+      setPendingPaymentResult(result);
+      setPendingMessage(message);
+      setPendingReceipt(receipt);
+      setCustomMessage(message);
+      setShowMessagePrompt(true);
+
       setPaymentAmount("");
       setPaymentNote("");
       setAllocationPreview([]);
       
       await fetchOutstandingSales();
-      onPaymentComplete();
+      await fetchAllSales();
       
-      setTimeout(() => setShowSuccess(false), 5000);
     } catch (err) {
       console.error("Error processing payment:", err);
       alert("Failed to process payment. Please try again.");
@@ -328,8 +640,192 @@ const CreditManagement = ({
     }
   };
 
-  const getTotalOutstanding = () => {
-    return outstandingSales.reduce((sum, sale) => sum + sale.remainingBalance, 0);
+  const sendWhatsAppMessage = (phone: string, message: string) => {
+    const formattedPhone = formatPhoneToKenyaCode(phone);
+    const encodedMessage = encodeURIComponent(message);
+    const whatsappUrl = `https://wa.me/${formattedPhone}?text=${encodedMessage}`;
+    window.open(whatsappUrl, '_blank');
+  };
+
+  const sendSMSMessage = (phone: string, message: string) => {
+    const formattedPhone = formatPhoneToKenyaCode(phone);
+    const encodedMessage = encodeURIComponent(message);
+    const smsUrl = `sms:${formattedPhone}?body=${encodedMessage}`;
+    window.location.href = smsUrl;
+  };
+
+  const sendEmailMessage = (email: string, message: string) => {
+    const subject = encodeURIComponent(`Payment Confirmation - Swiftmetals`);
+    const body = encodeURIComponent(message.replace(/\*/g, ''));
+    const emailUrl = `mailto:${email}?subject=${subject}&body=${body}`;
+    window.location.href = emailUrl;
+  };
+
+  const handleSendMessage = () => {
+    if (!customer) return;
+    
+    if (!customer.phone && messageType !== 'email') {
+      alert("Customer has no phone number");
+      return;
+    }
+    if (messageType === 'email' && !customer.email) {
+      alert("Customer has no email address");
+      return;
+    }
+
+    if (messageType === 'whatsapp' && customer.phone) {
+      sendWhatsAppMessage(customer.phone, pendingMessage);
+    } else if (messageType === 'sms' && customer.phone) {
+      sendSMSMessage(customer.phone, pendingMessage);
+    } else if (messageType === 'email' && customer.email) {
+      sendEmailMessage(customer.email, pendingMessage);
+    }
+    
+    handleCompletePayment();
+  };
+
+  const handleEditAndSend = () => {
+    setShowMessageDialog(true);
+    setShowMessagePrompt(false);
+  };
+
+  const handleCustomMessageSend = () => {
+    if (!customer) return;
+    
+    if (!customer.phone && messageType !== 'email') {
+      alert("Customer has no phone number");
+      return;
+    }
+    if (messageType === 'email' && !customer.email) {
+      alert("Customer has no email address");
+      return;
+    }
+
+    if (messageType === 'whatsapp' && customer.phone) {
+      sendWhatsAppMessage(customer.phone, customMessage);
+    } else if (messageType === 'sms' && customer.phone) {
+      sendSMSMessage(customer.phone, customMessage);
+    } else if (messageType === 'email' && customer.email) {
+      sendEmailMessage(customer.email, customMessage);
+    }
+    
+    setShowMessageDialog(false);
+    handleCompletePayment();
+  };
+
+  const handleSkipMessage = () => {
+    handleCompletePayment();
+  };
+
+  const handleCompletePayment = () => {
+    fetchOutstandingSales();
+    fetchAllSales();
+    onPaymentComplete();
+    
+    if (customer && pendingPaymentResult?.creditUpdate) {
+      fetch(`/api/customer?id=${customer.id}`)
+        .then(res => res.json())
+        .then(data => {
+          const updatedCustomer = data.data || data;
+          if (updatedCustomer) {
+            onPaymentComplete();
+          }
+        })
+        .catch(err => console.error("Error refreshing customer:", err));
+    }
+    
+    setShowMessagePrompt(false);
+    setShowMessageDialog(false);
+    setPendingMessage("");
+    setPendingReceipt("");
+    setPendingPaymentResult(null);
+  };
+
+  const downloadReceipt = () => {
+    if (!pendingReceipt || !customer) return;
+    
+    const blob = new Blob([pendingReceipt], { type: 'text/plain' });
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `receipt_${customer.name}_${new Date().toISOString().split('T')[0]}.txt`;
+    a.click();
+    window.URL.revokeObjectURL(url);
+  };
+
+  // Download outstanding statement (only unpaid/partial sales)
+  const downloadOutstandingStatement = () => {
+    if (!customer) return;
+    
+    const outstandingToExport = allSales.filter(sale => sale.status !== 'PAID');
+    
+    if (outstandingToExport.length === 0) {
+      alert("No outstanding sales for this customer");
+      return;
+    }
+
+    let csvContent = "Sale ID,Date,Amount,Paid Amount,Remaining Balance,Status,Due Date,Items,Receipt Link\n";
+    
+    outstandingToExport.forEach((sale) => {
+      const itemsList = sale.saleitem?.map((item: any) => 
+        `${item.product?.name} x${item.quantity}`
+      ).join('; ') || 'No items';
+      
+      const receiptLink = generateReceiptLink(sale.id);
+      
+      csvContent += `${sale.id},${new Date(sale.date).toLocaleDateString()},${sale.amount},${sale.paidAmount},${sale.remainingBalance},${sale.status},${sale.dueDate ? new Date(sale.dueDate).toLocaleDateString() : 'N/A'},"${itemsList}",${receiptLink}\n`;
+    });
+
+    csvContent += "\nOUTSTANDING SUMMARY\n";
+    csvContent += `Total Outstanding,${outstandingToExport.reduce((sum, s) => sum + s.remainingBalance, 0)}\n`;
+    csvContent += `Number of Outstanding Sales,${outstandingToExport.length}\n`;
+
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${customer.name}_outstanding_statement_${new Date().toISOString().split('T')[0]}.csv`;
+    a.click();
+    window.URL.revokeObjectURL(url);
+  };
+
+  // Download full statement (all sales)
+  const downloadFullStatement = () => {
+    if (!customer) return;
+    
+    if (allSales.length === 0) {
+      alert("No sales found for this customer");
+      return;
+    }
+
+    let csvContent = "Sale ID,Date,Amount,Paid Amount,Remaining Balance,Status,Due Date,Items,Receipt Link\n";
+    
+    allSales.forEach((sale) => {
+      const itemsList = sale.saleitem?.map((item: any) => 
+        `${item.product?.name} x${item.quantity}`
+      ).join('; ') || 'No items';
+      
+      const receiptLink = generateReceiptLink(sale.id);
+      
+      csvContent += `${sale.id},${new Date(sale.date).toLocaleDateString()},${sale.amount},${sale.paidAmount},${sale.remainingBalance},${sale.status},${sale.dueDate ? new Date(sale.dueDate).toLocaleDateString() : 'N/A'},"${itemsList}",${receiptLink}\n`;
+    });
+
+    csvContent += "\nSUMMARY\n";
+    csvContent += `Total Sales,${allSales.reduce((sum, s) => sum + s.amount, 0)}\n`;
+    csvContent += `Total Paid,${allSales.reduce((sum, s) => sum + s.paidAmount, 0)}\n`;
+    csvContent += `Total Outstanding,${allSales.filter(s => s.status !== 'PAID').reduce((sum, s) => sum + s.remainingBalance, 0)}\n`;
+
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${customer.name}_full_statement_${new Date().toISOString().split('T')[0]}.csv`;
+    a.click();
+    window.URL.revokeObjectURL(url);
+  };
+
+  const toggleReceiptPreview = () => {
+    setShowReceiptPreview(!showReceiptPreview);
   };
 
   if (!customer) {
@@ -380,29 +876,267 @@ const CreditManagement = ({
 
       {expanded && (
         <div className="p-6 border-t border-slate-100">
-          {showSuccess && paymentResult && (
-            <div className="mb-6 bg-green-50 border border-green-100 rounded-lg p-4">
+          {/* Download Statement Buttons - Like in debtors section */}
+          <div className="flex justify-end gap-2 mb-4">
+            <button
+              onClick={downloadOutstandingStatement}
+              className="px-3 py-1.5 bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700 text-white font-medium rounded-lg transition-all flex items-center gap-1.5 text-xs"
+              title="Download only unpaid and partially paid sales"
+            >
+              <Download className="w-3.5 h-3.5" />
+              Outstanding Statement (CSV)
+            </button>
+            <button
+              onClick={downloadFullStatement}
+              className="px-3 py-1.5 bg-gradient-to-r from-purple-500 to-purple-600 hover:from-purple-600 hover:to-purple-700 text-white font-medium rounded-lg transition-all flex items-center gap-1.5 text-xs"
+              title="Download all sales including paid"
+            >
+              <FileText className="w-3.5 h-3.5" />
+              Full Statement (CSV)
+            </button>
+          </div>
+
+          {/* Message Prompt Dialog */}
+          {showMessagePrompt && pendingMessage && (
+            <div className="mb-6 bg-gradient-to-r from-green-50 to-emerald-50 border border-green-200 rounded-lg p-6">
               <div className="flex items-start gap-3">
-                <div className="p-1 bg-green-100 rounded-full">
-                  <CheckCircle className="w-5 h-5 text-green-600" />
+                <div className="p-2 bg-green-100 rounded-full">
+                  <CheckCircle className="w-6 h-6 text-green-600" />
                 </div>
                 <div className="flex-1">
-                  <h3 className="font-semibold text-green-800">Payment Processed Successfully!</h3>
-                  <p className="text-sm text-green-700 mt-1">
-                    KSh {paymentResult.allocatedAmount.toLocaleString()} allocated to {paymentResult.processedSales.length} sale(s).
+                  <h3 className="text-lg font-semibold text-green-800 mb-2">
+                    Payment Successful! 🎉
+                  </h3>
+                  <p className="text-green-700 mb-4">
+                    Thank you message ready to send to {customer.name}
                   </p>
-                  {paymentResult.unallocatedAmount > 0 && (
-                    <p className="text-sm text-green-700 mt-1">
-                      KSh {paymentResult.unallocatedAmount.toLocaleString()} added to customer credit.
+                  
+                  {/* Message Type Selector */}
+                  <div className="mb-4">
+                    <label className="block text-sm font-medium text-green-800 mb-2">
+                      Send via:
+                    </label>
+                    <div className="flex gap-2">
+                      {customer.phone && (
+                        <>
+                          <button
+                            onClick={() => setMessageType('whatsapp')}
+                            className={`px-4 py-2 rounded-lg flex items-center gap-2 ${
+                              messageType === 'whatsapp' 
+                                ? 'bg-green-600 text-white' 
+                                : 'bg-white text-green-700 border border-green-300'
+                            }`}
+                          >
+                            <MessageCircle className="w-4 h-4" />
+                            WhatsApp
+                          </button>
+                          <button
+                            onClick={() => setMessageType('sms')}
+                            className={`px-4 py-2 rounded-lg flex items-center gap-2 ${
+                              messageType === 'sms' 
+                                ? 'bg-blue-600 text-white' 
+                                : 'bg-white text-blue-700 border border-blue-300'
+                            }`}
+                          >
+                            <MessageSquare className="w-4 h-4" />
+                            SMS
+                          </button>
+                        </>
+                      )}
+                      {customer.email && (
+                        <button
+                          onClick={() => setMessageType('email')}
+                          className={`px-4 py-2 rounded-lg flex items-center gap-2 ${
+                            messageType === 'email' 
+                              ? 'bg-orange-600 text-white' 
+                              : 'bg-white text-orange-700 border border-orange-300'
+                            }`}
+                        >
+                          <Mail className="w-4 h-4" />
+                          Email
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                  
+                  {/* Receipt Preview Button */}
+                  <div className="flex gap-2 mb-4">
+                    <button
+                      onClick={toggleReceiptPreview}
+                      className="px-4 py-2 bg-white border border-green-300 text-green-700 rounded-lg hover:bg-green-50 transition-colors flex items-center gap-2"
+                    >
+                      <ReceiptText className="w-4 h-4" />
+                      {showReceiptPreview ? 'Hide Receipt' : 'Preview Receipt'}
+                    </button>
+                    
+                    <button
+                      onClick={downloadReceipt}
+                      className="px-4 py-2 bg-white border border-green-300 text-green-700 rounded-lg hover:bg-green-50 transition-colors flex items-center gap-2"
+                    >
+                      <Download className="w-4 h-4" />
+                      Download Receipt
+                    </button>
+                  </div>
+
+                  {/* Receipt Preview */}
+                  {showReceiptPreview && pendingReceipt && (
+                    <div className="mb-4 bg-white rounded-lg p-4 border border-green-200 font-mono text-sm whitespace-pre-wrap max-h-96 overflow-y-auto">
+                      {pendingReceipt}
+                    </div>
+                  )}
+
+                  {/* Message Preview */}
+                  <div className="bg-white rounded-lg p-4 mb-4 border border-green-200 max-h-60 overflow-y-auto">
+                    <p className="text-sm text-gray-700 whitespace-pre-wrap font-mono">
+                      {pendingMessage}
+                    </p>
+                  </div>
+
+                  {/* Action Buttons */}
+                  <div className="flex flex-wrap gap-3">
+                    <button
+                      onClick={handleSendMessage}
+                      className="px-6 py-2 bg-gradient-to-r from-green-600 to-emerald-600 text-white rounded-lg hover:from-green-700 hover:to-emerald-700 transition-colors flex items-center gap-2 font-medium"
+                    >
+                      <Send className="w-4 h-4" />
+                      Send {messageType === 'whatsapp' ? 'WhatsApp' : messageType === 'sms' ? 'SMS' : 'Email'}
+                    </button>
+                    
+                    <button
+                      onClick={handleEditAndSend}
+                      className="px-6 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition-colors flex items-center gap-2 font-medium"
+                    >
+                      <Edit className="w-4 h-4" />
+                      Edit Message
+                    </button>
+                    
+                    <button
+                      onClick={handleSkipMessage}
+                      className="px-6 py-2 border border-slate-300 text-slate-700 rounded-lg hover:bg-slate-50 transition-colors font-medium"
+                    >
+                      Skip
+                    </button>
+                  </div>
+
+                  {!customer.phone && messageType !== 'email' && (
+                    <p className="text-sm text-red-600 mt-2">
+                      No phone number available for this customer. Add a phone number to send messages.
                     </p>
                   )}
+                  
+                  {messageType === 'email' && !customer.email && (
+                    <p className="text-sm text-red-600 mt-2">
+                      No email address available for this customer. Add an email to send messages.
+                    </p>
+                  )}
+
+                  {/* Document Options Info - Like in debtors section */}
+                  <div className="mt-4 text-xs text-gray-500 bg-white p-3 rounded-lg border border-green-100">
+                    <p className="font-medium mb-1 text-green-800">Document Options:</p>
+                    <ul className="list-disc pl-4 space-y-0.5 text-gray-600">
+                      <li><strong>Single Receipt</strong>: Each sale has its own receipt link above</li>
+                      <li><strong>Outstanding Statement</strong>: Download only unpaid/partial sales (CSV)</li>
+                      <li><strong>Full Statement</strong>: Download complete sales history (CSV)</li>
+                      <li><strong>Messages</strong>: Include both individual receipt links and statement links</li>
+                    </ul>
+                  </div>
                 </div>
-                <button 
-                  onClick={() => setShowSuccess(false)}
-                  className="text-green-700 hover:text-green-800"
-                >
-                  <X className="w-5 h-5" />
-                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Custom Message Dialog */}
+          {showMessageDialog && (
+            <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+              <div className="bg-white rounded-xl max-w-2xl w-full p-6 max-h-[90vh] overflow-y-auto">
+                <h3 className="text-lg font-semibold text-black mb-4">Customize Your Message</h3>
+                
+                {/* Receipt Preview in Edit Mode */}
+                {pendingReceipt && (
+                  <div className="mb-4">
+                    <p className="text-sm font-medium text-gray-700 mb-2">Receipt:</p>
+                    <div className="bg-gray-50 rounded-lg p-4 border border-gray-200 font-mono text-sm whitespace-pre-wrap max-h-60 overflow-y-auto">
+                      {pendingReceipt}
+                    </div>
+                  </div>
+                )}
+
+                <div className="mb-4">
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Message:
+                  </label>
+                  <textarea
+                    value={customMessage}
+                    onChange={(e) => setCustomMessage(e.target.value)}
+                    rows={8}
+                    className="w-full p-3 border border-slate-200 rounded-lg focus:ring-2 focus:ring-black focus:border-black text-black font-mono text-sm"
+                    placeholder="Enter your message..."
+                  />
+                </div>
+                
+                <div className="mb-4">
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Send via:
+                  </label>
+                  <div className="flex gap-2">
+                    {customer.phone && (
+                      <>
+                        <button
+                          onClick={() => setMessageType('whatsapp')}
+                          className={`px-4 py-2 rounded-lg flex items-center gap-2 ${
+                            messageType === 'whatsapp' 
+                              ? 'bg-green-600 text-white' 
+                              : 'bg-gray-100 text-gray-700'
+                          }`}
+                        >
+                          <MessageCircle className="w-4 h-4" />
+                          WhatsApp
+                        </button>
+                        <button
+                          onClick={() => setMessageType('sms')}
+                          className={`px-4 py-2 rounded-lg flex items-center gap-2 ${
+                            messageType === 'sms' 
+                              ? 'bg-blue-600 text-white' 
+                              : 'bg-gray-100 text-gray-700'
+                          }`}
+                        >
+                          <MessageSquare className="w-4 h-4" />
+                          SMS
+                        </button>
+                      </>
+                    )}
+                    {customer.email && (
+                      <button
+                        onClick={() => setMessageType('email')}
+                        className={`px-4 py-2 rounded-lg flex items-center gap-2 ${
+                          messageType === 'email' 
+                            ? 'bg-orange-600 text-white' 
+                            : 'bg-gray-100 text-gray-700'
+                        }`}
+                      >
+                        <Mail className="w-4 h-4" />
+                        Email
+                      </button>
+                    )}
+                  </div>
+                </div>
+                
+                <div className="flex flex-wrap gap-3">
+                  <button
+                    onClick={handleCustomMessageSend}
+                    className="flex-1 px-4 py-2 bg-gradient-to-r from-green-600 to-emerald-600 text-white rounded-lg hover:from-green-700 hover:to-emerald-700 transition-colors flex items-center justify-center gap-2 font-medium"
+                  >
+                    <Send className="w-4 h-4" />
+                    Send
+                  </button>
+                  
+                  <button
+                    onClick={() => setShowMessageDialog(false)}
+                    className="px-4 py-2 border border-slate-200 rounded-lg text-slate-600 hover:bg-slate-50 transition-colors font-medium"
+                  >
+                    Cancel
+                  </button>
+                </div>
               </div>
             </div>
           )}
@@ -419,7 +1153,7 @@ const CreditManagement = ({
                 <div className="flex justify-between items-center mb-4">
                   <h3 className="font-semibold text-black flex items-center gap-2">
                     <Receipt className="w-5 h-5" />
-                    Outstanding Sales
+                    Outstanding Sales (Not Fully Paid)
                   </h3>
                   <button 
                     onClick={fetchOutstandingSales}
@@ -501,6 +1235,36 @@ const CreditManagement = ({
                                 ></div>
                               </div>
                             </div>
+
+                            {/* Sale Items with Receipt Link */}
+                            {sale.saleitem && sale.saleitem.length > 0 && (
+                              <div className="mt-3 pt-3 border-t border-slate-200">
+                                <div className="flex justify-between items-center mb-2">
+                                  <p className="text-xs font-medium text-slate-500">Items:</p>
+                                  <a 
+                                    href={generateReceiptLink(sale.id)} 
+                                    target="_blank" 
+                                    rel="noopener noreferrer"
+                                    className="text-xs text-blue-600 hover:text-blue-800 flex items-center gap-1"
+                                  >
+                                    <Download className="w-3 h-3" />
+                                    Receipt Link
+                                  </a>
+                                </div>
+                                <div className="space-y-1">
+                                  {sale.saleitem.map((item) => (
+                                    <div key={item.id} className="flex justify-between text-xs">
+                                      <span className="text-slate-600">
+                                        {item.product?.name} x{item.quantity}
+                                      </span>
+                                      <span className="text-black font-medium">
+                                        KSh {item.total.toLocaleString()}
+                                      </span>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
                           </div>
 
                           {processingSaleId === sale.id && (
@@ -517,7 +1281,7 @@ const CreditManagement = ({
               </div>
 
               {/* Payment Form */}
-              {outstandingSales.length > 0 && (
+              {outstandingSales.length > 0 && !showMessagePrompt && (
                 <div className="border-t border-slate-200 pt-6">
                   <h3 className="font-semibold text-black mb-4">Process Payment</h3>
                   
@@ -559,13 +1323,13 @@ const CreditManagement = ({
 
                       <div>
                         <label className="block text-sm font-medium text-black mb-2">
-                          Note (Optional)
+                          Note / Reference (Optional)
                         </label>
                         <input
                           type="text"
                           value={paymentNote}
                           onChange={(e) => setPaymentNote(e.target.value)}
-                          placeholder="Add a note"
+                          placeholder="e.g., M-PESA Ref: ABC123"
                           className="w-full p-3 border border-slate-200 rounded-lg focus:ring-2 focus:ring-black focus:border-black text-black transition-all"
                         />
                       </div>
@@ -605,7 +1369,7 @@ const CreditManagement = ({
                                   <span className={`text-xs font-medium ${
                                     alloc.willBeFullyPaid ? 'text-green-600' : 'text-orange-600'
                                   }`}>
-                                    {alloc.willBeFullyPaid ? 'Fully Paid' : 'Partial'}
+                                    {alloc.willBeFullyPaid ? '✅ Fully Paid' : '⏳ Partial'}
                                   </span>
                                 </div>
                               </div>
@@ -615,7 +1379,7 @@ const CreditManagement = ({
                               <div className="mt-3 pt-3 border-t border-blue-200">
                                 <p className="text-sm text-blue-700 flex items-center gap-1">
                                   <PiggyBank className="w-4 h-4" />
-                                  KSh {(parseFloat(paymentAmount) - getTotalOutstanding()).toLocaleString()} will be added to credit
+                                  <strong>KSh {(parseFloat(paymentAmount) - getTotalOutstanding()).toLocaleString()}</strong> will be added to credit balance
                                 </p>
                               </div>
                             )}
@@ -645,10 +1409,14 @@ const CreditManagement = ({
                     ) : (
                       <>
                         <DollarSign className="w-5 h-5" />
-                        Process Payment
+                        Process Payment & Send Thank You
                       </>
                     )}
                   </button>
+                  
+                  <p className="text-xs text-slate-500 mt-2 text-center">
+                    After payment, you'll have the option to send a thank you message with receipt links
+                  </p>
                 </div>
               )}
             </>
@@ -985,7 +1753,7 @@ const AddCustomerForm = ({
           </div>
 
           <div>
-            <label className=" text-sm font-medium text-black mb-2 flex items-center gap-2">
+            <label className="text-sm font-medium text-black mb-2 flex items-center gap-2">
               <Phone className="w-4 h-4" /> Phone (Optional)
             </label>
             <input
@@ -998,7 +1766,7 @@ const AddCustomerForm = ({
           </div>
 
           <div>
-            <label className=" text-sm font-medium text-black mb-2 flex items-center gap-2">
+            <label className="text-sm font-medium text-black mb-2 flex items-center gap-2">
               <Mail className="w-4 h-4" /> Email (Optional)
             </label>
             <input
@@ -1032,7 +1800,7 @@ const AddCustomerForm = ({
   );
 };
 
-// Customer List Component (FIXED CSS CONFLICTS)
+// Customer List Component
 const CustomerList = ({
   customers,
   onDelete,
@@ -1267,31 +2035,62 @@ const CustomerReport = ({ customer }: { customer: Customer | null }) => {
   const [loading, setLoading] = useState(false);
   const [reportData, setReportData] = useState<any>(null);
   const [showPreview, setShowPreview] = useState(false);
+  const [reportType, setReportType] = useState<'full' | 'outstanding'>('outstanding');
 
-  const generateReport = async () => {
+  const generateReport = async (type: 'full' | 'outstanding') => {
     if (!customer) {
       alert('Please select a customer first');
       return;
     }
 
     setLoading(true);
+    setReportType(type);
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 15000);
 
     try {
-      const res = await fetch(`/api/customer/reports?customerId=${customer.id}&period=all`);
+      const salesRes = await fetch(`/api/sales?customerId=${customer.id}`);
+      if (!salesRes.ok) throw new Error("Failed to fetch sales");
+      const salesData = await salesRes.json();
+      
+      const sales = Array.isArray(salesData) ? salesData : (salesData.data || []);
+      
+      const processedSales = sales.map((sale: any) => {
+        const totalPaid = sale.payment?.reduce((sum: number, p: any) => 
+          p.status === "CLEARED" ? sum + p.amount : sum, 0) || 0;
+        
+        return {
+          id: sale.id,
+          date: sale.date,
+          amount: sale.amount,
+          paidAmount: totalPaid,
+          remainingBalance: sale.amount - totalPaid,
+          status: totalPaid === 0 ? 'UNPAID' : totalPaid >= sale.amount ? 'PAID' : 'PARTIAL',
+          dueDate: sale.dueDate,
+          items: sale.saleitem?.map((item: any) => ({
+            name: item.product?.name,
+            quantity: item.quantity,
+            price: item.price
+          }))
+        };
+      });
 
-      if (!res.ok) {
-        const errorData = await res.json().catch(() => ({}));
-        throw new Error(errorData.message || 'Failed to generate report');
-      }
+      const totalSales = processedSales.reduce((sum: number, s: any) => sum + s.amount, 0);
+      const totalPaid = processedSales.reduce((sum: number, s: any) => sum + s.paidAmount, 0);
+      const outstandingBalance = processedSales
+        .filter((s: any) => s.status !== 'PAID')
+        .reduce((sum: number, s: any) => sum + s.remainingBalance, 0);
 
-      const response = await res.json();
-      if (response.success && response.data) {
-        setReportData(response.data);
-      } else {
-        setReportData(response);
-      }
+      const report = {
+        sales: processedSales,
+        totalSales,
+        totalPaid,
+        outstandingBalance,
+        customerName: customer.name,
+        customerId: customer.id
+      };
+
+      setReportData(report);
       setShowPreview(true);
     } catch (err) {
       console.error('Error generating report:', err);
@@ -1306,9 +2105,47 @@ const CustomerReport = ({ customer }: { customer: Customer | null }) => {
     }
   };
 
-  const downloadPDF = () => {
+  const downloadCSV = (type: 'full' | 'outstanding') => {
     if (!reportData || !customer) return;
-    // PDF download logic here
+    
+    let salesToExport = reportData.sales || [];
+    if (type === 'outstanding') {
+      salesToExport = salesToExport.filter((sale: any) => sale.status !== 'PAID');
+    }
+
+    if (salesToExport.length === 0) {
+      alert(type === 'outstanding' 
+        ? 'No outstanding sales found for this customer' 
+        : 'No sales found for this customer');
+      return;
+    }
+
+    let csvContent = "Sale ID,Date,Amount,Paid Amount,Remaining Balance,Status,Due Date,Items,Receipt Link\n";
+    
+    salesToExport.forEach((sale: any) => {
+      const itemsList = sale.items?.map((item: any) => 
+        `${item.name} x${item.quantity}`
+      ).join('; ') || 'No items';
+      
+      const receiptLink = generateReceiptLink(sale.id);
+      
+      csvContent += `${sale.id},${new Date(sale.date).toLocaleDateString()},${sale.amount},${sale.paidAmount},${sale.remainingBalance},${sale.status},${sale.dueDate ? new Date(sale.dueDate).toLocaleDateString() : 'N/A'},"${itemsList}",${receiptLink}\n`;
+    });
+
+    csvContent += "\nSUMMARY\n";
+    csvContent += `Total Sales,${salesToExport.reduce((sum: number, s: any) => sum + s.amount, 0)}\n`;
+    csvContent += `Total Paid,${salesToExport.reduce((sum: number, s: any) => sum + s.paidAmount, 0)}\n`;
+    if (type === 'outstanding') {
+      csvContent += `Total Outstanding,${salesToExport.reduce((sum: number, s: any) => sum + s.remainingBalance, 0)}\n`;
+    }
+
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${customer.name}_${type}_statement_${new Date().toISOString().split('T')[0]}.csv`;
+    a.click();
+    window.URL.revokeObjectURL(url);
   };
 
   if (!customer) {
@@ -1342,18 +2179,71 @@ const CustomerReport = ({ customer }: { customer: Customer | null }) => {
           </div>
         </div>
 
-        <button
-          onClick={generateReport}
-          disabled={loading}
-          className="w-full bg-gradient-to-r from-black to-slate-800 hover:from-slate-900 hover:to-black text-white py-3 rounded-lg font-medium transition-all duration-200 flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-        >
-          <FileText className="w-5 h-5" />
-          {loading ? 'Generating Report...' : 'Generate All Time Report'}
-        </button>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <button
+            onClick={() => generateReport('full')}
+            disabled={loading}
+            className="bg-gradient-to-r from-black to-slate-800 hover:from-slate-900 hover:to-black text-white py-3 rounded-lg font-medium transition-all duration-200 flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <FileText className="w-5 h-5" />
+            {loading && reportType === 'full' ? 'Generating...' : 'Full Statement'}
+          </button>
+          
+          <button
+            onClick={() => generateReport('outstanding')}
+            disabled={loading}
+            className="bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 text-white py-3 rounded-lg font-medium transition-all duration-200 flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <FileDown className="w-5 h-5" />
+            {loading && reportType === 'outstanding' ? 'Generating...' : 'Outstanding Only'}
+          </button>
+        </div>
 
         {showPreview && reportData && (
           <div className="mt-4 pt-4 border-t border-slate-200">
-            {/* Report preview content */}
+            <div className="flex justify-between items-center mb-3">
+              <h3 className="font-medium text-black">Report Preview</h3>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => downloadCSV('full')}
+                  className="px-3 py-1 text-sm bg-slate-100 hover:bg-slate-200 rounded-lg flex items-center gap-1"
+                >
+                  <Download className="w-4 h-4" /> Full CSV
+                </button>
+                <button
+                  onClick={() => downloadCSV('outstanding')}
+                  className="px-3 py-1 text-sm bg-slate-100 hover:bg-slate-200 rounded-lg flex items-center gap-1"
+                >
+                  <Download className="w-4 h-4" /> Outstanding CSV
+                </button>
+              </div>
+            </div>
+            
+            <div className="bg-slate-50 rounded-lg p-4">
+              <div className="grid grid-cols-2 gap-4 mb-3">
+                <div>
+                  <p className="text-xs text-slate-500">Total Sales</p>
+                  <p className="text-lg font-bold text-black">KSh {reportData.totalSales?.toLocaleString() || 0}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-slate-500">Total Paid</p>
+                  <p className="text-lg font-bold text-green-600">KSh {reportData.totalPaid?.toLocaleString() || 0}</p>
+                </div>
+              </div>
+              
+              {reportData.outstandingBalance > 0 && (
+                <div className="bg-red-50 p-3 rounded-lg">
+                  <p className="text-xs text-red-700">Outstanding Balance</p>
+                  <p className="text-xl font-bold text-red-600">KSh {reportData.outstandingBalance?.toLocaleString()}</p>
+                </div>
+              )}
+              
+              <p className="text-xs text-slate-500 mt-3">
+                {reportType === 'outstanding' 
+                  ? `Showing ${reportData.sales.filter((s: any) => s.status !== 'PAID').length} unpaid/partial sales` 
+                  : `Showing all ${reportData.sales.length} sales`}
+              </p>
+            </div>
           </div>
         )}
       </div>
