@@ -10,6 +10,14 @@ function normalizePhone(phone: string | null | undefined): string | null {
   return null;
 }
 
+// Format currency
+const formatCurrency = (amount: number) => {
+  return amount.toLocaleString('en-KE', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  });
+};
+
 // GET /api/receipt/[id] - HTML Receipt Generator
 export async function GET(
   req: Request,
@@ -27,13 +35,19 @@ export async function GET(
       );
     }
 
-    // Fetch sale with related data
+    // Fetch THIS sale with related data
     const sale = await prisma.sale.findUnique({
       where: { id: saleId },
       include: {
         customer: true,
-        saleitem: { include: { product: true } },
-        payment: true,
+        saleitem: { 
+          include: { 
+            product: true 
+          } 
+        },
+        payment: {
+          where: { status: { in: ['CLEARED', 'COMPLETED'] } }
+        },
       },
     });
 
@@ -44,37 +58,94 @@ export async function GET(
       );
     }
 
-    const totalPaid = sale.payment.reduce((sum, p) => sum + p.amount, 0);
-    const remaining = sale.amount - totalPaid;
+    // Fetch ALL outstanding sales for this customer to show context
+    const allCustomerSales = await prisma.sale.findMany({
+      where: { 
+        customerId: sale.customerId,
+        NOT: { id: saleId } // Exclude current sale
+      },
+      include: {
+        saleitem: {
+          include: {
+            product: true
+          }
+        },
+        payment: {
+          where: { status: { in: ['CLEARED', 'COMPLETED'] } }
+        }
+      },
+      orderBy: { date: 'asc' }
+    });
 
-    // Get the base URL from request headers (works automatically with Vercel)
+    // Calculate current sale details
+    const currentSaleTotalPaid = sale.payment.reduce((sum, p) => sum + p.amount, 0);
+    const currentSaleRemaining = sale.amount - currentSaleTotalPaid;
+    
+    // Calculate ALL outstanding sales for this customer
+    const outstandingSales = allCustomerSales
+      .map(s => {
+        const paid = s.payment.reduce((sum, p) => sum + p.amount, 0);
+        return {
+          id: s.id,
+          date: s.date,
+          amount: s.amount,
+          paidAmount: paid,
+          remainingBalance: s.amount - paid,
+          saleitem: s.saleitem
+        };
+      })
+      .filter(s => s.remainingBalance > 0.01);
+
+    const totalOutstandingBefore = outstandingSales.reduce((sum, s) => sum + s.remainingBalance, 0) + currentSaleRemaining;
+    const totalOutstandingAfter = outstandingSales.reduce((sum, s) => sum + s.remainingBalance, 0) + 
+      (currentSaleRemaining > 0.01 ? currentSaleRemaining : 0);
+
+    // Get the base URL from request headers
     const host = req.headers.get('host') || '';
     const protocol = req.headers.get('x-forwarded-proto') || 'https';
     const baseUrl = `${protocol}://${host}`;
     
-    // Prepare WhatsApp message
+    // Prepare WhatsApp message with all sales context
     const receiptUrl = `${baseUrl}/api/receipt/${sale.id}`;
-    const whatsappMessage = `Hello ${sale.customer?.name || 'Customer'}! 👋
+    
+    let whatsappMessage = `Hello ${sale.customer?.name || 'Customer'}! 👋\n\n`;
+    whatsappMessage += `Thank you for your payment at SwiftMetals!\n\n`;
+    whatsappMessage += `📋 *PAYMENT RECEIVED*\n`;
+    whatsappMessage += `Amount: Ksh ${formatCurrency(currentSaleTotalPaid)}\n`;
+    whatsappMessage += `Method: ${sale.payment[0]?.method || 'CASH'}\n\n`;
+    
+    whatsappMessage += `📊 *SALE #${sale.id} DETAILS*\n`;
+    whatsappMessage += `Date: ${new Date(sale.date).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}\n`;
+    sale.saleitem.forEach(item => {
+      whatsappMessage += `• ${item.product.name} x${item.quantity} @ Ksh ${formatCurrency(item.price)}\n`;
+    });
+    whatsappMessage += `Sale Total: Ksh ${formatCurrency(sale.amount)}\n`;
+    whatsappMessage += `Paid Today: Ksh ${formatCurrency(currentSaleTotalPaid)}\n`;
+    
+    if (currentSaleRemaining > 0) {
+      whatsappMessage += `Remaining: Ksh ${formatCurrency(currentSaleRemaining)}\n`;
+    } else {
+      whatsappMessage += `✅ FULLY PAID\n`;
+    }
+    
+    if (outstandingSales.length > 0) {
+      whatsappMessage += `\n⏳ *OTHER OUTSTANDING SALES*\n`;
+      outstandingSales.forEach(s => {
+        whatsappMessage += `• Sale #${s.id}: Ksh ${formatCurrency(s.remainingBalance)} remaining\n`;
+      });
+    }
+    
+    whatsappMessage += `\n📊 *TOTAL OUTSTANDING BALANCE*\n`;
+    whatsappMessage += `Before: Ksh ${formatCurrency(totalOutstandingBefore)}\n`;
+    whatsappMessage += `After: Ksh ${formatCurrency(totalOutstandingAfter)}\n\n`;
+    
+    whatsappMessage += `View full receipt: ${receiptUrl}\n\n`;
+    whatsappMessage += `Thank you for choosing SwiftMetals!`;
 
-Thank you for your purchase at SwiftMetals!
-
-Receipt #${String(sale.id).padStart(6, '0')}
-Date: ${new Date(sale.date).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}
-
-Total Amount: Ksh ${sale.amount.toFixed(2)}
-Amount Paid: Ksh ${totalPaid.toFixed(2)}
-Balance Due: Ksh ${remaining.toFixed(2)}
-
-View your receipt: ${receiptUrl}
-
-For any inquiries, contact us at support@swiftmetals.com`;
-
-    // Format phone number for WhatsApp (remove spaces, dashes, and add country code if needed)
+    // Format phone number for WhatsApp
     const formatPhoneForWhatsApp = (phone: string) => {
       if (!phone) return '';
-      // Remove all non-digit characters
       let cleaned = phone.replace(/\D/g, '');
-      // Add Kenya country code if not present (254)
       if (cleaned.startsWith('0')) {
         cleaned = '254' + cleaned.substring(1);
       } else if (!cleaned.startsWith('254')) {
@@ -85,7 +156,7 @@ For any inquiries, contact us at support@swiftmetals.com`;
 
     const whatsappPhone = sale.customer?.phone ? formatPhoneForWhatsApp(sale.customer.phone) : '';
 
-    // Generate HTML Receipt (Mobile Responsive)
+    // Generate HTML Receipt with multiple sales context
     const html = `
 <!DOCTYPE html>
 <html lang="en">
@@ -178,6 +249,15 @@ For any inquiries, contact us at support@swiftmetals.com`;
       text-transform: uppercase;
     }
     
+    .section-subtitle {
+      font-size: 16px;
+      color: #4b5563;
+      margin: 15px 0 10px 0;
+      font-weight: 600;
+      border-bottom: 1px solid #e5e7eb;
+      padding-bottom: 5px;
+    }
+    
     .customer-box {
       background: #f9fafb;
       border: 1px solid #e5e7eb;
@@ -202,7 +282,7 @@ For any inquiries, contact us at support@swiftmetals.com`;
     .items-table {
       width: 100%;
       border-collapse: collapse;
-      margin-bottom: 30px;
+      margin-bottom: 20px;
       overflow-x: auto;
       display: block;
     }
@@ -247,6 +327,91 @@ For any inquiries, contact us at support@swiftmetals.com`;
       text-align: center;
     }
     
+    .sale-card {
+      background: #f9fafb;
+      border: 1px solid #e5e7eb;
+      border-radius: 8px;
+      padding: 15px;
+      margin-bottom: 15px;
+    }
+    
+    .sale-card.current {
+      background: #f0fdf4;
+      border: 2px solid #4caf50;
+    }
+    
+    .sale-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 10px;
+      padding-bottom: 5px;
+      border-bottom: 1px solid #d1d5db;
+    }
+    
+    .sale-id {
+      font-weight: bold;
+      font-size: 16px;
+      color: #1f2937;
+    }
+    
+    .sale-date {
+      color: #6b7280;
+      font-size: 13px;
+    }
+    
+    .sale-status {
+      font-size: 12px;
+      padding: 4px 10px;
+      border-radius: 20px;
+      font-weight: 600;
+    }
+    
+    .status-paid {
+      background: #d1fae5;
+      color: #065f46;
+    }
+    
+    .status-partial {
+      background: #fef3c7;
+      color: #92400e;
+    }
+    
+    .status-unpaid {
+      background: #fee2e2;
+      color: #dc2626;
+    }
+    
+    .amount-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 10px;
+      margin: 10px 0;
+    }
+    
+    .amount-item {
+      text-align: center;
+    }
+    
+    .amount-item .label {
+      font-size: 11px;
+      color: #6b7280;
+      margin-bottom: 3px;
+    }
+    
+    .amount-item .value {
+      font-weight: 600;
+      font-size: 14px;
+    }
+    
+    .amount-item .value.paid-now {
+      color: #10b981;
+    }
+    
+    .amount-item .value.remaining {
+      color: #dc2626;
+    }
+    
     .payment-item {
       display: flex;
       justify-content: space-between;
@@ -288,7 +453,7 @@ For any inquiries, contact us at support@swiftmetals.com`;
     
     .totals-box {
       width: 100%;
-      max-width: 350px;
+      max-width: 400px;
       margin: 20px 0 0 auto;
       background: #f9fafb;
       border: 1px solid #e5e7eb;
@@ -299,8 +464,8 @@ For any inquiries, contact us at support@swiftmetals.com`;
     .total-row {
       display: flex;
       justify-content: space-between;
-      padding: 10px 0;
-      font-size: 15px;
+      padding: 8px 0;
+      font-size: 14px;
     }
     
     .total-label {
@@ -323,22 +488,20 @@ For any inquiries, contact us at support@swiftmetals.com`;
     }
     
     .total-row.balance {
-      font-size: 18px;
+      font-size: 16px;
+      font-weight: bold;
     }
     
     .total-row.balance .total-label {
       color: #1f2937;
-      font-weight: 600;
     }
     
     .balance-positive {
       color: #ef4444 !important;
-      font-weight: bold;
     }
     
     .balance-zero {
       color: #10b981 !important;
-      font-weight: bold;
     }
     
     .footer {
@@ -494,6 +657,10 @@ For any inquiries, contact us at support@swiftmetals.com`;
       .section-title {
         font-size: 16px;
       }
+      
+      .amount-grid {
+        grid-template-columns: repeat(2, 1fr);
+      }
     }
     
     @media (max-width: 480px) {
@@ -634,7 +801,7 @@ For any inquiries, contact us at support@swiftmetals.com`;
     </div>
     
     <!-- Receipt Title -->
-    <div class="receipt-title">RECEIPT</div>
+    <div class="receipt-title">PAYMENT RECEIPT</div>
     
     <!-- Receipt Info -->
     <div class="receipt-info">
@@ -650,11 +817,18 @@ For any inquiries, contact us at support@swiftmetals.com`;
           day: 'numeric'
         })}</div>
       </div>
+      <div class="info-item">
+        <div class="info-label">Time</div>
+        <div class="info-value">${new Date().toLocaleTimeString('en-US', {
+          hour: '2-digit',
+          minute: '2-digit'
+        })}</div>
+      </div>
     </div>
     
     ${sale.customer ? `
     <!-- Customer Information -->
-    <div class="section-title">Bill To</div>
+    <div class="section-title">Customer Details</div>
     <div class="customer-box">
       <div class="customer-name">${sale.customer.name}</div>
       ${sale.customer.phone ? `<div class="customer-detail">📞 ${sale.customer.phone}</div>` : ''}
@@ -662,28 +836,134 @@ For any inquiries, contact us at support@swiftmetals.com`;
     </div>
     ` : ''}
     
-    <!-- Items -->
-    <div class="section-title">Items</div>
-    <table class="items-table">
-      <thead>
-        <tr>
-          <th>Product</th>
-          <th class="center">Qty</th>
-          <th class="right">Price</th>
-          <th class="right">Total</th>
-        </tr>
-      </thead>
-      <tbody>
-        ${sale.saleitem.map(item => `
-        <tr>
-          <td>${item.product.name}</td>
-          <td class="center">${item.quantity}</td>
-          <td class="right">Ksh ${item.price.toFixed(2)}</td>
-          <td class="right">Ksh ${(item.price * item.quantity).toFixed(2)}</td>
-        </tr>
-        `).join('')}
-      </tbody>
-    </table>
+    <!-- Payment Summary -->
+    <div class="section-title">Payment Summary</div>
+    <div class="sale-card current">
+      <div class="sale-header">
+        <span class="sale-id">Payment Received Today</span>
+        <span class="sale-date">${new Date().toLocaleDateString()}</span>
+      </div>
+      <div class="amount-grid">
+        <div class="amount-item">
+          <div class="label">Amount Paid</div>
+          <div class="value paid-now">Ksh ${formatCurrency(currentSaleTotalPaid)}</div>
+        </div>
+        <div class="amount-item">
+          <div class="label">Payment Method</div>
+          <div class="value">${sale.payment[0]?.method || 'CASH'}</div>
+        </div>
+        ${sale.payment[0]?.referenceId ? `
+        <div class="amount-item">
+          <div class="label">Reference</div>
+          <div class="value">${sale.payment[0].referenceId}</div>
+        </div>
+        ` : ''}
+      </div>
+    </div>
+    
+    <!-- Current Sale Details -->
+    <div class="section-title">Sale #${sale.id} Details</div>
+    <div class="sale-card current">
+      <div class="sale-header">
+        <span class="sale-id">Sale #${sale.id}</span>
+        <span class="sale-date">${new Date(sale.date).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}</span>
+        <span class="sale-status ${currentSaleRemaining === 0 ? 'status-paid' : 'status-partial'}">
+          ${currentSaleRemaining === 0 ? '✓ PAID' : '⏳ PARTIAL'}
+        </span>
+      </div>
+      
+      <table class="items-table">
+        <thead>
+          <tr>
+            <th>Product</th>
+            <th class="center">Qty</th>
+            <th class="right">Price</th>
+            <th class="right">Total</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${sale.saleitem.map(item => `
+          <tr>
+            <td>${item.product.name}</td>
+            <td class="center">${item.quantity}</td>
+            <td class="right">Ksh ${formatCurrency(item.price)}</td>
+            <td class="right">Ksh ${formatCurrency(item.price * item.quantity)}</td>
+          </tr>
+          `).join('')}
+        </tbody>
+      </table>
+      
+      <div class="amount-grid">
+        <div class="amount-item">
+          <div class="label">Sale Total</div>
+          <div class="value">Ksh ${formatCurrency(sale.amount)}</div>
+        </div>
+        <div class="amount-item">
+          <div class="label">Paid Today</div>
+          <div class="value paid-now">Ksh ${formatCurrency(currentSaleTotalPaid)}</div>
+        </div>
+        <div class="amount-item">
+          <div class="label">Previously Paid</div>
+          <div class="value">Ksh 0.00</div>
+        </div>
+        <div class="amount-item">
+          <div class="label">Remaining</div>
+          <div class="value ${currentSaleRemaining > 0 ? 'remaining' : 'paid-now'}">
+            ${currentSaleRemaining > 0 ? `Ksh ${formatCurrency(currentSaleRemaining)}` : '✓ PAID'}
+          </div>
+        </div>
+      </div>
+    </div>
+    
+    <!-- Other Outstanding Sales -->
+    ${outstandingSales.length > 0 ? `
+    <div class="section-title">Other Outstanding Sales</div>
+    ${outstandingSales.map(s => `
+      <div class="sale-card">
+        <div class="sale-header">
+          <span class="sale-id">Sale #${s.id}</span>
+          <span class="sale-date">${new Date(s.date).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}</span>
+          <span class="sale-status status-unpaid">⏳ OUTSTANDING</span>
+        </div>
+        
+        <table class="items-table">
+          <thead>
+            <tr>
+              <th>Product</th>
+              <th class="center">Qty</th>
+              <th class="right">Price</th>
+              <th class="right">Total</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${s.saleitem.map(item => `
+            <tr>
+              <td>${item.product.name}</td>
+              <td class="center">${item.quantity}</td>
+              <td class="right">Ksh ${formatCurrency(item.price)}</td>
+              <td class="right">Ksh ${formatCurrency(item.price * item.quantity)}</td>
+            </tr>
+            `).join('')}
+          </tbody>
+        </table>
+        
+        <div class="amount-grid">
+          <div class="amount-item">
+            <div class="label">Sale Total</div>
+            <div class="value">Ksh ${formatCurrency(s.amount)}</div>
+          </div>
+          <div class="amount-item">
+            <div class="label">Paid So Far</div>
+            <div class="value">Ksh ${formatCurrency(s.paidAmount)}</div>
+          </div>
+          <div class="amount-item">
+            <div class="label">Outstanding</div>
+            <div class="value remaining">Ksh ${formatCurrency(s.remainingBalance)}</div>
+          </div>
+        </div>
+      </div>
+    `).join('')}
+    ` : ''}
     
     <!-- Payments -->
     <div class="section-title">Payment Details</div>
@@ -691,25 +971,47 @@ For any inquiries, contact us at support@swiftmetals.com`;
     <div class="payment-item">
       <div>
         <span class="payment-method">${p.method}</span>
-        <span class="payment-status ${p.status === 'COMPLETED' ? 'status-completed' : 'status-pending'}">${p.status}</span>
+        <span class="payment-status ${p.status === 'COMPLETED' || p.status === 'CLEARED' ? 'status-completed' : 'status-pending'}">${p.status}</span>
+        ${p.referenceId ? `<span style="font-size: 12px; color: #6b7280; margin-left: 10px;">Ref: ${p.referenceId}</span>` : ''}
       </div>
-      <span class="payment-amount">Ksh ${p.amount.toFixed(2)}</span>
+      <span class="payment-amount">Ksh ${formatCurrency(p.amount)}</span>
     </div>
     `).join('') : '<div class="no-payments">No payments recorded</div>'}
     
-    <!-- Totals -->
+    <!-- Outstanding Summary -->
     <div class="totals-box">
       <div class="total-row">
-        <span class="total-label">Subtotal:</span>
-        <span class="total-value">Ksh ${sale.amount.toFixed(2)}</span>
+        <span class="total-label">Current Sale Total:</span>
+        <span class="total-value">Ksh ${formatCurrency(sale.amount)}</span>
       </div>
       <div class="total-row paid">
-        <span class="total-label">Paid:</span>
-        <span class="total-value">Ksh ${totalPaid.toFixed(2)}</span>
+        <span class="total-label">Paid Today:</span>
+        <span class="total-value">Ksh ${formatCurrency(currentSaleTotalPaid)}</span>
       </div>
-      <div class="total-row divider balance">
-        <span class="total-label">Balance Due:</span>
-        <span class="total-value ${remaining > 0 ? 'balance-positive' : 'balance-zero'}">Ksh ${remaining.toFixed(2)}</span>
+      ${currentSaleRemaining > 0 ? `
+      <div class="total-row">
+        <span class="total-label">Current Sale Remaining:</span>
+        <span class="total-value balance-positive">Ksh ${formatCurrency(currentSaleRemaining)}</span>
+      </div>
+      ` : ''}
+      
+      ${outstandingSales.length > 0 ? `
+      <div class="total-row divider">
+        <span class="total-label">Other Outstanding Sales:</span>
+        <span class="total-value balance-positive">Ksh ${formatCurrency(outstandingSales.reduce((sum, s) => sum + s.remainingBalance, 0))}</span>
+      </div>
+      ` : ''}
+      
+      <div class="total-row divider">
+        <span class="total-label">Total Outstanding Before:</span>
+        <span class="total-value balance-positive">Ksh ${formatCurrency(totalOutstandingBefore)}</span>
+      </div>
+      
+      <div class="total-row balance divider">
+        <span class="total-label">TOTAL OUTSTANDING AFTER:</span>
+        <span class="total-value ${totalOutstandingAfter > 0 ? 'balance-positive' : 'balance-zero'}">
+          ${totalOutstandingAfter > 0 ? `Ksh ${formatCurrency(totalOutstandingAfter)}` : 'FULLY PAID ✓'}
+        </span>
       </div>
     </div>
     
@@ -717,6 +1019,7 @@ For any inquiries, contact us at support@swiftmetals.com`;
     <div class="footer">
       <div class="footer-message">Thank you for your business!</div>
       <div class="footer-contact">For inquiries, contact us at support@swiftmetals.com</div>
+      <div style="margin-top: 10px; font-size: 12px;">Receipt generated on ${new Date().toLocaleString()}</div>
     </div>
   </div>
 </body>
@@ -758,13 +1061,28 @@ export async function POST(
       include: {
         customer: true,
         saleitem: { include: { product: true } },
-        payment: true,
+        payment: {
+          where: { status: { in: ['CLEARED', 'COMPLETED'] } }
+        },
       },
     });
 
     if (!sale) {
       return NextResponse.json({ error: "Sale not found" }, { status: 404 });
     }
+
+    // Fetch ALL outstanding sales for context
+    const allCustomerSales = await prisma.sale.findMany({
+      where: { 
+        customerId: sale.customerId,
+        NOT: { id: saleId }
+      },
+      include: {
+        payment: {
+          where: { status: { in: ['CLEARED', 'COMPLETED'] } }
+        }
+      }
+    });
 
     const phone = normalizePhone(sale.customer?.phone);
     if (!phone) {
@@ -773,23 +1091,55 @@ export async function POST(
 
     const totalPaid = sale.payment.reduce((sum, p) => sum + p.amount, 0);
     const remaining = sale.amount - totalPaid;
+    
+    // Calculate outstanding sales
+    const outstandingSales = allCustomerSales
+      .map(s => {
+        const paid = s.payment.reduce((sum, p) => sum + p.amount, 0);
+        return {
+          id: s.id,
+          amount: s.amount,
+          paidAmount: paid,
+          remainingBalance: s.amount - paid
+        };
+      })
+      .filter(s => s.remainingBalance > 0.01);
+
+    const totalOutstandingAfter = outstandingSales.reduce((sum, s) => sum + s.remainingBalance, 0) + 
+      (remaining > 0.01 ? remaining : 0);
 
     const host = req.headers.get('host') || '';
     const protocol = req.headers.get('x-forwarded-proto') || 'https';
     const receiptUrl = `${protocol}://${host}/api/receipt/${sale.id}`;
 
-    // Format SMS message
+    // Format SMS message with all sales context
     let msg = `Hey ${sale.customer.name},\n\n`;
-    msg += `We value you as a trusted and loyal customer.\n\n`;
-    msg += `Receipt #${String(sale.id).padStart(6, '0')}\n`;
+    msg += `💰 PAYMENT RECEIVED\n`;
+    msg += `Amount: KES ${totalPaid.toLocaleString()}\n`;
+    msg += `Method: ${sale.payment[0]?.method || 'CASH'}\n\n`;
+    
+    msg += `📋 SALE #${sale.id}\n`;
+    sale.saleitem.forEach(item => {
+      msg += `${item.product.name} x${item.quantity}\n`;
+    });
     msg += `Total: KES ${sale.amount.toLocaleString()}\n`;
-    msg += `Paid: KES ${totalPaid.toLocaleString()}\n`;
     
     if (remaining > 0) {
-      msg += `Balance: KES ${remaining.toLocaleString()}\n\n`;
+      msg += `Remaining: KES ${remaining.toLocaleString()}\n\n`;
     } else {
       msg += `Status: PAID IN FULL ✓\n\n`;
     }
+    
+    if (outstandingSales.length > 0) {
+      msg += `⏳ OTHER OUTSTANDING SALES\n`;
+      outstandingSales.forEach(s => {
+        msg += `Sale #${s.id}: KES ${s.remainingBalance.toLocaleString()}\n`;
+      });
+      msg += `\n`;
+    }
+    
+    msg += `📊 TOTAL OUTSTANDING\n`;
+    msg += `KES ${totalOutstandingAfter.toLocaleString()}\n\n`;
     
     msg += `View receipt: ${receiptUrl}\n\n`;
     msg += `Thank you for choosing SWIFT Metals!`;

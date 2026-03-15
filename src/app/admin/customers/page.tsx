@@ -10,7 +10,7 @@ import {
   ChevronDown, ChevronUp, MoreVertical, Eye, Edit, Trash,
   Users, Wallet, TrendingDown, TrendingUp as TrendUp,
   UserCheck, UserX, MessageSquare, Bell, MessageCircle,
-  Send, FileDown, FileSpreadsheet, ReceiptText
+  Send, FileDown, FileSpreadsheet, ReceiptText, Share2
 } from "lucide-react";
 
 export interface Customer {
@@ -60,19 +60,9 @@ interface Payment {
   note?: string;
 }
 
-// Function to generate receipt download link
+// Function to generate receipt link
 const generateReceiptLink = (saleId: number): string => {
   return `${window.location.origin}/api/receipt/${saleId}`;
-};
-
-// Generate statement download link (only outstanding sales)
-const generateOutstandingStatementLink = (customerId: number): string => {
-  return `${window.location.origin}/api/customer-receipt/${customerId}?status=outstanding`;
-};
-
-// Generate full statement download link (all sales)
-const generateFullStatementLink = (customerId: number): string => {
-  return `${window.location.origin}/api/customer-receipt/${customerId}`;
 };
 
 // Format phone to Kenya code
@@ -172,176 +162,11 @@ const CreditManagement = ({
   
   // States for message flow
   const [showMessagePrompt, setShowMessagePrompt] = useState(false);
-  const [pendingMessage, setPendingMessage] = useState("");
-  const [pendingReceipt, setPendingReceipt] = useState("");
   const [pendingPaymentResult, setPendingPaymentResult] = useState<any>(null);
   const [showMessageDialog, setShowMessageDialog] = useState(false);
   const [customMessage, setCustomMessage] = useState("");
-  const [showReceiptPreview, setShowReceiptPreview] = useState(false);
   const [messageType, setMessageType] = useState<'whatsapp' | 'sms' | 'email'>('whatsapp');
-
-  // Generate receipt text
-  const generateReceipt = (
-    customerName: string,
-    previousBalance: number,
-    amountPaid: number,
-    newBalance: number,
-    sales: OutstandingSale[],
-    paymentMethod: string,
-    paymentReference?: string
-  ) => {
-    const date = new Date().toLocaleDateString('en-KE', {
-      year: 'numeric',
-      month: 'long',
-      day: 'numeric'
-    });
-    const time = new Date().toLocaleTimeString('en-KE', {
-      hour: '2-digit',
-      minute: '2-digit'
-    });
-    const receiptNumber = `RCP-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
-    
-    let receipt = `═══════════════════════════════════════\n`;
-    receipt += `              PAYMENT RECEIPT              \n`;
-    receipt += `═══════════════════════════════════════\n`;
-    receipt += `Receipt No: ${receiptNumber}\n`;
-    receipt += `Date: ${date} ${time}\n`;
-    receipt += `Customer: ${customerName}\n`;
-    receipt += `───────────────────────────────────────\n\n`;
-    
-    receipt += `PAYMENT DETAILS:\n`;
-    receipt += `  Previous Balance: KSh ${previousBalance.toLocaleString()}\n`;
-    receipt += `  Amount Paid:      KSh ${amountPaid.toLocaleString()}\n`;
-    receipt += `  Payment Method:   ${paymentMethod}\n`;
-    if (paymentReference) {
-      receipt += `  Reference:        ${paymentReference}\n`;
-    }
-    receipt += `  New Balance:       KSh ${newBalance.toLocaleString()}\n\n`;
-    
-    if (sales.length > 0) {
-      receipt += `ITEMS PAID FOR:\n`;
-      receipt += `───────────────────────────────────────\n`;
-      
-      sales.forEach((sale, index) => {
-        const receiptLink = generateReceiptLink(sale.id);
-        receipt += `${index + 1}. Sale #${sale.id} (${new Date(sale.date).toLocaleDateString()})\n`;
-        receipt += `   Receipt Link: ${receiptLink}\n`;
-        
-        if (sale.saleitem && sale.saleitem.length > 0) {
-          sale.saleitem.forEach(item => {
-            if (item.product) {
-              receipt += `   • ${item.product.name.padEnd(20)} x${item.quantity} @ KSh ${item.price.toLocaleString()}\n`;
-            }
-          });
-        }
-        
-        const paidThisTime = Math.min(sale.remainingBalance, amountPaid);
-        receipt += `   Sale Total:      KSh ${sale.amount.toLocaleString()}\n`;
-        receipt += `   Paid Now:        KSh ${paidThisTime.toLocaleString()}\n`;
-        
-        if (sale.remainingBalance - paidThisTime > 0) {
-          receipt += `   Remaining:       KSh ${(sale.remainingBalance - paidThisTime).toLocaleString()}\n`;
-        } else {
-          receipt += `   Status:          ✅ FULLY PAID\n`;
-        }
-        receipt += `\n`;
-      });
-    }
-    
-    receipt += `═══════════════════════════════════════\n`;
-    receipt += `           PAYMENT SUMMARY           \n`;
-    receipt += `───────────────────────────────────────\n`;
-    receipt += `Total Paid:        KSh ${amountPaid.toLocaleString()}\n`;
-    receipt += `Payment Status:    ${newBalance === 0 ? '✅ FULLY PAID' : newBalance > 0 ? '⏳ PARTIAL PAYMENT' : '💰 OVERPAYMENT (CREDIT)'}\n`;
-    
-    if (newBalance < 0) {
-      receipt += `Credit Balance:    KSh ${Math.abs(newBalance).toLocaleString()}\n`;
-    }
-    
-    receipt += `───────────────────────────────────────\n`;
-    receipt += `       Thank you for your business!       \n`;
-    receipt += `              🙏 SWIFTMETALS 🙏            \n`;
-    receipt += `═══════════════════════════════════════\n`;
-    
-    return receipt;
-  };
-
-  // Message Templates with Receipt Links (like in debtors section)
-  const MESSAGE_TEMPLATES = {
-    FULL_PAYMENT: (name: string, amount: number, receipt: string, receiptLinks: { saleId: number, link: string }[]) => {
-      const links = receiptLinks.map(r => `• Sale #${r.saleId}: ${r.link}`).join('\n');
-      const statementLink = generateOutstandingStatementLink(customer!.id);
-      
-      return `Hello ${name},
-
-🎉 *PAYMENT CONFIRMATION - FULL SETTLEMENT*
-
-We are pleased to confirm that you have fully cleared your outstanding balance of KSh ${amount.toLocaleString()}!
-
-*RECEIPTS:*
-${links}
-
-*OUTSTANDING STATEMENT:*
-${statementLink}
-
-We truly appreciate your business and timely payment. It's customers like you who make our work worthwhile!
-
-We look forward to serving you again soon.
-
-Best regards,
-Swiftmetals Team ✨`;
-    },
-
-    PARTIAL_PAYMENT: (name: string, amount: number, remaining: number, receipt: string, receiptLinks: { saleId: number, link: string }[]) => {
-      const links = receiptLinks.map(r => `• Sale #${r.saleId}: ${r.link}`).join('\n');
-      const statementLink = generateOutstandingStatementLink(customer!.id);
-      
-      return `Hello ${name},
-
-💫 *PAYMENT CONFIRMATION - PARTIAL PAYMENT*
-
-Thank you for your payment of KSh ${amount.toLocaleString()}!
-
-*RECEIPTS:*
-${links}
-
-*OUTSTANDING STATEMENT:*
-${statementLink}
-
-Your remaining balance is KSh ${remaining.toLocaleString()}.
-
-We appreciate your effort to reduce your outstanding balance. Would you like to set up a payment plan for the remaining amount? Feel free to contact us.
-
-Thank you for your continued trust in us!
-
-Best regards,
-Swiftmetals Team`;
-    },
-
-    OVERPAYMENT: (name: string, amount: number, credit: number, receipt: string, receiptLinks: { saleId: number, link: string }[]) => {
-      const links = receiptLinks.map(r => `• Sale #${r.saleId}: ${r.link}`).join('\n');
-      const statementLink = generateFullStatementLink(customer!.id);
-      
-      return `Hello ${name},
-
-🙏 *PAYMENT CONFIRMATION - CREDIT CREATED*
-
-Thank you for your payment of KSh ${amount.toLocaleString()}!
-
-*RECEIPTS:*
-${links}
-
-*FULL STATEMENT:*
-${statementLink}
-
-Your account now has a credit balance of KSh ${credit.toLocaleString()}. This credit will be automatically applied to your future purchases.
-
-We're truly honored by your trust and generosity!
-
-Best regards,
-Swiftmetals Team`;
-    }
-  };
+  const [processedSales, setProcessedSales] = useState<any[]>([]);
 
   useEffect(() => {
     if (customer) {
@@ -442,7 +267,7 @@ Swiftmetals Team`;
         saleId: sale.id,
         saleDate: new Date(sale.date).toLocaleDateString(),
         amount: allocAmount,
-        willBeFullyPaid: allocAmount === sale.remainingBalance,
+        willBeFullyPaid: Math.abs(allocAmount - sale.remainingBalance) < 0.01,
         remainingAfter: sale.remainingBalance - allocAmount,
         originalAmount: sale.amount,
         paidAmount: sale.paidAmount,
@@ -471,12 +296,6 @@ Swiftmetals Team`;
     return outstandingSales.reduce((sum, sale) => sum + sale.remainingBalance, 0);
   };
 
-  const getPaymentType = (amount: number, totalOutstanding: number) => {
-    if (amount > totalOutstanding) return 'overpayment';
-    if (amount === totalOutstanding) return 'full';
-    return 'partial';
-  };
-
   const processPayment = async () => {
     if (!customer) {
       alert("Please select a customer");
@@ -498,10 +317,13 @@ Swiftmetals Team`;
     
     try {
       let remainingAmount = amount;
-      const processedSales = [];
-      const paidSales = [];
+      const processedSalesList = [];
+      const paidSalesList = [];
       const failedSales = [];
-      const receiptLinks = [];
+      const createdSaleIds = [];
+
+      // Calculate CORRECT previous balance
+      const previousBalance = outstandingSales.reduce((sum, sale) => sum + sale.remainingBalance, 0);
 
       for (const sale of outstandingSales) {
         if (remainingAmount <= 0) break;
@@ -541,28 +363,25 @@ Swiftmetals Team`;
         }
 
         const updatedSale = await updateRes.json();
-        processedSales.push({
+        
+        createdSaleIds.push(sale.id);
+        
+        processedSalesList.push({
           saleId: sale.id,
           amount: paymentForThisSale,
           fullyPaid: updatedSale.status === "PAID"
         });
 
-        receiptLinks.push({
-          saleId: sale.id,
-          link: generateReceiptLink(sale.id)
-        });
-
-        paidSales.push({
+        paidSalesList.push({
           ...sale,
-          paidThisTime: paymentForThisSale
+          paidThisTime: paymentForThisSale,
+          fullyPaid: updatedSale.status === "PAID"
         });
 
         remainingAmount -= paymentForThisSale;
       }
 
       let creditUpdate = null;
-      const totalOutstanding = getTotalOutstanding();
-      const paymentType = getPaymentType(amount, totalOutstanding);
       
       if (remainingAmount > 0) {
         const creditRes = await fetch(`/api/customer`, {
@@ -582,46 +401,26 @@ Swiftmetals Team`;
         }
       }
 
-      const newBalance = totalOutstanding - amount;
+      // Calculate CORRECT new balance
+      const newBalance = previousBalance - amount;
 
-      const receipt = generateReceipt(
-        customer.name,
-        totalOutstanding,
-        amount,
-        newBalance,
-        paidSales,
-        paymentMethod,
-        paymentNote || `PAY-${Date.now()}`
-      );
-
-      let message = '';
-      if (paymentType === 'full') {
-        message = MESSAGE_TEMPLATES.FULL_PAYMENT(customer.name, amount, receipt, receiptLinks);
-      } else if (paymentType === 'partial') {
-        message = MESSAGE_TEMPLATES.PARTIAL_PAYMENT(customer.name, amount, Math.abs(newBalance), receipt, receiptLinks);
-      } else if (paymentType === 'overpayment') {
-        const credit = amount - totalOutstanding;
-        message = MESSAGE_TEMPLATES.OVERPAYMENT(customer.name, amount, credit, receipt, receiptLinks);
-      }
+      // Store processed sales for display
+      setProcessedSales(paidSalesList);
 
       const result = {
-        processedSales,
+        processedSales: processedSalesList,
         failedSales,
         creditUpdate,
         totalAmount: amount,
         allocatedAmount: amount - remainingAmount,
         unallocatedAmount: remainingAmount,
-        message,
-        receipt,
-        receiptLinks,
-        paymentType,
-        newBalance
+        newBalance,
+        previousBalance,
+        paidSales: paidSalesList,
+        createdSaleIds
       };
       
       setPendingPaymentResult(result);
-      setPendingMessage(message);
-      setPendingReceipt(receipt);
-      setCustomMessage(message);
       setShowMessagePrompt(true);
 
       setPaymentAmount("");
@@ -640,24 +439,160 @@ Swiftmetals Team`;
     }
   };
 
-  const sendWhatsAppMessage = (phone: string, message: string) => {
-    const formattedPhone = formatPhoneToKenyaCode(phone);
-    const encodedMessage = encodeURIComponent(message);
-    const whatsappUrl = `https://wa.me/${formattedPhone}?text=${encodedMessage}`;
-    window.open(whatsappUrl, '_blank');
-  };
+const sendWhatsAppMessage = (phone: string) => {
+  if (!customer || !pendingPaymentResult) return;
+  
+  const formattedPhone = formatPhoneToKenyaCode(phone);
+  const date = new Date().toLocaleDateString('en-KE', {
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric'
+  });
+  
+  let message = `*SWIFT SUPPLIERS*\n`;
+  message += `📞 ${customer.phone || 'No phone'}\n`;
+  message += `📅 ${date}\n`;
+  message += `─────────────────────\n\n`;
 
-  const sendSMSMessage = (phone: string, message: string) => {
-    const formattedPhone = formatPhoneToKenyaCode(phone);
-    const encodedMessage = encodeURIComponent(message);
-    const smsUrl = `sms:${formattedPhone}?body=${encodedMessage}`;
-    window.location.href = smsUrl;
-  };
+  message += `*PAYMENT RECEIVED*\n`;
+  message += `Amount: KSh ${formatCurrency(pendingPaymentResult.totalAmount)}\n`;
+  message += `Method: ${paymentMethod}\n`;
+  if (paymentNote) message += `Ref: ${paymentNote}\n`;
+  message += `─────────────────────\n\n`;
 
-  const sendEmailMessage = (email: string, message: string) => {
+  processedSales.forEach((sale, index) => {
+    message += `*SALE #${sale.id}* - ${new Date(sale.date).toLocaleDateString()}\n`;
+    message += `─────────────────────\n`;
+    
+    // Simple item list
+    if (sale.saleitem && sale.saleitem.length > 0) {
+      sale.saleitem.forEach((item: any) => {
+        const itemTotal = item.price * item.quantity;
+        message += `${item.quantity}x ${item.product?.name || 'Product'} @ KSh ${formatCurrency(item.price)} = KSh ${formatCurrency(itemTotal)}\n`;
+      });
+    }
+    
+    message += `\n`;
+    message += `Subtotal: KSh ${formatCurrency(sale.amount)}\n`;
+    message += `Paid: KSh ${formatCurrency(sale.paidThisTime)}\n`;
+    
+    if (sale.fullyPaid) {
+      message += `Status: ✓ PAID IN FULL\n`;
+    } else {
+      const remainingAfter = sale.remainingBalance - sale.paidThisTime;
+      message += `Remaining: KSh ${formatCurrency(remainingAfter)}\n`;
+    }
+    message += `─────────────────────\n\n`;
+  });
+
+  // Summary section
+  message += `*SUMMARY*\n`;
+  message += `─────────────────────\n`;
+  message += `Grand Total: KSh ${formatCurrency(pendingPaymentResult.previousBalance + (processedSales.reduce((sum, s) => sum + s.paidThisTime, 0) - pendingPaymentResult.totalAmount))}\n`;
+  message += `Amount Paid: KSh ${formatCurrency(pendingPaymentResult.totalAmount)}\n`;
+  
+  if (pendingPaymentResult.newBalance > 0) {
+    message += `Outstanding: KSh ${formatCurrency(pendingPaymentResult.newBalance)}\n`;
+    message += `Status: ⏳ PARTIAL PAYMENT\n`;
+  } else if (pendingPaymentResult.newBalance < 0) {
+    message += `Credit: KSh ${formatCurrency(Math.abs(pendingPaymentResult.newBalance))}\n`;
+    message += `Status: 💰 CREDIT BALANCE\n`;
+  } else {
+    message += `Status: ✓ FULLY PAID\n`;
+  }
+  
+  if (pendingPaymentResult.unallocatedAmount > 0) {
+    message += `\n✨ Credit Added: KSh ${formatCurrency(pendingPaymentResult.unallocatedAmount)}\n`;
+  }
+  
+  message += `─────────────────────\n\n`;
+
+  // Receipt links
+  message += `*RECEIPTS*\n`;
+  message += `─────────────────────\n`;
+  pendingPaymentResult.createdSaleIds.forEach((id: number) => {
+    message += `Sale #${id}: ${generateReceiptLink(id)}\n`;
+  });
+  message += `─────────────────────\n\n`;
+
+  message += `*Thank you for choosing Swift Suppliers!*`;
+
+  const encodedMessage = encodeURIComponent(message);
+  const whatsappUrl = `https://wa.me/${formattedPhone}?text=${encodedMessage}`;
+  window.open(whatsappUrl, '_blank');
+};
+ const sendSMSMessage = (phone: string) => {
+  if (!customer || !pendingPaymentResult) return;
+  
+  const formattedPhone = formatPhoneToKenyaCode(phone);
+  
+  let message = `Swift Suppliers\n`;
+  message += `Payment: KSh ${formatCurrency(pendingPaymentResult.totalAmount)}\n`;
+  message += `Method: ${paymentMethod}\n\n`;
+
+  processedSales.forEach((sale, index) => {
+    message += `Sale #${sale.id}: KSh ${formatCurrency(sale.paidThisTime)}`;
+    if (sale.fullyPaid) message += ` ✓`;
+    message += `\n`;
+  });
+
+  if (pendingPaymentResult.newBalance > 0) {
+    message += `\nBalance: KSh ${formatCurrency(pendingPaymentResult.newBalance)}`;
+  } else if (pendingPaymentResult.newBalance === 0) {
+    message += `\nStatus: Fully Paid`;
+  }
+
+  message += `\n\nReceipts: `;
+  pendingPaymentResult.createdSaleIds.forEach((id: number, idx: number) => {
+    if (idx > 0) message += `, `;
+    message += `${generateReceiptLink(id)}`;
+  });
+
+  const encodedMessage = encodeURIComponent(message);
+  const smsUrl = `sms:${formattedPhone}?body=${encodedMessage}`;
+  window.location.href = smsUrl;
+};
+
+  const sendEmailMessage = (email: string) => {
+    if (!customer || !pendingPaymentResult) return;
+    
     const subject = encodeURIComponent(`Payment Confirmation - Swiftmetals`);
-    const body = encodeURIComponent(message.replace(/\*/g, ''));
-    const emailUrl = `mailto:${email}?subject=${subject}&body=${body}`;
+    
+    let body = `Hello ${customer.name},\n\n`;
+    body += `Thank you for your payment of KSh ${formatCurrency(pendingPaymentResult.totalAmount)} via ${paymentMethod}.\n\n`;
+    
+    body += `HOW YOUR PAYMENT WAS USED:\n`;
+    body += `━━━━━━━━━━━━━━━━━━━━━━\n\n`;
+    
+    processedSales.forEach((sale, index) => {
+      body += `${index + 1}. Sale #${sale.id} - ${new Date(sale.date).toLocaleDateString()}\n`;
+      
+      if (sale.saleitem && sale.saleitem.length > 0) {
+        sale.saleitem.forEach((item: any) => {
+          body += `   • ${item.product?.name || 'Product'} x${item.quantity} @ KSh ${formatCurrency(item.price)}\n`;
+        });
+      }
+      
+      body += `   Paid Today: KSh ${formatCurrency(sale.paidThisTime)}\n`;
+      body += `   ${sale.fullyPaid ? '✅ FULLY PAID' : `⏳ Remaining: KSh ${formatCurrency(sale.remainingBalance - sale.paidThisTime)}`}\n\n`;
+    });
+    
+    body += `Previous Balance: KSh ${formatCurrency(pendingPaymentResult.previousBalance)}\n`;
+    body += `Amount Paid: KSh ${formatCurrency(pendingPaymentResult.totalAmount)}\n`;
+    body += `New Balance: KSh ${formatCurrency(Math.abs(pendingPaymentResult.newBalance))}`;
+    if (pendingPaymentResult.newBalance > 0) body += ` (remaining)`;
+    else if (pendingPaymentResult.newBalance < 0) body += ` (credit)`;
+    else body += ` (FULLY PAID)`;
+    
+    body += `\n\nView your receipts:\n`;
+    pendingPaymentResult.createdSaleIds.forEach((id: number) => {
+      const receiptLink = generateReceiptLink(id);
+      body += `${receiptLink}\n`;
+    });
+    
+    body += `\nThank you for choosing Swiftmetals!`;
+    
+    const emailUrl = `mailto:${email}?subject=${subject}&body=${encodeURIComponent(body)}`;
     window.location.href = emailUrl;
   };
 
@@ -674,17 +609,31 @@ Swiftmetals Team`;
     }
 
     if (messageType === 'whatsapp' && customer.phone) {
-      sendWhatsAppMessage(customer.phone, pendingMessage);
+      sendWhatsAppMessage(customer.phone);
     } else if (messageType === 'sms' && customer.phone) {
-      sendSMSMessage(customer.phone, pendingMessage);
+      sendSMSMessage(customer.phone);
     } else if (messageType === 'email' && customer.email) {
-      sendEmailMessage(customer.email, pendingMessage);
+      sendEmailMessage(customer.email);
     }
     
     handleCompletePayment();
   };
 
   const handleEditAndSend = () => {
+    if (!customer || !pendingPaymentResult) return;
+    
+    // Build custom message template
+    let messageTemplate = `Hello ${customer.name},\n\n`;
+    messageTemplate += `Thank you for your payment of KSh ${formatCurrency(pendingPaymentResult.totalAmount)}.\n\n`;
+    messageTemplate += `Payment was distributed to:\n`;
+    
+    processedSales.forEach((sale, index) => {
+      messageTemplate += `${index + 1}. Sale #${sale.id}: KSh ${formatCurrency(sale.paidThisTime)}\n`;
+    });
+    
+    messageTemplate += `\nNew balance: KSh ${formatCurrency(Math.abs(pendingPaymentResult.newBalance))}`;
+    
+    setCustomMessage(messageTemplate);
     setShowMessageDialog(true);
     setShowMessagePrompt(false);
   };
@@ -702,11 +651,19 @@ Swiftmetals Team`;
     }
 
     if (messageType === 'whatsapp' && customer.phone) {
-      sendWhatsAppMessage(customer.phone, customMessage);
+      const formattedPhone = formatPhoneToKenyaCode(customer.phone);
+      const encodedMessage = encodeURIComponent(customMessage);
+      const whatsappUrl = `https://wa.me/${formattedPhone}?text=${encodedMessage}`;
+      window.open(whatsappUrl, '_blank');
     } else if (messageType === 'sms' && customer.phone) {
-      sendSMSMessage(customer.phone, customMessage);
+      const formattedPhone = formatPhoneToKenyaCode(customer.phone);
+      const encodedMessage = encodeURIComponent(customMessage);
+      const smsUrl = `sms:${formattedPhone}?body=${encodedMessage}`;
+      window.location.href = smsUrl;
     } else if (messageType === 'email' && customer.email) {
-      sendEmailMessage(customer.email, customMessage);
+      const subject = encodeURIComponent(`Payment Confirmation - Swiftmetals`);
+      const emailUrl = `mailto:${customer.email}?subject=${subject}&body=${encodeURIComponent(customMessage)}`;
+      window.location.href = emailUrl;
     }
     
     setShowMessageDialog(false);
@@ -722,38 +679,17 @@ Swiftmetals Team`;
     fetchAllSales();
     onPaymentComplete();
     
-    if (customer && pendingPaymentResult?.creditUpdate) {
-      fetch(`/api/customer?id=${customer.id}`)
-        .then(res => res.json())
-        .then(data => {
-          const updatedCustomer = data.data || data;
-          if (updatedCustomer) {
-            onPaymentComplete();
-          }
-        })
-        .catch(err => console.error("Error refreshing customer:", err));
-    }
-    
     setShowMessagePrompt(false);
     setShowMessageDialog(false);
-    setPendingMessage("");
-    setPendingReceipt("");
     setPendingPaymentResult(null);
+    setProcessedSales([]);
   };
 
-  const downloadReceipt = () => {
-    if (!pendingReceipt || !customer) return;
-    
-    const blob = new Blob([pendingReceipt], { type: 'text/plain' });
-    const url = window.URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `receipt_${customer.name}_${new Date().toISOString().split('T')[0]}.txt`;
-    a.click();
-    window.URL.revokeObjectURL(url);
+  const viewReceipt = (saleId: number) => {
+    const receiptLink = generateReceiptLink(saleId);
+    window.open(receiptLink, '_blank');
   };
 
-  // Download outstanding statement (only unpaid/partial sales)
   const downloadOutstandingStatement = () => {
     if (!customer) return;
     
@@ -787,45 +723,6 @@ Swiftmetals Team`;
     a.download = `${customer.name}_outstanding_statement_${new Date().toISOString().split('T')[0]}.csv`;
     a.click();
     window.URL.revokeObjectURL(url);
-  };
-
-  // Download full statement (all sales)
-  const downloadFullStatement = () => {
-    if (!customer) return;
-    
-    if (allSales.length === 0) {
-      alert("No sales found for this customer");
-      return;
-    }
-
-    let csvContent = "Sale ID,Date,Amount,Paid Amount,Remaining Balance,Status,Due Date,Items,Receipt Link\n";
-    
-    allSales.forEach((sale) => {
-      const itemsList = sale.saleitem?.map((item: any) => 
-        `${item.product?.name} x${item.quantity}`
-      ).join('; ') || 'No items';
-      
-      const receiptLink = generateReceiptLink(sale.id);
-      
-      csvContent += `${sale.id},${new Date(sale.date).toLocaleDateString()},${sale.amount},${sale.paidAmount},${sale.remainingBalance},${sale.status},${sale.dueDate ? new Date(sale.dueDate).toLocaleDateString() : 'N/A'},"${itemsList}",${receiptLink}\n`;
-    });
-
-    csvContent += "\nSUMMARY\n";
-    csvContent += `Total Sales,${allSales.reduce((sum, s) => sum + s.amount, 0)}\n`;
-    csvContent += `Total Paid,${allSales.reduce((sum, s) => sum + s.paidAmount, 0)}\n`;
-    csvContent += `Total Outstanding,${allSales.filter(s => s.status !== 'PAID').reduce((sum, s) => sum + s.remainingBalance, 0)}\n`;
-
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const url = window.URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${customer.name}_full_statement_${new Date().toISOString().split('T')[0]}.csv`;
-    a.click();
-    window.URL.revokeObjectURL(url);
-  };
-
-  const toggleReceiptPreview = () => {
-    setShowReceiptPreview(!showReceiptPreview);
   };
 
   if (!customer) {
@@ -876,28 +773,20 @@ Swiftmetals Team`;
 
       {expanded && (
         <div className="p-6 border-t border-slate-100">
-          {/* Download Statement Buttons - Like in debtors section */}
-          <div className="flex justify-end gap-2 mb-4">
+          {/* Download Outstanding Statement Button */}
+          <div className="flex justify-end mb-4">
             <button
               onClick={downloadOutstandingStatement}
-              className="px-3 py-1.5 bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700 text-white font-medium rounded-lg transition-all flex items-center gap-1.5 text-xs"
+              className="px-4 py-2 bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700 text-white font-medium rounded-lg transition-all flex items-center gap-2 text-sm"
               title="Download only unpaid and partially paid sales"
             >
-              <Download className="w-3.5 h-3.5" />
-              Outstanding Statement (CSV)
-            </button>
-            <button
-              onClick={downloadFullStatement}
-              className="px-3 py-1.5 bg-gradient-to-r from-purple-500 to-purple-600 hover:from-purple-600 hover:to-purple-700 text-white font-medium rounded-lg transition-all flex items-center gap-1.5 text-xs"
-              title="Download all sales including paid"
-            >
-              <FileText className="w-3.5 h-3.5" />
-              Full Statement (CSV)
+              <Download className="w-4 h-4" />
+              Download Outstanding Statement (CSV)
             </button>
           </div>
 
-          {/* Message Prompt Dialog */}
-          {showMessagePrompt && pendingMessage && (
+          {/* Payment Success Message Dialog */}
+          {showMessagePrompt && pendingPaymentResult && (
             <div className="mb-6 bg-gradient-to-r from-green-50 to-emerald-50 border border-green-200 rounded-lg p-6">
               <div className="flex items-start gap-3">
                 <div className="p-2 bg-green-100 rounded-full">
@@ -908,13 +797,90 @@ Swiftmetals Team`;
                     Payment Successful! 🎉
                   </h3>
                   <p className="text-green-700 mb-4">
-                    Thank you message ready to send to {customer.name}
+                    Payment of KSh {formatCurrency(pendingPaymentResult.totalAmount)} received from {customer.name}
                   </p>
+                  
+                  {/* Payment Distribution Summary */}
+                  <div className="mb-4 bg-white rounded-lg p-4 border border-green-200">
+                    <h4 className="font-medium text-green-800 mb-3">How Your Payment Was Used:</h4>
+                    {processedSales.map((sale, index) => (
+                      <div key={sale.id} className="mb-3 pb-3 border-b border-green-100 last:border-0">
+                        <div className="flex justify-between items-center">
+                          <span className="font-medium">Sale #{sale.id} - {new Date(sale.date).toLocaleDateString()}</span>
+                          <span className="text-green-600 font-medium">KSh {formatCurrency(sale.paidThisTime)}</span>
+                        </div>
+                        {sale.saleitem && sale.saleitem.length > 0 && (
+                          <div className="text-sm text-gray-600 mt-1">
+                            {sale.saleitem.map((item: any) => (
+                              <div key={item.id} className="flex justify-between">
+                                <span>{item.product?.name} x{item.quantity}</span>
+                                <span>KSh {formatCurrency(item.price * item.quantity)}</span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                        <div className="text-sm mt-1">
+                          {sale.fullyPaid ? (
+                            <span className="text-green-600">✓ Fully Paid</span>
+                          ) : (
+                            <span className="text-orange-600">⏳ Remaining: KSh {formatCurrency(sale.remainingBalance - sale.paidThisTime)}</span>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                    
+                    {pendingPaymentResult.unallocatedAmount > 0 && (
+                      <div className="mt-2 pt-2 border-t border-green-200">
+                        <div className="flex justify-between text-blue-600">
+                          <span>✨ Credit Added:</span>
+                          <span className="font-medium">KSh {formatCurrency(pendingPaymentResult.unallocatedAmount)}</span>
+                        </div>
+                      </div>
+                    )}
+                    
+                    <div className="mt-3 pt-3 border-t border-green-200 font-medium">
+                      <div className="flex justify-between">
+                        <span>Previous Balance:</span>
+                        <span>KSh {formatCurrency(pendingPaymentResult.previousBalance)}</span>
+                      </div>
+                      <div className="flex justify-between text-green-600">
+                        <span>Amount Paid:</span>
+                        <span>- KSh {formatCurrency(pendingPaymentResult.totalAmount)}</span>
+                      </div>
+                      <div className="flex justify-between text-lg mt-2">
+                        <span>New Balance:</span>
+                        <span className={pendingPaymentResult.newBalance > 0 ? 'text-red-600' : 'text-green-600'}>
+                          {pendingPaymentResult.newBalance > 0 
+                            ? `KSh ${formatCurrency(pendingPaymentResult.newBalance)}` 
+                            : pendingPaymentResult.newBalance < 0 
+                              ? `Credit: KSh ${formatCurrency(Math.abs(pendingPaymentResult.newBalance))}`
+                              : '✓ Fully Paid'}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Receipt Links */}
+                  <div className="mb-4">
+                    <h4 className="font-medium text-green-800 mb-2">View Receipts:</h4>
+                    <div className="space-y-2">
+                      {pendingPaymentResult.createdSaleIds.map((id: number) => (
+                        <button
+                          key={id}
+                          onClick={() => viewReceipt(id)}
+                          className="w-full px-4 py-2 bg-white border border-green-300 text-green-700 rounded-lg hover:bg-green-50 transition-colors flex items-center justify-between"
+                        >
+                          <span>Sale #{id} Receipt</span>
+                          <ReceiptText className="w-4 h-4" />
+                        </button>
+                      ))}
+                    </div>
+                  </div>
                   
                   {/* Message Type Selector */}
                   <div className="mb-4">
                     <label className="block text-sm font-medium text-green-800 mb-2">
-                      Send via:
+                      Send confirmation via:
                     </label>
                     <div className="flex gap-2">
                       {customer.phone && (
@@ -950,46 +916,13 @@ Swiftmetals Team`;
                             messageType === 'email' 
                               ? 'bg-orange-600 text-white' 
                               : 'bg-white text-orange-700 border border-orange-300'
-                            }`}
+                          }`}
                         >
                           <Mail className="w-4 h-4" />
                           Email
                         </button>
                       )}
                     </div>
-                  </div>
-                  
-                  {/* Receipt Preview Button */}
-                  <div className="flex gap-2 mb-4">
-                    <button
-                      onClick={toggleReceiptPreview}
-                      className="px-4 py-2 bg-white border border-green-300 text-green-700 rounded-lg hover:bg-green-50 transition-colors flex items-center gap-2"
-                    >
-                      <ReceiptText className="w-4 h-4" />
-                      {showReceiptPreview ? 'Hide Receipt' : 'Preview Receipt'}
-                    </button>
-                    
-                    <button
-                      onClick={downloadReceipt}
-                      className="px-4 py-2 bg-white border border-green-300 text-green-700 rounded-lg hover:bg-green-50 transition-colors flex items-center gap-2"
-                    >
-                      <Download className="w-4 h-4" />
-                      Download Receipt
-                    </button>
-                  </div>
-
-                  {/* Receipt Preview */}
-                  {showReceiptPreview && pendingReceipt && (
-                    <div className="mb-4 bg-white rounded-lg p-4 border border-green-200 font-mono text-sm whitespace-pre-wrap max-h-96 overflow-y-auto">
-                      {pendingReceipt}
-                    </div>
-                  )}
-
-                  {/* Message Preview */}
-                  <div className="bg-white rounded-lg p-4 mb-4 border border-green-200 max-h-60 overflow-y-auto">
-                    <p className="text-sm text-gray-700 whitespace-pre-wrap font-mono">
-                      {pendingMessage}
-                    </p>
                   </div>
 
                   {/* Action Buttons */}
@@ -1020,26 +953,15 @@ Swiftmetals Team`;
 
                   {!customer.phone && messageType !== 'email' && (
                     <p className="text-sm text-red-600 mt-2">
-                      No phone number available for this customer. Add a phone number to send messages.
+                      No phone number available. Add a phone number to send messages.
                     </p>
                   )}
                   
                   {messageType === 'email' && !customer.email && (
                     <p className="text-sm text-red-600 mt-2">
-                      No email address available for this customer. Add an email to send messages.
+                      No email address available. Add an email to send messages.
                     </p>
                   )}
-
-                  {/* Document Options Info - Like in debtors section */}
-                  <div className="mt-4 text-xs text-gray-500 bg-white p-3 rounded-lg border border-green-100">
-                    <p className="font-medium mb-1 text-green-800">Document Options:</p>
-                    <ul className="list-disc pl-4 space-y-0.5 text-gray-600">
-                      <li><strong>Single Receipt</strong>: Each sale has its own receipt link above</li>
-                      <li><strong>Outstanding Statement</strong>: Download only unpaid/partial sales (CSV)</li>
-                      <li><strong>Full Statement</strong>: Download complete sales history (CSV)</li>
-                      <li><strong>Messages</strong>: Include both individual receipt links and statement links</li>
-                    </ul>
-                  </div>
                 </div>
               </div>
             </div>
@@ -1051,16 +973,6 @@ Swiftmetals Team`;
               <div className="bg-white rounded-xl max-w-2xl w-full p-6 max-h-[90vh] overflow-y-auto">
                 <h3 className="text-lg font-semibold text-black mb-4">Customize Your Message</h3>
                 
-                {/* Receipt Preview in Edit Mode */}
-                {pendingReceipt && (
-                  <div className="mb-4">
-                    <p className="text-sm font-medium text-gray-700 mb-2">Receipt:</p>
-                    <div className="bg-gray-50 rounded-lg p-4 border border-gray-200 font-mono text-sm whitespace-pre-wrap max-h-60 overflow-y-auto">
-                      {pendingReceipt}
-                    </div>
-                  </div>
-                )}
-
                 <div className="mb-4">
                   <label className="block text-sm font-medium text-gray-700 mb-2">
                     Message:
@@ -1241,15 +1153,13 @@ Swiftmetals Team`;
                               <div className="mt-3 pt-3 border-t border-slate-200">
                                 <div className="flex justify-between items-center mb-2">
                                   <p className="text-xs font-medium text-slate-500">Items:</p>
-                                  <a 
-                                    href={generateReceiptLink(sale.id)} 
-                                    target="_blank" 
-                                    rel="noopener noreferrer"
+                                  <button
+                                    onClick={() => viewReceipt(sale.id)}
                                     className="text-xs text-blue-600 hover:text-blue-800 flex items-center gap-1"
                                   >
-                                    <Download className="w-3 h-3" />
-                                    Receipt Link
-                                  </a>
+                                    <ReceiptText className="w-3 h-3" />
+                                    View Receipt
+                                  </button>
                                 </div>
                                 <div className="space-y-1">
                                   {sale.saleitem.map((item) => (
@@ -1409,13 +1319,13 @@ Swiftmetals Team`;
                     ) : (
                       <>
                         <DollarSign className="w-5 h-5" />
-                        Process Payment & Send Thank You
+                        Process Payment
                       </>
                     )}
                   </button>
                   
                   <p className="text-xs text-slate-500 mt-2 text-center">
-                    After payment, you'll have the option to send a thank you message with receipt links
+                    After payment, you can view receipts for each sale
                   </p>
                 </div>
               )}
@@ -1455,7 +1365,8 @@ const PaymentHistory = ({ customerId }: { customerId: number | null }) => {
           ...p,
           saleId: sale.id,
           saleDate: sale.date,
-          saleAmount: sale.amount
+          saleAmount: sale.amount,
+          receiptLink: generateReceiptLink(sale.id)
         }))
       ).sort((a: any, b: any) => 
         new Date(b.paidAt).getTime() - new Date(a.paidAt).getTime()
@@ -1467,6 +1378,10 @@ const PaymentHistory = ({ customerId }: { customerId: number | null }) => {
     } finally {
       setLoading(false);
     }
+  };
+
+  const viewReceipt = (saleId: number) => {
+    window.open(generateReceiptLink(saleId), '_blank');
   };
 
   if (!customerId) return null;
@@ -1517,7 +1432,7 @@ const PaymentHistory = ({ customerId }: { customerId: number | null }) => {
                           payment.status === 'PENDING' ? 'text-yellow-600' : 'text-red-600'
                         }`} />
                       </div>
-                      <div>
+                      <div className="flex-1">
                         <div className="flex items-center gap-2 mb-1">
                           <span className="text-sm font-medium text-black">Sale #{payment.saleId}</span>
                           <span className={`text-xs px-2 py-0.5 rounded-full ${
@@ -1535,13 +1450,22 @@ const PaymentHistory = ({ customerId }: { customerId: number | null }) => {
                         )}
                       </div>
                     </div>
-                    <div className="text-right">
-                      <p className="text-lg font-bold text-green-600">
-                        KSh {payment.amount.toLocaleString()}
-                      </p>
-                      <p className="text-xs text-slate-500">
-                        on {new Date(payment.saleDate).toLocaleDateString()}
-                      </p>
+                    <div className="flex items-center gap-4">
+                      <div className="text-right">
+                        <p className="text-lg font-bold text-green-600">
+                          KSh {payment.amount.toLocaleString()}
+                        </p>
+                        <p className="text-xs text-slate-500">
+                          on {new Date(payment.saleDate).toLocaleDateString()}
+                        </p>
+                      </div>
+                      <button
+                        onClick={() => viewReceipt(payment.saleId)}
+                        className="p-2 text-blue-600 hover:text-blue-800 hover:bg-blue-50 rounded-lg transition-colors"
+                        title="View Receipt"
+                      >
+                        <ReceiptText className="w-5 h-5" />
+                      </button>
                     </div>
                   </div>
                 </div>
@@ -2035,16 +1959,14 @@ const CustomerReport = ({ customer }: { customer: Customer | null }) => {
   const [loading, setLoading] = useState(false);
   const [reportData, setReportData] = useState<any>(null);
   const [showPreview, setShowPreview] = useState(false);
-  const [reportType, setReportType] = useState<'full' | 'outstanding'>('outstanding');
 
-  const generateReport = async (type: 'full' | 'outstanding') => {
+  const generateReport = async () => {
     if (!customer) {
       alert('Please select a customer first');
       return;
     }
 
     setLoading(true);
-    setReportType(type);
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 15000);
 
@@ -2071,23 +1993,22 @@ const CustomerReport = ({ customer }: { customer: Customer | null }) => {
             name: item.product?.name,
             quantity: item.quantity,
             price: item.price
-          }))
+          })),
+          receiptLink: generateReceiptLink(sale.id)
         };
       });
 
-      const totalSales = processedSales.reduce((sum: number, s: any) => sum + s.amount, 0);
-      const totalPaid = processedSales.reduce((sum: number, s: any) => sum + s.paidAmount, 0);
-      const outstandingBalance = processedSales
-        .filter((s: any) => s.status !== 'PAID')
-        .reduce((sum: number, s: any) => sum + s.remainingBalance, 0);
+      const outstandingSales = processedSales.filter((s: any) => s.status !== 'PAID');
+      const totalOutstanding = outstandingSales.reduce((sum: number, s: any) => sum + s.remainingBalance, 0);
 
       const report = {
-        sales: processedSales,
-        totalSales,
-        totalPaid,
-        outstandingBalance,
+        sales: outstandingSales,
+        totalSales: outstandingSales.reduce((sum: number, s: any) => sum + s.amount, 0),
+        totalPaid: outstandingSales.reduce((sum: number, s: any) => sum + s.paidAmount, 0),
+        totalOutstanding,
         customerName: customer.name,
-        customerId: customer.id
+        customerId: customer.id,
+        numberOfOutstanding: outstandingSales.length
       };
 
       setReportData(report);
@@ -2105,18 +2026,13 @@ const CustomerReport = ({ customer }: { customer: Customer | null }) => {
     }
   };
 
-  const downloadCSV = (type: 'full' | 'outstanding') => {
+  const downloadCSV = () => {
     if (!reportData || !customer) return;
     
-    let salesToExport = reportData.sales || [];
-    if (type === 'outstanding') {
-      salesToExport = salesToExport.filter((sale: any) => sale.status !== 'PAID');
-    }
+    const salesToExport = reportData.sales || [];
 
     if (salesToExport.length === 0) {
-      alert(type === 'outstanding' 
-        ? 'No outstanding sales found for this customer' 
-        : 'No sales found for this customer');
+      alert('No outstanding sales found for this customer');
       return;
     }
 
@@ -2127,23 +2043,18 @@ const CustomerReport = ({ customer }: { customer: Customer | null }) => {
         `${item.name} x${item.quantity}`
       ).join('; ') || 'No items';
       
-      const receiptLink = generateReceiptLink(sale.id);
-      
-      csvContent += `${sale.id},${new Date(sale.date).toLocaleDateString()},${sale.amount},${sale.paidAmount},${sale.remainingBalance},${sale.status},${sale.dueDate ? new Date(sale.dueDate).toLocaleDateString() : 'N/A'},"${itemsList}",${receiptLink}\n`;
+      csvContent += `${sale.id},${new Date(sale.date).toLocaleDateString()},${sale.amount},${sale.paidAmount},${sale.remainingBalance},${sale.status},${sale.dueDate ? new Date(sale.dueDate).toLocaleDateString() : 'N/A'},"${itemsList}",${sale.receiptLink}\n`;
     });
 
-    csvContent += "\nSUMMARY\n";
-    csvContent += `Total Sales,${salesToExport.reduce((sum: number, s: any) => sum + s.amount, 0)}\n`;
-    csvContent += `Total Paid,${salesToExport.reduce((sum: number, s: any) => sum + s.paidAmount, 0)}\n`;
-    if (type === 'outstanding') {
-      csvContent += `Total Outstanding,${salesToExport.reduce((sum: number, s: any) => sum + s.remainingBalance, 0)}\n`;
-    }
+    csvContent += "\nOUTSTANDING SUMMARY\n";
+    csvContent += `Total Outstanding,${reportData.totalOutstanding}\n`;
+    csvContent += `Number of Outstanding Sales,${reportData.numberOfOutstanding}\n`;
 
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const url = window.URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `${customer.name}_${type}_statement_${new Date().toISOString().split('T')[0]}.csv`;
+    a.download = `${customer.name}_outstanding_statement_${new Date().toISOString().split('T')[0]}.csv`;
     a.click();
     window.URL.revokeObjectURL(url);
   };
@@ -2174,74 +2085,48 @@ const CustomerReport = ({ customer }: { customer: Customer | null }) => {
             <BarChart3 className="w-6 h-6 text-white" />
           </div>
           <div>
-            <h2 className="text-lg font-semibold text-black">Reports & Analytics</h2>
+            <h2 className="text-lg font-semibold text-black">Outstanding Report</h2>
             <p className="text-sm text-slate-500">{customer.name}</p>
           </div>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 gap-3">
           <button
-            onClick={() => generateReport('full')}
-            disabled={loading}
-            className="bg-gradient-to-r from-black to-slate-800 hover:from-slate-900 hover:to-black text-white py-3 rounded-lg font-medium transition-all duration-200 flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            <FileText className="w-5 h-5" />
-            {loading && reportType === 'full' ? 'Generating...' : 'Full Statement'}
-          </button>
-          
-          <button
-            onClick={() => generateReport('outstanding')}
+            onClick={generateReport}
             disabled={loading}
             className="bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 text-white py-3 rounded-lg font-medium transition-all duration-200 flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <FileDown className="w-5 h-5" />
-            {loading && reportType === 'outstanding' ? 'Generating...' : 'Outstanding Only'}
+            {loading ? 'Generating...' : 'Generate Outstanding Report'}
           </button>
         </div>
 
         {showPreview && reportData && (
           <div className="mt-4 pt-4 border-t border-slate-200">
             <div className="flex justify-between items-center mb-3">
-              <h3 className="font-medium text-black">Report Preview</h3>
-              <div className="flex gap-2">
-                <button
-                  onClick={() => downloadCSV('full')}
-                  className="px-3 py-1 text-sm bg-slate-100 hover:bg-slate-200 rounded-lg flex items-center gap-1"
-                >
-                  <Download className="w-4 h-4" /> Full CSV
-                </button>
-                <button
-                  onClick={() => downloadCSV('outstanding')}
-                  className="px-3 py-1 text-sm bg-slate-100 hover:bg-slate-200 rounded-lg flex items-center gap-1"
-                >
-                  <Download className="w-4 h-4" /> Outstanding CSV
-                </button>
-              </div>
+              <h3 className="font-medium text-black">Outstanding Sales Preview</h3>
+              <button
+                onClick={downloadCSV}
+                className="px-3 py-1 text-sm bg-slate-100 hover:bg-slate-200 rounded-lg flex items-center gap-1"
+              >
+                <Download className="w-4 h-4" /> Download CSV
+              </button>
             </div>
             
             <div className="bg-slate-50 rounded-lg p-4">
               <div className="grid grid-cols-2 gap-4 mb-3">
                 <div>
-                  <p className="text-xs text-slate-500">Total Sales</p>
-                  <p className="text-lg font-bold text-black">KSh {reportData.totalSales?.toLocaleString() || 0}</p>
+                  <p className="text-xs text-slate-500">Total Outstanding</p>
+                  <p className="text-lg font-bold text-red-600">KSh {reportData.totalOutstanding?.toLocaleString() || 0}</p>
                 </div>
                 <div>
-                  <p className="text-xs text-slate-500">Total Paid</p>
-                  <p className="text-lg font-bold text-green-600">KSh {reportData.totalPaid?.toLocaleString() || 0}</p>
+                  <p className="text-xs text-slate-500">Number of Sales</p>
+                  <p className="text-lg font-bold text-black">{reportData.numberOfOutstanding || 0}</p>
                 </div>
               </div>
               
-              {reportData.outstandingBalance > 0 && (
-                <div className="bg-red-50 p-3 rounded-lg">
-                  <p className="text-xs text-red-700">Outstanding Balance</p>
-                  <p className="text-xl font-bold text-red-600">KSh {reportData.outstandingBalance?.toLocaleString()}</p>
-                </div>
-              )}
-              
               <p className="text-xs text-slate-500 mt-3">
-                {reportType === 'outstanding' 
-                  ? `Showing ${reportData.sales.filter((s: any) => s.status !== 'PAID').length} unpaid/partial sales` 
-                  : `Showing all ${reportData.sales.length} sales`}
+                Showing {reportData.sales.length} unpaid/partial sales
               </p>
             </div>
           </div>
