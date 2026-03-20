@@ -10,7 +10,9 @@ import {
   ChevronDown, ChevronUp, MoreVertical, Eye, Edit, Trash,
   Users, Wallet, TrendingDown, TrendingUp as TrendUp,
   UserCheck, UserX, MessageSquare, Bell, MessageCircle,
-  Send, FileDown, FileSpreadsheet, ReceiptText, Share2
+  Send, FileDown, FileSpreadsheet, ReceiptText, Share2,
+  Smartphone, Mail as MailIcon, CheckCircle2, XCircle,
+  AlertTriangle, Info, Copy, ExternalLink
 } from "lucide-react";
 
 export interface Customer {
@@ -60,9 +62,48 @@ interface Payment {
   note?: string;
 }
 
+interface PaymentAllocation {
+  saleId: number;
+  saleDate: string;
+  amount: number;
+  fullyPaid: boolean;
+  remainingAfter: number;
+  originalAmount: number;
+  paidAmount: number;
+  items?: SaleItem[];
+}
+
+interface ProcessedSale {
+  id: number;
+  date: string;
+  amount: number;
+  paidAmount: number;
+  remainingBalance: number;
+  status: string;
+  paymentMethod?: string;
+  dueDate?: string;
+  saleitem?: SaleItem[];
+  paidThisTime?: number;
+  fullyPaid?: boolean;
+}
+
+interface PaymentResult {
+  processedSales: { saleId: number; amount: number; fullyPaid: boolean }[];
+  failedSales: { saleId: number; reason: string }[];
+  creditUpdate: { amount: number; newTotal: number } | null;
+  totalAmount: number;
+  allocatedAmount: number;
+  unallocatedAmount: number;
+  newBalance: number;
+  previousBalance: number;
+  paidSales: ProcessedSale[];
+  createdSaleIds: number[];
+  allocations: PaymentAllocation[];
+}
+
 // Function to generate receipt link
 const generateReceiptLink = (saleId: number): string => {
-  return `${window.location.origin}/api/receipt/${saleId}`;
+  return `${window.location.origin}/receipt/${saleId}`;
 };
 
 // Format phone to Kenya code
@@ -86,11 +127,11 @@ const formatPhoneToKenyaCode = (phone: string): string => {
 };
 
 // Format currency
-const formatCurrency = (amount: number) =>
+const formatCurrency = (amount: number): string =>
   Number(amount || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 // Format date
-const formatDate = (dateString: string) => {
+const formatDate = (dateString: string): string => {
   return new Date(dateString).toLocaleDateString("en-US", {
     year: "numeric",
     month: "short",
@@ -98,8 +139,261 @@ const formatDate = (dateString: string) => {
   });
 };
 
+// Format date with time
+const formatDateTime = (dateString: string): string => {
+  return new Date(dateString).toLocaleDateString("en-US", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: '2-digit',
+    minute: '2-digit'
+  });
+};
+
+// Generate customer statement message
+// Generate customer statement message with receipt links for each sale
+const generateCustomerStatement = (
+  customer: Customer,
+  outstandingSales: OutstandingSale[],
+  paymentAmount?: number,
+  paymentAllocations?: PaymentAllocation[],
+  paymentMethod?: string
+): string => {
+  const date = new Date().toLocaleDateString('en-KE', {
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit'
+  });
+
+  let message = `*🏢 SWIFT SUPPLIERS*\n`;
+  message += `*Customer Statement*\n`;
+  message += `─────────────────────\n`;
+  message += `📅 ${date}\n`;
+  message += `👤 ${customer.name}\n`;
+  if (customer.phone) message += `📞 ${customer.phone}\n`;
+  message += `─────────────────────\n\n`;
+
+  const totalOutstanding = outstandingSales.reduce((sum, sale) => sum + sale.remainingBalance, 0);
+  const totalPurchases = outstandingSales.reduce((sum, sale) => sum + sale.amount, 0);
+  const totalPaid = outstandingSales.reduce((sum, sale) => sum + sale.paidAmount, 0);
+
+  // If this is a payment confirmation
+  if (paymentAmount && paymentAllocations && paymentAllocations.length > 0) {
+    message += `*✅ PAYMENT RECEIVED*\n`;
+    message += `Amount: KSh ${formatCurrency(paymentAmount)}\n`;
+    if (paymentMethod) message += `Method: ${paymentMethod}\n`;
+    message += `─────────────────────\n\n`;
+
+    message += `*📊 HOW YOUR PAYMENT WAS APPLIED:*\n`;
+    message += `─────────────────────\n\n`;
+
+    paymentAllocations.forEach((alloc) => {
+      message += `*Sale #${alloc.saleId}* - ${alloc.saleDate}\n`;
+      message += `─────────────────────\n`;
+      
+      if (alloc.items && alloc.items.length > 0) {
+        alloc.items.forEach(item => {
+          if (item.product) {
+            message += `• ${item.quantity}x ${item.product.name}\n`;
+            message += `  @ KSh ${formatCurrency(item.price)} = KSh ${formatCurrency(item.price * item.quantity)}\n`;
+          }
+        });
+      }
+      
+      message += `\n`;
+      message += `Subtotal: KSh ${formatCurrency(alloc.originalAmount)}\n`;
+      message += `Previously Paid: KSh ${formatCurrency(alloc.paidAmount)}\n`;
+      message += `Paid Today: KSh ${formatCurrency(alloc.amount)}\n`;
+      
+      if (alloc.fullyPaid) {
+        message += `Status: *✅ FULLY PAID*\n`;
+      } else {
+        message += `Remaining: KSh ${formatCurrency(alloc.remainingAfter)}\n`;
+        message += `Status: *⏳ PARTIAL PAYMENT*\n`;
+      }
+      
+      // Add receipt link for this sale
+      message += `🔗 Receipt: ${generateReceiptLink(alloc.saleId)}\n`;
+      message += `─────────────────────\n\n`;
+    });
+  }
+
+  // Show outstanding sales
+  if (outstandingSales.length > 0) {
+    message += `*📋 OUTSTANDING SALES SUMMARY*\n`;
+    message += `─────────────────────\n\n`;
+
+    outstandingSales.forEach((sale) => {
+      message += `*Sale #${sale.id}* - ${new Date(sale.date).toLocaleDateString()}\n`;
+      message += `─────────────────────\n`;
+      
+      if (sale.saleitem && sale.saleitem.length > 0) {
+        sale.saleitem.forEach(item => {
+          if (item.product) {
+            message += `• ${item.quantity}x ${item.product.name}\n`;
+            message += `  KSh ${formatCurrency(item.price)} each = KSh ${formatCurrency(item.price * item.quantity)}\n`;
+          }
+        });
+      }
+      
+      message += `\n`;
+      message += `Total: KSh ${formatCurrency(sale.amount)}\n`;
+      message += `Paid: KSh ${formatCurrency(sale.paidAmount)}\n`;
+      message += `Balance: KSh ${formatCurrency(sale.remainingBalance)}\n`;
+      
+      if (sale.dueDate) {
+        const dueDate = new Date(sale.dueDate);
+        const today = new Date();
+        if (dueDate < today && sale.remainingBalance > 0) {
+          message += `⚠️ *OVERDUE* - Due: ${new Date(sale.dueDate).toLocaleDateString()}\n`;
+        } else {
+          message += `Due: ${new Date(sale.dueDate).toLocaleDateString()}\n`;
+        }
+      }
+      
+      // Add receipt link for this sale
+      message += `🔗 View Receipt: ${generateReceiptLink(sale.id)}\n`;
+      message += `─────────────────────\n\n`;
+    });
+
+    message += `*💰 SUMMARY*\n`;
+    message += `─────────────────────\n`;
+    message += `Total Purchases: KSh ${formatCurrency(totalPurchases)}\n`;
+    message += `Total Paid: KSh ${formatCurrency(totalPaid)}\n`;
+    
+    if (totalOutstanding > 0) {
+      message += `*Total Outstanding: KSh ${formatCurrency(totalOutstanding)}*\n`;
+      
+      // Calculate days overdue if any
+      const overdueSales = outstandingSales.filter(s => 
+        s.dueDate && new Date(s.dueDate) < new Date() && s.remainingBalance > 0
+      );
+      
+      if (overdueSales.length > 0) {
+        message += `\n⚠️ *You have ${overdueSales.length} overdue sale(s)*\n`;
+        message += `Please clear your balance.\n`;
+      } else {
+        message += `\n⏳ *Payment Status: Pending*\n`;
+        message += `Please settle your balance at your earliest convenience.\n`;
+      }
+    } else {
+      message += `\n*✨ ACCOUNT FULLY PAID*\n`;
+      message += `Thank you for being a valued customer!\n`;
+    }
+    message += `─────────────────────\n\n`;
+  }
+
+  // Thank you message
+  message += `*🙏 THANK YOU*\n`;
+  message += `─────────────────────\n`;
+  
+  if (totalOutstanding === 0) {
+    message += `Thank you for being an amazing customer!\n`;
+  } else {
+    message += `Thank you for your continued business!\n`;
+  }
+
+  return message;
+};
+
+// Generate thank you message with outstanding balance check and receipt links
+const generateThankYouMessage = (
+  customer: Customer, 
+  outstandingSales: OutstandingSale[]
+): string => {
+  const date = new Date().toLocaleDateString('en-KE', {
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric'
+  });
+
+  const totalOutstanding = outstandingSales.reduce((sum, sale) => sum + sale.remainingBalance, 0);
+  const hasOutstanding = outstandingSales.length > 0 && totalOutstanding > 0;
+
+  let message = `*🏢 SWIFT SUPPLIERS*\n`;
+  message += `─────────────────────\n`;
+  message += `📅 ${date}\n`;
+  message += `👤 ${customer.name}\n`;
+  if (customer.phone) message += `📞 ${customer.phone}\n`;
+  message += `─────────────────────\n\n`;
+
+  message += `*✨ THANK YOU FOR YOUR BUSINESS! ✨*\n\n`;
+  
+  message += `Dear ${customer.name},\n\n`;
+  message += `We want to take a moment to express our sincere gratitude for choosing Swift Suppliers. `;
+  message += `Your continued trust and support mean the world to us.\n\n`;
+
+  // Check for outstanding balance
+  if (hasOutstanding) {
+    message += `*📊 ACCOUNT SUMMARY*\n`;
+    message += `─────────────────────\n`;
+    message += `*Outstanding Balance: KSh ${formatCurrency(totalOutstanding)}*\n\n`;
+    
+    message += `*Outstanding Sales:*\n`;
+    outstandingSales.forEach((sale) => {
+      message += `• *Sale #${sale.id}* - ${new Date(sale.date).toLocaleDateString()}\n`;
+      message += `  Amount: KSh ${formatCurrency(sale.amount)}\n`;
+      message += `  Paid: KSh ${formatCurrency(sale.paidAmount)}\n`;
+      message += `  Balance: KSh ${formatCurrency(sale.remainingBalance)}\n`;
+      
+      if (sale.saleitem && sale.saleitem.length > 0) {
+        message += `  Items:\n`;
+        sale.saleitem.slice(0, 3).forEach(item => {
+          if (item.product) {
+            message += `    • ${item.quantity}x ${item.product.name}\n`;
+          }
+        });
+        if (sale.saleitem.length > 3) {
+          message += `    • +${sale.saleitem.length - 3} more items\n`;
+        }
+      }
+      
+      // Add receipt link for each sale
+      message += `  🔗 Receipt: ${generateReceiptLink(sale.id)}\n`;
+      message += `\n`;
+    });
+
+    message += `*⚠️ Payment Reminder*\n`;
+    message += `Please help us clear your outstanding balance at your earliest convenience.\n`;
+    
+    if (outstandingSales.some(s => s.dueDate && new Date(s.dueDate) < new Date())) {
+      message += `\n*❗ Some payments are overdue*\n`;
+    }
+    message += `\n`;
+  } else {
+    message += `*🎉 Account Status: GOOD STANDING*\n`;
+    message += `• No outstanding balance\n`;
+    message += `• Account fully paid up\n`;
+    message += `• Eligible for loyalty benefits\n\n`;
+    
+    // Add recent paid sales with receipt links
+    const recentPaidSales = outstandingSales.filter(s => s.status === 'PAID').slice(0, 3);
+    if (recentPaidSales.length > 0) {
+      message += `*📋 Recent Transactions:*\n`;
+      recentPaidSales.forEach(sale => {
+        message += `• Sale #${sale.id} - ${new Date(sale.date).toLocaleDateString()}\n`;
+        message += `  Amount: KSh ${formatCurrency(sale.amount)}\n`;
+        message += `  🔗 Receipt: ${generateReceiptLink(sale.id)}\n`;
+      });
+      message += `\n`;
+    }
+  }
+
+  message += `Thank you once again for being part of the Swift Suppliers family.\n`;
+  message += `We look forward to serving you again soon!\n\n`;
+
+  message += `Warm regards,\n`;
+  message += `*The Swift Suppliers Team*\n`;
+  message += `─────────────────────\n`;
+  message += `*www.swiftsuppliers.co.ke*\n`;
+
+  return message;
+};
+
 // Search and Filter Bar Component
-const SearchBar = ({ onSearch, onFilter }: { onSearch: (query: string) => void, onFilter: () => void }) => {
+const SearchBar = ({ onSearch, onFilter }: { onSearch: (query: string) => void; onFilter: () => void }) => {
   const [searchQuery, setSearchQuery] = useState("");
 
   const handleSearch = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -141,6 +435,149 @@ const SearchBar = ({ onSearch, onFilter }: { onSearch: (query: string) => void, 
   );
 };
 
+// Message Preview Component
+const MessagePreview = ({
+  customer,
+  message,
+  onSend,
+  onClose,
+  messageType,
+  setMessageType
+}: {
+  customer: Customer;
+  message: string;
+  onSend: () => void;
+  onClose: () => void;
+  messageType: 'whatsapp' | 'sms' | 'email';
+  setMessageType: (type: 'whatsapp' | 'sms' | 'email') => void;
+}) => {
+  const [editedMessage, setEditedMessage] = useState(message);
+  const [copied, setCopied] = useState(false);
+
+ 
+
+  return (
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+        <div className="p-6 border-b border-slate-200 sticky top-0 bg-white">
+          <div className="flex justify-between items-center">
+            <div>
+              <h3 className="text-lg font-semibold text-black">Message Preview</h3>
+              <p className="text-sm text-slate-500">Review and edit message before sending</p>
+            </div>
+            <button
+              onClick={onClose}
+              className="p-2 hover:bg-slate-100 rounded-lg transition-colors"
+            >
+              <X className="w-5 h-5 text-slate-500" />
+            </button>
+          </div>
+        </div>
+
+        <div className="p-6 space-y-4">
+          {/* Message Type Selector */}
+          <div className="flex gap-2">
+            {customer.phone && (
+              <>
+                <button
+                  onClick={() => setMessageType('whatsapp')}
+                  className={`px-4 py-2 rounded-lg flex items-center gap-2 transition-all ${
+                    messageType === 'whatsapp' 
+                      ? 'bg-green-600 text-white' 
+                      : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                  }`}
+                >
+                  <MessageCircle className="w-4 h-4" />
+                  WhatsApp
+                </button>
+                <button
+                  onClick={() => setMessageType('sms')}
+                  className={`px-4 py-2 rounded-lg flex items-center gap-2 transition-all ${
+                    messageType === 'sms' 
+                      ? 'bg-blue-600 text-white' 
+                      : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                  }`}
+                >
+                  <Smartphone className="w-4 h-4" />
+                  SMS
+                </button>
+              </>
+            )}
+            {customer.email && (
+              <button
+                onClick={() => setMessageType('email')}
+                className={`px-4 py-2 rounded-lg flex items-center gap-2 transition-all ${
+                  messageType === 'email' 
+                    ? 'bg-orange-600 text-white' 
+                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                }`}
+              >
+                <MailIcon className="w-4 h-4" />
+                Email
+              </button>
+            )}
+          </div>
+
+          {/* Message Editor */}
+          <div>
+            <label className="block text-sm font-medium text-black mb-2">
+              Message Content:
+            </label>
+            <textarea
+              value={editedMessage}
+              onChange={(e) => setEditedMessage(e.target.value)}
+              rows={12}
+              className="w-full p-3 border border-slate-200 rounded-lg focus:ring-2 focus:ring-black focus:border-black text-black font-mono text-sm"
+            />
+          </div>
+
+          {/* Character Count */}
+          <div className="flex justify-between items-center text-sm">
+            <span className="text-slate-500">
+              Characters: {editedMessage.length}
+            </span>
+            {messageType === 'sms' && editedMessage.length > 160 && (
+              <span className="text-orange-600 flex items-center gap-1">
+                <AlertTriangle className="w-4 h-4" />
+                Will be sent as {Math.ceil(editedMessage.length / 160)} SMS parts
+              </span>
+            )}
+          </div>
+
+          {/* Action Buttons */}
+          <div className="flex gap-3 pt-4">
+            <button
+              onClick={() => {
+                onSend();
+                onClose();
+              }}
+              className="flex-1 bg-gradient-to-r from-green-600 to-emerald-600 text-white py-3 rounded-lg font-medium hover:from-green-700 hover:to-emerald-700 transition-all flex items-center justify-center gap-2"
+            >
+              <Send className="w-4 h-4" />
+              Send via {messageType === 'whatsapp' ? 'WhatsApp' : messageType === 'sms' ? 'SMS' : 'Email'}
+            </button>
+          
+          </div>
+
+          {/* Delivery Info */}
+          <div className="bg-slate-50 rounded-lg p-4 text-sm">
+            <p className="font-medium text-black mb-2">📱 Delivery Information:</p>
+            {messageType === 'whatsapp' && customer.phone && (
+              <p className="text-slate-600">Sending to WhatsApp: {customer.phone}</p>
+            )}
+            {messageType === 'sms' && customer.phone && (
+              <p className="text-slate-600">Sending SMS to: {customer.phone}</p>
+            )}
+            {messageType === 'email' && customer.email && (
+              <p className="text-slate-600">Sending email to: {customer.email}</p>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 // Credit Management Component
 const CreditManagement = ({ 
   customer, 
@@ -156,17 +593,16 @@ const CreditManagement = ({
   const [paymentMethod, setPaymentMethod] = useState<string>("CASH");
   const [paymentNote, setPaymentNote] = useState<string>("");
   const [allocating, setAllocating] = useState(false);
-  const [allocationPreview, setAllocationPreview] = useState<any[]>([]);
+  const [allocationPreview, setAllocationPreview] = useState<PaymentAllocation[]>([]);
   const [processingSaleId, setProcessingSaleId] = useState<number | null>(null);
   const [expanded, setExpanded] = useState(true);
   
   // States for message flow
-  const [showMessagePrompt, setShowMessagePrompt] = useState(false);
-  const [pendingPaymentResult, setPendingPaymentResult] = useState<any>(null);
-  const [showMessageDialog, setShowMessageDialog] = useState(false);
-  const [customMessage, setCustomMessage] = useState("");
+  const [showMessagePreview, setShowMessagePreview] = useState(false);
+  const [pendingPaymentResult, setPendingPaymentResult] = useState<PaymentResult | null>(null);
   const [messageType, setMessageType] = useState<'whatsapp' | 'sms' | 'email'>('whatsapp');
-  const [processedSales, setProcessedSales] = useState<any[]>([]);
+  const [processedSales, setProcessedSales] = useState<ProcessedSale[]>([]);
+  const [generatedMessage, setGeneratedMessage] = useState<string>("");
 
   useEffect(() => {
     if (customer) {
@@ -200,7 +636,10 @@ const CreditManagement = ({
             status: totalPaid === 0 ? 'UNPAID' : totalPaid >= sale.amount ? 'PAID' : 'PARTIAL',
             paymentMethod: sale.paymentMethod,
             dueDate: sale.dueDate,
-            saleitem: sale.saleitem
+            saleitem: sale.saleitem?.map((item: any) => ({
+              ...item,
+              product: item.product
+            }))
           };
         })
         .filter((sale: OutstandingSale) => sale.remainingBalance > 0)
@@ -243,7 +682,10 @@ const CreditManagement = ({
           status: totalPaid === 0 ? 'UNPAID' : totalPaid >= sale.amount ? 'PAID' : 'PARTIAL',
           paymentMethod: sale.paymentMethod,
           dueDate: sale.dueDate,
-          saleitem: sale.saleitem
+          saleitem: sale.saleitem?.map((item: any) => ({
+            ...item,
+            product: item.product
+          }))
         };
       }).sort((a: OutstandingSale, b: OutstandingSale) => 
         new Date(b.date).getTime() - new Date(a.date).getTime()
@@ -257,7 +699,7 @@ const CreditManagement = ({
 
   const calculatePreview = (amount: number, sales = outstandingSales) => {
     let remaining = amount;
-    const preview = [];
+    const preview: PaymentAllocation[] = [];
     
     for (const sale of sales) {
       if (remaining <= 0) break;
@@ -267,7 +709,7 @@ const CreditManagement = ({
         saleId: sale.id,
         saleDate: new Date(sale.date).toLocaleDateString(),
         amount: allocAmount,
-        willBeFullyPaid: Math.abs(allocAmount - sale.remainingBalance) < 0.01,
+        fullyPaid: Math.abs(allocAmount - sale.remainingBalance) < 0.01,
         remainingAfter: sale.remainingBalance - allocAmount,
         originalAmount: sale.amount,
         paidAmount: sale.paidAmount,
@@ -292,7 +734,7 @@ const CreditManagement = ({
     }
   };
 
-  const getTotalOutstanding = () => {
+  const getTotalOutstanding = (): number => {
     return outstandingSales.reduce((sum, sale) => sum + sale.remainingBalance, 0);
   };
 
@@ -317,12 +759,12 @@ const CreditManagement = ({
     
     try {
       let remainingAmount = amount;
-      const processedSalesList = [];
-      const paidSalesList = [];
-      const failedSales = [];
-      const createdSaleIds = [];
+      const processedSalesList: { saleId: number; amount: number; fullyPaid: boolean }[] = [];
+      const paidSalesList: ProcessedSale[] = [];
+      const failedSales: { saleId: number; reason: string }[] = [];
+      const createdSaleIds: number[] = [];
 
-      // Calculate CORRECT previous balance
+      // Calculate previous balance
       const previousBalance = outstandingSales.reduce((sum, sale) => sum + sale.remainingBalance, 0);
 
       for (const sale of outstandingSales) {
@@ -381,7 +823,7 @@ const CreditManagement = ({
         remainingAmount -= paymentForThisSale;
       }
 
-      let creditUpdate = null;
+      let creditUpdate: { amount: number; newTotal: number } | null = null;
       
       if (remainingAmount > 0) {
         const creditRes = await fetch(`/api/customer`, {
@@ -401,13 +843,13 @@ const CreditManagement = ({
         }
       }
 
-      // Calculate CORRECT new balance
+      // Calculate new balance
       const newBalance = previousBalance - amount;
 
       // Store processed sales for display
       setProcessedSales(paidSalesList);
 
-      const result = {
+      const result: PaymentResult = {
         processedSales: processedSalesList,
         failedSales,
         creditUpdate,
@@ -417,11 +859,30 @@ const CreditManagement = ({
         newBalance,
         previousBalance,
         paidSales: paidSalesList,
-        createdSaleIds
+        createdSaleIds,
+        allocations: allocationPreview
       };
       
       setPendingPaymentResult(result);
-      setShowMessagePrompt(true);
+
+      // Generate message
+      const message = generateCustomerStatement(
+        customer,
+        outstandingSales.map(sale => {
+          const paidSale = paidSalesList.find(ps => ps.id === sale.id);
+          return {
+            ...sale,
+            paidAmount: paidSale ? sale.paidAmount + (paidSale.paidThisTime || 0) : sale.paidAmount,
+            remainingBalance: paidSale ? sale.remainingBalance - (paidSale.paidThisTime || 0) : sale.remainingBalance
+          };
+        }),
+        amount,
+        allocationPreview,
+        paymentMethod
+      );
+      
+      setGeneratedMessage(message);
+      setShowMessagePreview(true);
 
       setPaymentAmount("");
       setPaymentNote("");
@@ -439,238 +900,41 @@ const CreditManagement = ({
     }
   };
 
-const sendWhatsAppMessage = (phone: string) => {
-  if (!customer || !pendingPaymentResult) return;
-  
-  const formattedPhone = formatPhoneToKenyaCode(phone);
-  const date = new Date().toLocaleDateString('en-KE', {
-    year: 'numeric',
-    month: 'long',
-    day: 'numeric'
-  });
-  
-  let message = `*SWIFT SUPPLIERS*\n`;
-  message += `📞 ${customer.phone || 'No phone'}\n`;
-  message += `📅 ${date}\n`;
-  message += `─────────────────────\n\n`;
-
-  message += `*PAYMENT RECEIVED*\n`;
-  message += `Amount: KSh ${formatCurrency(pendingPaymentResult.totalAmount)}\n`;
-  message += `Method: ${paymentMethod}\n`;
-  if (paymentNote) message += `Ref: ${paymentNote}\n`;
-  message += `─────────────────────\n\n`;
-
-  processedSales.forEach((sale, index) => {
-    message += `*SALE #${sale.id}* - ${new Date(sale.date).toLocaleDateString()}\n`;
-    message += `─────────────────────\n`;
+  const sendThankYouMessage = () => {
+    if (!customer) return;
     
-    // Simple item list
-    if (sale.saleitem && sale.saleitem.length > 0) {
-      sale.saleitem.forEach((item: any) => {
-        const itemTotal = item.price * item.quantity;
-        message += `${item.quantity}x ${item.product?.name || 'Product'} @ KSh ${formatCurrency(item.price)} = KSh ${formatCurrency(itemTotal)}\n`;
-      });
-    }
-    
-    message += `\n`;
-    message += `Subtotal: KSh ${formatCurrency(sale.amount)}\n`;
-    message += `Paid: KSh ${formatCurrency(sale.paidThisTime)}\n`;
-    
-    if (sale.fullyPaid) {
-      message += `Status: ✓ PAID IN FULL\n`;
-    } else {
-      const remainingAfter = sale.remainingBalance - sale.paidThisTime;
-      message += `Remaining: KSh ${formatCurrency(remainingAfter)}\n`;
-    }
-    message += `─────────────────────\n\n`;
-  });
+    const message = generateThankYouMessage(customer, outstandingSales);
+    setGeneratedMessage(message);
+    setShowMessagePreview(true);
+  };
 
-  // Summary section
-  message += `*SUMMARY*\n`;
-  message += `─────────────────────\n`;
-  message += `Grand Total: KSh ${formatCurrency(pendingPaymentResult.previousBalance + (processedSales.reduce((sum, s) => sum + s.paidThisTime, 0) - pendingPaymentResult.totalAmount))}\n`;
-  message += `Amount Paid: KSh ${formatCurrency(pendingPaymentResult.totalAmount)}\n`;
-  
-  if (pendingPaymentResult.newBalance > 0) {
-    message += `Outstanding: KSh ${formatCurrency(pendingPaymentResult.newBalance)}\n`;
-    message += `Status: ⏳ PARTIAL PAYMENT\n`;
-  } else if (pendingPaymentResult.newBalance < 0) {
-    message += `Credit: KSh ${formatCurrency(Math.abs(pendingPaymentResult.newBalance))}\n`;
-    message += `Status: 💰 CREDIT BALANCE\n`;
-  } else {
-    message += `Status: ✓ FULLY PAID\n`;
-  }
-  
-  if (pendingPaymentResult.unallocatedAmount > 0) {
-    message += `\n✨ Credit Added: KSh ${formatCurrency(pendingPaymentResult.unallocatedAmount)}\n`;
-  }
-  
-  message += `─────────────────────\n\n`;
-
-  // Receipt links
-  message += `*RECEIPTS*\n`;
-  message += `─────────────────────\n`;
-  pendingPaymentResult.createdSaleIds.forEach((id: number) => {
-    message += `Sale #${id}: ${generateReceiptLink(id)}\n`;
-  });
-  message += `─────────────────────\n\n`;
-
-  message += `*Thank you for choosing Swift Suppliers!*`;
-
-  const encodedMessage = encodeURIComponent(message);
-  const whatsappUrl = `https://wa.me/${formattedPhone}?text=${encodedMessage}`;
-  window.open(whatsappUrl, '_blank');
-};
- const sendSMSMessage = (phone: string) => {
-  if (!customer || !pendingPaymentResult) return;
-  
-  const formattedPhone = formatPhoneToKenyaCode(phone);
-  
-  let message = `Swift Suppliers\n`;
-  message += `Payment: KSh ${formatCurrency(pendingPaymentResult.totalAmount)}\n`;
-  message += `Method: ${paymentMethod}\n\n`;
-
-  processedSales.forEach((sale, index) => {
-    message += `Sale #${sale.id}: KSh ${formatCurrency(sale.paidThisTime)}`;
-    if (sale.fullyPaid) message += ` ✓`;
-    message += `\n`;
-  });
-
-  if (pendingPaymentResult.newBalance > 0) {
-    message += `\nBalance: KSh ${formatCurrency(pendingPaymentResult.newBalance)}`;
-  } else if (pendingPaymentResult.newBalance === 0) {
-    message += `\nStatus: Fully Paid`;
-  }
-
-  message += `\n\nReceipts: `;
-  pendingPaymentResult.createdSaleIds.forEach((id: number, idx: number) => {
-    if (idx > 0) message += `, `;
-    message += `${generateReceiptLink(id)}`;
-  });
-
-  const encodedMessage = encodeURIComponent(message);
-  const smsUrl = `sms:${formattedPhone}?body=${encodedMessage}`;
-  window.location.href = smsUrl;
-};
-
-  const sendEmailMessage = (email: string) => {
-    if (!customer || !pendingPaymentResult) return;
+  const sendStatementMessage = () => {
+    if (!customer) return;
     
-    const subject = encodeURIComponent(`Payment Confirmation - Swiftmetals`);
-    
-    let body = `Hello ${customer.name},\n\n`;
-    body += `Thank you for your payment of KSh ${formatCurrency(pendingPaymentResult.totalAmount)} via ${paymentMethod}.\n\n`;
-    
-    body += `HOW YOUR PAYMENT WAS USED:\n`;
-    body += `━━━━━━━━━━━━━━━━━━━━━━\n\n`;
-    
-    processedSales.forEach((sale, index) => {
-      body += `${index + 1}. Sale #${sale.id} - ${new Date(sale.date).toLocaleDateString()}\n`;
-      
-      if (sale.saleitem && sale.saleitem.length > 0) {
-        sale.saleitem.forEach((item: any) => {
-          body += `   • ${item.product?.name || 'Product'} x${item.quantity} @ KSh ${formatCurrency(item.price)}\n`;
-        });
-      }
-      
-      body += `   Paid Today: KSh ${formatCurrency(sale.paidThisTime)}\n`;
-      body += `   ${sale.fullyPaid ? '✅ FULLY PAID' : `⏳ Remaining: KSh ${formatCurrency(sale.remainingBalance - sale.paidThisTime)}`}\n\n`;
-    });
-    
-    body += `Previous Balance: KSh ${formatCurrency(pendingPaymentResult.previousBalance)}\n`;
-    body += `Amount Paid: KSh ${formatCurrency(pendingPaymentResult.totalAmount)}\n`;
-    body += `New Balance: KSh ${formatCurrency(Math.abs(pendingPaymentResult.newBalance))}`;
-    if (pendingPaymentResult.newBalance > 0) body += ` (remaining)`;
-    else if (pendingPaymentResult.newBalance < 0) body += ` (credit)`;
-    else body += ` (FULLY PAID)`;
-    
-    body += `\n\nView your receipts:\n`;
-    pendingPaymentResult.createdSaleIds.forEach((id: number) => {
-      const receiptLink = generateReceiptLink(id);
-      body += `${receiptLink}\n`;
-    });
-    
-    body += `\nThank you for choosing Swiftmetals!`;
-    
-    const emailUrl = `mailto:${email}?subject=${subject}&body=${encodeURIComponent(body)}`;
-    window.location.href = emailUrl;
+    const message = generateCustomerStatement(customer, outstandingSales);
+    setGeneratedMessage(message);
+    setShowMessagePreview(true);
   };
 
   const handleSendMessage = () => {
-    if (!customer) return;
-    
-    if (!customer.phone && messageType !== 'email') {
-      alert("Customer has no phone number");
-      return;
-    }
-    if (messageType === 'email' && !customer.email) {
-      alert("Customer has no email address");
-      return;
-    }
-
-    if (messageType === 'whatsapp' && customer.phone) {
-      sendWhatsAppMessage(customer.phone);
-    } else if (messageType === 'sms' && customer.phone) {
-      sendSMSMessage(customer.phone);
-    } else if (messageType === 'email' && customer.email) {
-      sendEmailMessage(customer.email);
-    }
-    
-    handleCompletePayment();
-  };
-
-  const handleEditAndSend = () => {
-    if (!customer || !pendingPaymentResult) return;
-    
-    // Build custom message template
-    let messageTemplate = `Hello ${customer.name},\n\n`;
-    messageTemplate += `Thank you for your payment of KSh ${formatCurrency(pendingPaymentResult.totalAmount)}.\n\n`;
-    messageTemplate += `Payment was distributed to:\n`;
-    
-    processedSales.forEach((sale, index) => {
-      messageTemplate += `${index + 1}. Sale #${sale.id}: KSh ${formatCurrency(sale.paidThisTime)}\n`;
-    });
-    
-    messageTemplate += `\nNew balance: KSh ${formatCurrency(Math.abs(pendingPaymentResult.newBalance))}`;
-    
-    setCustomMessage(messageTemplate);
-    setShowMessageDialog(true);
-    setShowMessagePrompt(false);
-  };
-
-  const handleCustomMessageSend = () => {
-    if (!customer) return;
-    
-    if (!customer.phone && messageType !== 'email') {
-      alert("Customer has no phone number");
-      return;
-    }
-    if (messageType === 'email' && !customer.email) {
-      alert("Customer has no email address");
-      return;
-    }
+    if (!customer || !generatedMessage) return;
 
     if (messageType === 'whatsapp' && customer.phone) {
       const formattedPhone = formatPhoneToKenyaCode(customer.phone);
-      const encodedMessage = encodeURIComponent(customMessage);
+      const encodedMessage = encodeURIComponent(generatedMessage);
       const whatsappUrl = `https://wa.me/${formattedPhone}?text=${encodedMessage}`;
       window.open(whatsappUrl, '_blank');
     } else if (messageType === 'sms' && customer.phone) {
       const formattedPhone = formatPhoneToKenyaCode(customer.phone);
-      const encodedMessage = encodeURIComponent(customMessage);
+      const encodedMessage = encodeURIComponent(generatedMessage);
       const smsUrl = `sms:${formattedPhone}?body=${encodedMessage}`;
       window.location.href = smsUrl;
     } else if (messageType === 'email' && customer.email) {
-      const subject = encodeURIComponent(`Payment Confirmation - Swiftmetals`);
-      const emailUrl = `mailto:${customer.email}?subject=${subject}&body=${encodeURIComponent(customMessage)}`;
+      const subject = encodeURIComponent(`Customer Statement - Swift Suppliers`);
+      const emailUrl = `mailto:${customer.email}?subject=${subject}&body=${encodeURIComponent(generatedMessage)}`;
       window.location.href = emailUrl;
     }
     
-    setShowMessageDialog(false);
-    handleCompletePayment();
-  };
-
-  const handleSkipMessage = () => {
     handleCompletePayment();
   };
 
@@ -679,10 +943,10 @@ const sendWhatsAppMessage = (phone: string) => {
     fetchAllSales();
     onPaymentComplete();
     
-    setShowMessagePrompt(false);
-    setShowMessageDialog(false);
+    setShowMessagePreview(false);
     setPendingPaymentResult(null);
     setProcessedSales([]);
+    setGeneratedMessage("");
   };
 
   const viewReceipt = (saleId: number) => {
@@ -704,7 +968,7 @@ const sendWhatsAppMessage = (phone: string) => {
     
     outstandingToExport.forEach((sale) => {
       const itemsList = sale.saleitem?.map((item: any) => 
-        `${item.product?.name} x${item.quantity}`
+        `${item.product?.name} x${item.quantity} @ KSh ${item.price}`
       ).join('; ') || 'No items';
       
       const receiptLink = generateReceiptLink(sale.id);
@@ -715,6 +979,7 @@ const sendWhatsAppMessage = (phone: string) => {
     csvContent += "\nOUTSTANDING SUMMARY\n";
     csvContent += `Total Outstanding,${outstandingToExport.reduce((sum, s) => sum + s.remainingBalance, 0)}\n`;
     csvContent += `Number of Outstanding Sales,${outstandingToExport.length}\n`;
+    csvContent += `As of,${new Date().toLocaleString()}\n`;
 
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const url = window.URL.createObjectURL(blob);
@@ -763,7 +1028,7 @@ const sendWhatsAppMessage = (phone: string) => {
             <div className="text-right">
               <p className="text-xs text-slate-500">Total Outstanding</p>
               <p className="text-2xl font-bold text-red-600">
-                KSh {getTotalOutstanding().toLocaleString()}
+                KSh {formatCurrency(getTotalOutstanding())}
               </p>
             </div>
             {expanded ? <ChevronUp className="w-5 h-5 text-slate-400" /> : <ChevronDown className="w-5 h-5 text-slate-400" />}
@@ -773,285 +1038,44 @@ const sendWhatsAppMessage = (phone: string) => {
 
       {expanded && (
         <div className="p-6 border-t border-slate-100">
-          {/* Download Outstanding Statement Button */}
-          <div className="flex justify-end mb-4">
+          {/* Message Preview Modal */}
+          {showMessagePreview && customer && generatedMessage && (
+            <MessagePreview
+              customer={customer}
+              message={generatedMessage}
+              onSend={handleSendMessage}
+              onClose={handleCompletePayment}
+              messageType={messageType}
+              setMessageType={setMessageType}
+            />
+          )}
+
+          {/* Action Buttons */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-6">
+            <button
+              onClick={sendStatementMessage}
+              className="px-4 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-all flex items-center justify-center gap-2 text-sm font-medium"
+            >
+              <FileText className="w-4 h-4" />
+              Send Statement
+            </button>
+            
+            <button
+              onClick={sendThankYouMessage}
+              className="px-4 py-3 bg-purple-600 hover:bg-purple-700 text-white rounded-lg transition-all flex items-center justify-center gap-2 text-sm font-medium"
+            >
+              <MessageCircle className="w-4 h-4" />
+              Thank You Message
+            </button>
+            
             <button
               onClick={downloadOutstandingStatement}
-              className="px-4 py-2 bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700 text-white font-medium rounded-lg transition-all flex items-center gap-2 text-sm"
-              title="Download only unpaid and partially paid sales"
+              className="px-4 py-3 bg-green-600 hover:bg-green-700 text-white rounded-lg transition-all flex items-center justify-center gap-2 text-sm font-medium"
             >
               <Download className="w-4 h-4" />
-              Download Outstanding Statement (CSV)
+              Download Statement
             </button>
           </div>
-
-          {/* Payment Success Message Dialog */}
-          {showMessagePrompt && pendingPaymentResult && (
-            <div className="mb-6 bg-gradient-to-r from-green-50 to-emerald-50 border border-green-200 rounded-lg p-6">
-              <div className="flex items-start gap-3">
-                <div className="p-2 bg-green-100 rounded-full">
-                  <CheckCircle className="w-6 h-6 text-green-600" />
-                </div>
-                <div className="flex-1">
-                  <h3 className="text-lg font-semibold text-green-800 mb-2">
-                    Payment Successful! 🎉
-                  </h3>
-                  <p className="text-green-700 mb-4">
-                    Payment of KSh {formatCurrency(pendingPaymentResult.totalAmount)} received from {customer.name}
-                  </p>
-                  
-                  {/* Payment Distribution Summary */}
-                  <div className="mb-4 bg-white rounded-lg p-4 border border-green-200">
-                    <h4 className="font-medium text-green-800 mb-3">How Your Payment Was Used:</h4>
-                    {processedSales.map((sale, index) => (
-                      <div key={sale.id} className="mb-3 pb-3 border-b border-green-100 last:border-0">
-                        <div className="flex justify-between items-center">
-                          <span className="font-medium">Sale #{sale.id} - {new Date(sale.date).toLocaleDateString()}</span>
-                          <span className="text-green-600 font-medium">KSh {formatCurrency(sale.paidThisTime)}</span>
-                        </div>
-                        {sale.saleitem && sale.saleitem.length > 0 && (
-                          <div className="text-sm text-gray-600 mt-1">
-                            {sale.saleitem.map((item: any) => (
-                              <div key={item.id} className="flex justify-between">
-                                <span>{item.product?.name} x{item.quantity}</span>
-                                <span>KSh {formatCurrency(item.price * item.quantity)}</span>
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                        <div className="text-sm mt-1">
-                          {sale.fullyPaid ? (
-                            <span className="text-green-600">✓ Fully Paid</span>
-                          ) : (
-                            <span className="text-orange-600">⏳ Remaining: KSh {formatCurrency(sale.remainingBalance - sale.paidThisTime)}</span>
-                          )}
-                        </div>
-                      </div>
-                    ))}
-                    
-                    {pendingPaymentResult.unallocatedAmount > 0 && (
-                      <div className="mt-2 pt-2 border-t border-green-200">
-                        <div className="flex justify-between text-blue-600">
-                          <span>✨ Credit Added:</span>
-                          <span className="font-medium">KSh {formatCurrency(pendingPaymentResult.unallocatedAmount)}</span>
-                        </div>
-                      </div>
-                    )}
-                    
-                    <div className="mt-3 pt-3 border-t border-green-200 font-medium">
-                      <div className="flex justify-between">
-                        <span>Previous Balance:</span>
-                        <span>KSh {formatCurrency(pendingPaymentResult.previousBalance)}</span>
-                      </div>
-                      <div className="flex justify-between text-green-600">
-                        <span>Amount Paid:</span>
-                        <span>- KSh {formatCurrency(pendingPaymentResult.totalAmount)}</span>
-                      </div>
-                      <div className="flex justify-between text-lg mt-2">
-                        <span>New Balance:</span>
-                        <span className={pendingPaymentResult.newBalance > 0 ? 'text-red-600' : 'text-green-600'}>
-                          {pendingPaymentResult.newBalance > 0 
-                            ? `KSh ${formatCurrency(pendingPaymentResult.newBalance)}` 
-                            : pendingPaymentResult.newBalance < 0 
-                              ? `Credit: KSh ${formatCurrency(Math.abs(pendingPaymentResult.newBalance))}`
-                              : '✓ Fully Paid'}
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Receipt Links */}
-                  <div className="mb-4">
-                    <h4 className="font-medium text-green-800 mb-2">View Receipts:</h4>
-                    <div className="space-y-2">
-                      {pendingPaymentResult.createdSaleIds.map((id: number) => (
-                        <button
-                          key={id}
-                          onClick={() => viewReceipt(id)}
-                          className="w-full px-4 py-2 bg-white border border-green-300 text-green-700 rounded-lg hover:bg-green-50 transition-colors flex items-center justify-between"
-                        >
-                          <span>Sale #{id} Receipt</span>
-                          <ReceiptText className="w-4 h-4" />
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                  
-                  {/* Message Type Selector */}
-                  <div className="mb-4">
-                    <label className="block text-sm font-medium text-green-800 mb-2">
-                      Send confirmation via:
-                    </label>
-                    <div className="flex gap-2">
-                      {customer.phone && (
-                        <>
-                          <button
-                            onClick={() => setMessageType('whatsapp')}
-                            className={`px-4 py-2 rounded-lg flex items-center gap-2 ${
-                              messageType === 'whatsapp' 
-                                ? 'bg-green-600 text-white' 
-                                : 'bg-white text-green-700 border border-green-300'
-                            }`}
-                          >
-                            <MessageCircle className="w-4 h-4" />
-                            WhatsApp
-                          </button>
-                          <button
-                            onClick={() => setMessageType('sms')}
-                            className={`px-4 py-2 rounded-lg flex items-center gap-2 ${
-                              messageType === 'sms' 
-                                ? 'bg-blue-600 text-white' 
-                                : 'bg-white text-blue-700 border border-blue-300'
-                            }`}
-                          >
-                            <MessageSquare className="w-4 h-4" />
-                            SMS
-                          </button>
-                        </>
-                      )}
-                      {customer.email && (
-                        <button
-                          onClick={() => setMessageType('email')}
-                          className={`px-4 py-2 rounded-lg flex items-center gap-2 ${
-                            messageType === 'email' 
-                              ? 'bg-orange-600 text-white' 
-                              : 'bg-white text-orange-700 border border-orange-300'
-                          }`}
-                        >
-                          <Mail className="w-4 h-4" />
-                          Email
-                        </button>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Action Buttons */}
-                  <div className="flex flex-wrap gap-3">
-                    <button
-                      onClick={handleSendMessage}
-                      className="px-6 py-2 bg-gradient-to-r from-green-600 to-emerald-600 text-white rounded-lg hover:from-green-700 hover:to-emerald-700 transition-colors flex items-center gap-2 font-medium"
-                    >
-                      <Send className="w-4 h-4" />
-                      Send {messageType === 'whatsapp' ? 'WhatsApp' : messageType === 'sms' ? 'SMS' : 'Email'}
-                    </button>
-                    
-                    <button
-                      onClick={handleEditAndSend}
-                      className="px-6 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition-colors flex items-center gap-2 font-medium"
-                    >
-                      <Edit className="w-4 h-4" />
-                      Edit Message
-                    </button>
-                    
-                    <button
-                      onClick={handleSkipMessage}
-                      className="px-6 py-2 border border-slate-300 text-slate-700 rounded-lg hover:bg-slate-50 transition-colors font-medium"
-                    >
-                      Skip
-                    </button>
-                  </div>
-
-                  {!customer.phone && messageType !== 'email' && (
-                    <p className="text-sm text-red-600 mt-2">
-                      No phone number available. Add a phone number to send messages.
-                    </p>
-                  )}
-                  
-                  {messageType === 'email' && !customer.email && (
-                    <p className="text-sm text-red-600 mt-2">
-                      No email address available. Add an email to send messages.
-                    </p>
-                  )}
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* Custom Message Dialog */}
-          {showMessageDialog && (
-            <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-              <div className="bg-white rounded-xl max-w-2xl w-full p-6 max-h-[90vh] overflow-y-auto">
-                <h3 className="text-lg font-semibold text-black mb-4">Customize Your Message</h3>
-                
-                <div className="mb-4">
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Message:
-                  </label>
-                  <textarea
-                    value={customMessage}
-                    onChange={(e) => setCustomMessage(e.target.value)}
-                    rows={8}
-                    className="w-full p-3 border border-slate-200 rounded-lg focus:ring-2 focus:ring-black focus:border-black text-black font-mono text-sm"
-                    placeholder="Enter your message..."
-                  />
-                </div>
-                
-                <div className="mb-4">
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Send via:
-                  </label>
-                  <div className="flex gap-2">
-                    {customer.phone && (
-                      <>
-                        <button
-                          onClick={() => setMessageType('whatsapp')}
-                          className={`px-4 py-2 rounded-lg flex items-center gap-2 ${
-                            messageType === 'whatsapp' 
-                              ? 'bg-green-600 text-white' 
-                              : 'bg-gray-100 text-gray-700'
-                          }`}
-                        >
-                          <MessageCircle className="w-4 h-4" />
-                          WhatsApp
-                        </button>
-                        <button
-                          onClick={() => setMessageType('sms')}
-                          className={`px-4 py-2 rounded-lg flex items-center gap-2 ${
-                            messageType === 'sms' 
-                              ? 'bg-blue-600 text-white' 
-                              : 'bg-gray-100 text-gray-700'
-                          }`}
-                        >
-                          <MessageSquare className="w-4 h-4" />
-                          SMS
-                        </button>
-                      </>
-                    )}
-                    {customer.email && (
-                      <button
-                        onClick={() => setMessageType('email')}
-                        className={`px-4 py-2 rounded-lg flex items-center gap-2 ${
-                          messageType === 'email' 
-                            ? 'bg-orange-600 text-white' 
-                            : 'bg-gray-100 text-gray-700'
-                        }`}
-                      >
-                        <Mail className="w-4 h-4" />
-                        Email
-                      </button>
-                    )}
-                  </div>
-                </div>
-                
-                <div className="flex flex-wrap gap-3">
-                  <button
-                    onClick={handleCustomMessageSend}
-                    className="flex-1 px-4 py-2 bg-gradient-to-r from-green-600 to-emerald-600 text-white rounded-lg hover:from-green-700 hover:to-emerald-700 transition-colors flex items-center justify-center gap-2 font-medium"
-                  >
-                    <Send className="w-4 h-4" />
-                    Send
-                  </button>
-                  
-                  <button
-                    onClick={() => setShowMessageDialog(false)}
-                    className="px-4 py-2 border border-slate-200 rounded-lg text-slate-600 hover:bg-slate-50 transition-colors font-medium"
-                  >
-                    Cancel
-                  </button>
-                </div>
-              </div>
-            </div>
-          )}
 
           {loading ? (
             <div className="text-center py-12">
@@ -1083,6 +1107,15 @@ const sendWhatsAppMessage = (phone: string) => {
                     </div>
                     <p className="text-slate-700 font-medium">No outstanding sales</p>
                     <p className="text-sm text-slate-500 mt-1">This customer has no pending payments.</p>
+                    
+                    {/* Send Thank You Button for Clean Account */}
+                    <button
+                      onClick={sendThankYouMessage}
+                      className="mt-4 px-6 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg transition-all flex items-center gap-2 mx-auto"
+                    >
+                      <MessageCircle className="w-4 h-4" />
+                      Send Thank You Message
+                    </button>
                   </div>
                 ) : (
                   <div className="space-y-3">
@@ -1097,7 +1130,7 @@ const sendWhatsAppMessage = (phone: string) => {
                       >
                         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                           <div className="flex-1">
-                            <div className="flex items-center gap-3 mb-2">
+                            <div className="flex items-center gap-3 mb-2 flex-wrap">
                               <span className="text-sm font-medium text-black">Sale #{sale.id}</span>
                               <span className={`px-2 py-1 rounded-full text-xs font-medium ${
                                 sale.status === 'OVERDUE' ? 'bg-red-100 text-red-700' : 
@@ -1107,7 +1140,8 @@ const sendWhatsAppMessage = (phone: string) => {
                                 {sale.status}
                               </span>
                               {sale.dueDate && new Date(sale.dueDate) < new Date() && sale.status !== 'PAID' && (
-                                <span className="px-2 py-1 rounded-full text-xs font-medium bg-red-100 text-red-700">
+                                <span className="px-2 py-1 rounded-full text-xs font-medium bg-red-100 text-red-700 flex items-center gap-1">
+                                  <AlertCircle className="w-3 h-3" />
                                   Overdue
                                 </span>
                               )}
@@ -1120,15 +1154,15 @@ const sendWhatsAppMessage = (phone: string) => {
                               </div>
                               <div>
                                 <p className="text-xs text-slate-500">Total</p>
-                                <p className="text-black font-medium">KSh {sale.amount.toLocaleString()}</p>
+                                <p className="text-black font-medium">KSh {formatCurrency(sale.amount)}</p>
                               </div>
                               <div>
                                 <p className="text-xs text-slate-500">Paid</p>
-                                <p className="text-green-600 font-medium">KSh {sale.paidAmount.toLocaleString()}</p>
+                                <p className="text-green-600 font-medium">KSh {formatCurrency(sale.paidAmount)}</p>
                               </div>
                               <div>
                                 <p className="text-xs text-slate-500">Remaining</p>
-                                <p className="text-red-600 font-bold">KSh {sale.remainingBalance.toLocaleString()}</p>
+                                <p className="text-red-600 font-bold">KSh {formatCurrency(sale.remainingBalance)}</p>
                               </div>
                             </div>
 
@@ -1152,7 +1186,7 @@ const sendWhatsAppMessage = (phone: string) => {
                             {sale.saleitem && sale.saleitem.length > 0 && (
                               <div className="mt-3 pt-3 border-t border-slate-200">
                                 <div className="flex justify-between items-center mb-2">
-                                  <p className="text-xs font-medium text-slate-500">Items:</p>
+                                  <p className="text-xs font-medium text-slate-500">Items Purchased:</p>
                                   <button
                                     onClick={() => viewReceipt(sale.id)}
                                     className="text-xs text-blue-600 hover:text-blue-800 flex items-center gap-1"
@@ -1168,7 +1202,7 @@ const sendWhatsAppMessage = (phone: string) => {
                                         {item.product?.name} x{item.quantity}
                                       </span>
                                       <span className="text-black font-medium">
-                                        KSh {item.total.toLocaleString()}
+                                        KSh {formatCurrency(item.price * item.quantity)}
                                       </span>
                                     </div>
                                   ))}
@@ -1191,7 +1225,7 @@ const sendWhatsAppMessage = (phone: string) => {
               </div>
 
               {/* Payment Form */}
-              {outstandingSales.length > 0 && !showMessagePrompt && (
+              {outstandingSales.length > 0 && !showMessagePreview && (
                 <div className="border-t border-slate-200 pt-6">
                   <h3 className="font-semibold text-black mb-4">Process Payment</h3>
                   
@@ -1253,20 +1287,37 @@ const sendWhatsAppMessage = (phone: string) => {
                             <ArrowRight className="w-4 h-4" />
                             Payment Allocation Preview
                           </h4>
-                          <div className="space-y-3">
+                          <div className="space-y-4">
                             {allocationPreview.map((alloc, idx) => (
                               <div key={idx} className="text-sm">
-                                <div className="flex justify-between items-center mb-1">
+                                <div className="flex justify-between items-center mb-2">
                                   <span className="text-blue-700 font-medium">
                                     Sale #{alloc.saleId}
                                   </span>
-                                  <span className="font-medium text-blue-900">
-                                    KSh {alloc.amount.toLocaleString()}
+                                  <span className="font-bold text-blue-900">
+                                    KSh {formatCurrency(alloc.amount)}
                                   </span>
                                 </div>
-                                <div className="text-xs text-blue-600 mb-1">
+                                <div className="text-xs text-blue-600 mb-2">
                                   {alloc.saleDate}
                                 </div>
+                                
+                                {/* Items in this sale */}
+                                {alloc.items && alloc.items.length > 0 && (
+                                  <div className="mb-2 text-xs">
+                                    {alloc.items.slice(0, 2).map((item) => (
+                                      <div key={item.id} className="text-blue-600">
+                                        • {item.product?.name} x{item.quantity}
+                                      </div>
+                                    ))}
+                                    {alloc.items.length > 2 && (
+                                      <div className="text-blue-400">
+                                        +{alloc.items.length - 2} more items
+                                      </div>
+                                    )}
+                                  </div>
+                                )}
+                                
                                 <div className="flex items-center gap-2">
                                   <div className="flex-1 h-1.5 bg-blue-200 rounded-full overflow-hidden">
                                     <div 
@@ -1277,19 +1328,24 @@ const sendWhatsAppMessage = (phone: string) => {
                                     ></div>
                                   </div>
                                   <span className={`text-xs font-medium ${
-                                    alloc.willBeFullyPaid ? 'text-green-600' : 'text-orange-600'
+                                    alloc.fullyPaid ? 'text-green-600' : 'text-orange-600'
                                   }`}>
-                                    {alloc.willBeFullyPaid ? '✅ Fully Paid' : '⏳ Partial'}
+                                    {alloc.fullyPaid ? '✅ Paid' : '⏳ Partial'}
                                   </span>
                                 </div>
+                                {!alloc.fullyPaid && (
+                                  <p className="text-xs text-orange-600 mt-1">
+                                    Remaining: KSh {formatCurrency(alloc.remainingAfter)}
+                                  </p>
+                                )}
                               </div>
                             ))}
                             
                             {parseFloat(paymentAmount) > getTotalOutstanding() && (
-                              <div className="mt-3 pt-3 border-t border-blue-200">
+                              <div className="mt-4 pt-3 border-t border-blue-200">
                                 <p className="text-sm text-blue-700 flex items-center gap-1">
                                   <PiggyBank className="w-4 h-4" />
-                                  <strong>KSh {(parseFloat(paymentAmount) - getTotalOutstanding()).toLocaleString()}</strong> will be added to credit balance
+                                  <strong>KSh {formatCurrency(parseFloat(paymentAmount) - getTotalOutstanding())}</strong> will be added to credit balance
                                 </p>
                               </div>
                             )}
@@ -1319,13 +1375,13 @@ const sendWhatsAppMessage = (phone: string) => {
                     ) : (
                       <>
                         <DollarSign className="w-5 h-5" />
-                        Process Payment
+                        Process Payment & Send Statement
                       </>
                     )}
                   </button>
                   
                   <p className="text-xs text-slate-500 mt-2 text-center">
-                    After payment, you can view receipts for each sale
+                    After payment, you can review and send a detailed statement to the customer
                   </p>
                 </div>
               )}
@@ -1433,7 +1489,7 @@ const PaymentHistory = ({ customerId }: { customerId: number | null }) => {
                         }`} />
                       </div>
                       <div className="flex-1">
-                        <div className="flex items-center gap-2 mb-1">
+                        <div className="flex items-center gap-2 mb-1 flex-wrap">
                           <span className="text-sm font-medium text-black">Sale #{payment.saleId}</span>
                           <span className={`text-xs px-2 py-0.5 rounded-full ${
                             payment.status === 'CLEARED' ? 'bg-green-100 text-green-700' : 
@@ -1443,17 +1499,20 @@ const PaymentHistory = ({ customerId }: { customerId: number | null }) => {
                           </span>
                         </div>
                         <p className="text-xs text-slate-500">
-                          {new Date(payment.paidAt).toLocaleString()} • {payment.method}
+                          {formatDateTime(payment.paidAt)} • {payment.method}
                         </p>
                         {payment.referenceId && (
                           <p className="text-xs text-slate-500 mt-1">Ref: {payment.referenceId}</p>
+                        )}
+                        {payment.note && (
+                          <p className="text-xs text-slate-500 mt-1">Note: {payment.note}</p>
                         )}
                       </div>
                     </div>
                     <div className="flex items-center gap-4">
                       <div className="text-right">
                         <p className="text-lg font-bold text-green-600">
-                          KSh {payment.amount.toLocaleString()}
+                          KSh {formatCurrency(payment.amount)}
                         </p>
                         <p className="text-xs text-slate-500">
                           on {new Date(payment.saleDate).toLocaleDateString()}
@@ -1909,14 +1968,14 @@ const CustomerList = ({
                       <div className="flex justify-between items-center text-sm">
                         <span className="text-slate-500">Total Sales</span>
                         <span className="font-medium text-black">
-                          KSh {customer.totalSales.toLocaleString()}
+                          KSh {formatCurrency(customer.totalSales)}
                         </span>
                       </div>
                       {customer.totalCredit !== undefined && customer.totalCredit > 0 && (
                         <div className="flex justify-between items-center text-sm mt-1">
                           <span className="text-slate-500">Credit Balance</span>
                           <span className="font-medium text-red-600">
-                            KSh {customer.totalCredit.toLocaleString()}
+                            KSh {formatCurrency(customer.totalCredit)}
                           </span>
                         </div>
                       )}
@@ -1992,7 +2051,8 @@ const CustomerReport = ({ customer }: { customer: Customer | null }) => {
           items: sale.saleitem?.map((item: any) => ({
             name: item.product?.name,
             quantity: item.quantity,
-            price: item.price
+            price: item.price,
+            total: item.price * item.quantity
           })),
           receiptLink: generateReceiptLink(sale.id)
         };
@@ -2000,15 +2060,18 @@ const CustomerReport = ({ customer }: { customer: Customer | null }) => {
 
       const outstandingSales = processedSales.filter((s: any) => s.status !== 'PAID');
       const totalOutstanding = outstandingSales.reduce((sum: number, s: any) => sum + s.remainingBalance, 0);
+      const totalPurchases = outstandingSales.reduce((sum: number, s: any) => sum + s.amount, 0);
+      const totalPaid = outstandingSales.reduce((sum: number, s: any) => sum + s.paidAmount, 0);
 
       const report = {
         sales: outstandingSales,
-        totalSales: outstandingSales.reduce((sum: number, s: any) => sum + s.amount, 0),
-        totalPaid: outstandingSales.reduce((sum: number, s: any) => sum + s.paidAmount, 0),
+        totalSales: totalPurchases,
+        totalPaid,
         totalOutstanding,
         customerName: customer.name,
         customerId: customer.id,
-        numberOfOutstanding: outstandingSales.length
+        numberOfOutstanding: outstandingSales.length,
+        generatedAt: new Date().toISOString()
       };
 
       setReportData(report);
@@ -2040,7 +2103,7 @@ const CustomerReport = ({ customer }: { customer: Customer | null }) => {
     
     salesToExport.forEach((sale: any) => {
       const itemsList = sale.items?.map((item: any) => 
-        `${item.name} x${item.quantity}`
+        `${item.name} x${item.quantity} @ KSh ${item.price}`
       ).join('; ') || 'No items';
       
       csvContent += `${sale.id},${new Date(sale.date).toLocaleDateString()},${sale.amount},${sale.paidAmount},${sale.remainingBalance},${sale.status},${sale.dueDate ? new Date(sale.dueDate).toLocaleDateString() : 'N/A'},"${itemsList}",${sale.receiptLink}\n`;
@@ -2049,6 +2112,7 @@ const CustomerReport = ({ customer }: { customer: Customer | null }) => {
     csvContent += "\nOUTSTANDING SUMMARY\n";
     csvContent += `Total Outstanding,${reportData.totalOutstanding}\n`;
     csvContent += `Number of Outstanding Sales,${reportData.numberOfOutstanding}\n`;
+    csvContent += `Generated on,${new Date(reportData.generatedAt).toLocaleString()}\n`;
 
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const url = window.URL.createObjectURL(blob);
@@ -2117,11 +2181,11 @@ const CustomerReport = ({ customer }: { customer: Customer | null }) => {
               <div className="grid grid-cols-2 gap-4 mb-3">
                 <div>
                   <p className="text-xs text-slate-500">Total Outstanding</p>
-                  <p className="text-lg font-bold text-red-600">KSh {reportData.totalOutstanding?.toLocaleString() || 0}</p>
+                  <p className="text-lg font-bold text-red-600">KSh {formatCurrency(reportData.totalOutstanding)}</p>
                 </div>
                 <div>
                   <p className="text-xs text-slate-500">Number of Sales</p>
-                  <p className="text-lg font-bold text-black">{reportData.numberOfOutstanding || 0}</p>
+                  <p className="text-lg font-bold text-black">{reportData.numberOfOutstanding}</p>
                 </div>
               </div>
               
@@ -2261,8 +2325,8 @@ const CustomerPage = () => {
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {/* Header */}
         <div className="mb-8">
-          <h1 className="text-3xl font-bold text-black">Customers</h1>
-          <p className="text-slate-500 mt-1">Manage your customer database, track credit, and process payments</p>
+          <h1 className="text-3xl font-bold text-black">Customer Management</h1>
+          <p className="text-slate-500 mt-1">Manage customers, track credit, process payments, and send statements</p>
         </div>
 
         {/* Search Bar */}
