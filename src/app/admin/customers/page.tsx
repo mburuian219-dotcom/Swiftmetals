@@ -101,11 +101,14 @@ interface PaymentResult {
   allocations: PaymentAllocation[];
 }
 
+// Function to generate receipt link - FIXED FOR VERCEL
 const generateReceiptLink = (saleId: number): string => {
-  if (typeof window !== 'undefined') {
-    return `${window.location.origin}/api/receipt/${saleId}`;
-  }
-  const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://swiftsuppliers.co.ke';
+  // In production (Vercel), this will be your actual domain
+  // In development, it will be localhost
+  const baseUrl = typeof window !== 'undefined' 
+    ? window.location.origin 
+    : process.env.NEXT_PUBLIC_APP_URL || 'https://swiftsuppliers.co.ke';
+  
   return `${baseUrl}/api/receipt/${saleId}`;
 };
 
@@ -141,6 +144,7 @@ const formatDate = (dateString: string): string => {
     day: "numeric",
   });
 };
+
 
 // Format date with time
 const formatDateTime = (dateString: string): string => {
@@ -288,7 +292,6 @@ const generateThankYouMessage = (
   message += `👤 ${customer.name}\n`; 
   message += `Dear ${customer.name},\n\n`;
   message += `*✨ Thank you for your purchase at SwiftMetals!! ✨*\n\n`; 
-  message += `Dear ${customer.name},\n\n`;
   // Check for outstanding balance
   if (hasOutstanding) {
     message += `*📊 ACCOUNT SUMMARY*\n`;
