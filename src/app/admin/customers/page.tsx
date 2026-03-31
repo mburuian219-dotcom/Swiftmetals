@@ -101,9 +101,12 @@ interface PaymentResult {
   allocations: PaymentAllocation[];
 }
 
-// Function to generate receipt link
 const generateReceiptLink = (saleId: number): string => {
-  return `${window.location.origin}/receipt/${saleId}`;
+  if (typeof window !== 'undefined') {
+    return `${window.location.origin}/api/receipt/${saleId}`;
+  }
+  const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://swiftsuppliers.co.ke';
+  return `${baseUrl}/api/receipt/${saleId}`;
 };
 
 // Format phone to Kenya code
@@ -166,33 +169,23 @@ const generateCustomerStatement = (
     hour: '2-digit',
     minute: '2-digit'
   });
-
   let message = `*🏢 SWIFT SUPPLIERS*\n`;
   message += `*Customer Statement*\n`;
-  message += `─────────────────────\n`;
   message += `📅 ${date}\n`;
   message += `👤 ${customer.name}\n`;
-  if (customer.phone) message += `📞 ${customer.phone}\n`;
-  message += `─────────────────────\n\n`;
-
   const totalOutstanding = outstandingSales.reduce((sum, sale) => sum + sale.remainingBalance, 0);
   const totalPurchases = outstandingSales.reduce((sum, sale) => sum + sale.amount, 0);
   const totalPaid = outstandingSales.reduce((sum, sale) => sum + sale.paidAmount, 0);
-
   // If this is a payment confirmation
   if (paymentAmount && paymentAllocations && paymentAllocations.length > 0) {
     message += `*✅ PAYMENT RECEIVED*\n`;
     message += `Amount: KSh ${formatCurrency(paymentAmount)}\n`;
     if (paymentMethod) message += `Method: ${paymentMethod}\n`;
-    message += `─────────────────────\n\n`;
-
     message += `*📊 HOW YOUR PAYMENT WAS APPLIED:*\n`;
     message += `─────────────────────\n\n`;
-
     paymentAllocations.forEach((alloc) => {
       message += `*Sale #${alloc.saleId}* - ${alloc.saleDate}\n`;
       message += `─────────────────────\n`;
-      
       if (alloc.items && alloc.items.length > 0) {
         alloc.items.forEach(item => {
           if (item.product) {
@@ -201,34 +194,28 @@ const generateCustomerStatement = (
           }
         });
       }
-      
       message += `\n`;
       message += `Subtotal: KSh ${formatCurrency(alloc.originalAmount)}\n`;
       message += `Previously Paid: KSh ${formatCurrency(alloc.paidAmount)}\n`;
       message += `Paid Today: KSh ${formatCurrency(alloc.amount)}\n`;
-      
       if (alloc.fullyPaid) {
         message += `Status: *✅ FULLY PAID*\n`;
       } else {
         message += `Remaining: KSh ${formatCurrency(alloc.remainingAfter)}\n`;
         message += `Status: *⏳ PARTIAL PAYMENT*\n`;
       }
-      
       // Add receipt link for this sale
       message += `🔗 Receipt: ${generateReceiptLink(alloc.saleId)}\n`;
       message += `─────────────────────\n\n`;
     });
   }
-
   // Show outstanding sales
   if (outstandingSales.length > 0) {
     message += `*📋 OUTSTANDING SALES SUMMARY*\n`;
     message += `─────────────────────\n\n`;
-
     outstandingSales.forEach((sale) => {
       message += `*Sale #${sale.id}* - ${new Date(sale.date).toLocaleDateString()}\n`;
-      message += `─────────────────────\n`;
-      
+      message += `─────────────────────\n`;      
       if (sale.saleitem && sale.saleitem.length > 0) {
         sale.saleitem.forEach(item => {
           if (item.product) {
@@ -236,13 +223,11 @@ const generateCustomerStatement = (
             message += `  KSh ${formatCurrency(item.price)} each = KSh ${formatCurrency(item.price * item.quantity)}\n`;
           }
         });
-      }
-      
+      }     
       message += `\n`;
       message += `Total: KSh ${formatCurrency(sale.amount)}\n`;
       message += `Paid: KSh ${formatCurrency(sale.paidAmount)}\n`;
-      message += `Balance: KSh ${formatCurrency(sale.remainingBalance)}\n`;
-      
+      message += `Balance: KSh ${formatCurrency(sale.remainingBalance)}\n`;    
       if (sale.dueDate) {
         const dueDate = new Date(sale.dueDate);
         const today = new Date();
@@ -251,33 +236,21 @@ const generateCustomerStatement = (
         } else {
           message += `Due: ${new Date(sale.dueDate).toLocaleDateString()}\n`;
         }
-      }
-      
+      } 
       // Add receipt link for this sale
       message += `🔗 View Receipt: ${generateReceiptLink(sale.id)}\n`;
       message += `─────────────────────\n\n`;
     });
-
     message += `*💰 SUMMARY*\n`;
     message += `─────────────────────\n`;
     message += `Total Purchases: KSh ${formatCurrency(totalPurchases)}\n`;
-    message += `Total Paid: KSh ${formatCurrency(totalPaid)}\n`;
-    
+    message += `Total Paid: KSh ${formatCurrency(totalPaid)}\n`;   
     if (totalOutstanding > 0) {
-      message += `*Total Outstanding: KSh ${formatCurrency(totalOutstanding)}*\n`;
-      
+      message += `*Total Outstanding: KSh ${formatCurrency(totalOutstanding)}*\n`;     
       // Calculate days overdue if any
       const overdueSales = outstandingSales.filter(s => 
         s.dueDate && new Date(s.dueDate) < new Date() && s.remainingBalance > 0
-      );
-      
-      if (overdueSales.length > 0) {
-        message += `\n⚠️ *You have ${overdueSales.length} overdue sale(s)*\n`;
-        message += `Please clear your balance.\n`;
-      } else {
-        message += `\n⏳ *Payment Status: Pending*\n`;
-        message += `Please settle your balance at your earliest convenience.\n`;
-      }
+      );     
     } else {
       message += `\n*✨ ACCOUNT FULLY PAID*\n`;
       message += `Thank you for being a valued customer!\n`;
@@ -308,56 +281,37 @@ const generateThankYouMessage = (
     month: 'long',
     day: 'numeric'
   });
-
   const totalOutstanding = outstandingSales.reduce((sum, sale) => sum + sale.remainingBalance, 0);
   const hasOutstanding = outstandingSales.length > 0 && totalOutstanding > 0;
-
   let message = `*🏢 SWIFT SUPPLIERS*\n`;
-  message += `─────────────────────\n`;
   message += `📅 ${date}\n`;
-  message += `👤 ${customer.name}\n`;
-  if (customer.phone) message += `📞 ${customer.phone}\n`;
-  message += `─────────────────────\n\n`;
-
-  message += `*✨ THANK YOU FOR YOUR BUSINESS! ✨*\n\n`;
-  
+  message += `👤 ${customer.name}\n`; 
   message += `Dear ${customer.name},\n\n`;
-  message += `We want to take a moment to express our sincere gratitude for choosing Swift Suppliers. `;
-  message += `Your continued trust and support mean the world to us.\n\n`;
-
+  message += `*✨ Thank you for your purchase at SwiftMetals!! ✨*\n\n`; 
+  message += `Dear ${customer.name},\n\n`;
   // Check for outstanding balance
   if (hasOutstanding) {
     message += `*📊 ACCOUNT SUMMARY*\n`;
     message += `─────────────────────\n`;
-    message += `*Outstanding Balance: KSh ${formatCurrency(totalOutstanding)}*\n\n`;
-    
+    message += `*Outstanding Balance: KSh ${formatCurrency(totalOutstanding)}*\n\n`; 
     message += `*Outstanding Sales:*\n`;
     outstandingSales.forEach((sale) => {
       message += `• *Sale #${sale.id}* - ${new Date(sale.date).toLocaleDateString()}\n`;
       message += `  Amount: KSh ${formatCurrency(sale.amount)}\n`;
       message += `  Paid: KSh ${formatCurrency(sale.paidAmount)}\n`;
-      message += `  Balance: KSh ${formatCurrency(sale.remainingBalance)}\n`;
-      
+      message += `  Balance: KSh ${formatCurrency(sale.remainingBalance)}\n`;     
       if (sale.saleitem && sale.saleitem.length > 0) {
         message += `  Items:\n`;
         sale.saleitem.slice(0, 3).forEach(item => {
-          if (item.product) {
-            message += `    • ${item.quantity}x ${item.product.name}\n`;
-          }
-        });
-        if (sale.saleitem.length > 3) {
-          message += `    • +${sale.saleitem.length - 3} more items\n`;
-        }
-      }
-      
+          });
+        
+      }    
       // Add receipt link for each sale
       message += `  🔗 Receipt: ${generateReceiptLink(sale.id)}\n`;
       message += `\n`;
     });
-
     message += `*⚠️ Payment Reminder*\n`;
-    message += `Please help us clear your outstanding balance at your earliest convenience.\n`;
-    
+    message += `Please help us clear your outstanding balance at your earliest convenience.\n`;    
     if (outstandingSales.some(s => s.dueDate && new Date(s.dueDate) < new Date())) {
       message += `\n*❗ Some payments are overdue*\n`;
     }
@@ -366,8 +320,7 @@ const generateThankYouMessage = (
     message += `*🎉 Account Status: GOOD STANDING*\n`;
     message += `• No outstanding balance\n`;
     message += `• Account fully paid up\n`;
-    message += `• Eligible for loyalty benefits\n\n`;
-    
+    message += `• Eligible for loyalty benefits\n\n`;   
     // Add recent paid sales with receipt links
     const recentPaidSales = outstandingSales.filter(s => s.status === 'PAID').slice(0, 3);
     if (recentPaidSales.length > 0) {
@@ -380,14 +333,10 @@ const generateThankYouMessage = (
       message += `\n`;
     }
   }
-
   message += `Thank you once again for being part of the Swift Suppliers family.\n`;
   message += `We look forward to serving you again soon!\n\n`;
-
   message += `Warm regards,\n`;
   message += `*The Swift Suppliers Team*\n`;
-  message += `─────────────────────\n`;
-  message += `*www.swiftsuppliers.co.ke*\n`;
 
   return message;
 };
