@@ -1,13 +1,16 @@
 "use client";
 import React, { useEffect, useState, useCallback, useMemo } from "react";
-import { Download, MessageSquare, Send, Clock, CreditCard, AlertTriangle, CheckCircle, Plus, X, Edit, Trash2, Calculator, Save, Menu, ChevronDown, ChevronUp, Filter, Calendar, Search, XCircle, User, DollarSign, Banknote, Smartphone, Landmark, CreditCard as CardIcon } from "lucide-react";
+import { Download, MessageSquare, Send, Clock, CreditCard, AlertTriangle, CheckCircle, Plus, X, Edit, Trash2, Calculator, Save, Menu, ChevronDown, ChevronUp, Filter, Calendar, Search, XCircle, User, DollarSign, Banknote, Smartphone, Landmark, CreditCard as CardIcon, Archive, RotateCcw, Info, History } from "lucide-react";
 import { auth } from "@/lib/firebase";
 import { onAuthStateChanged } from "firebase/auth";
+
+// ==================== INTERFACES ====================
 
 interface Customer {
   id: number;
   name: string;
   phone?: string;
+  email?: string;
 }
 
 interface Product {
@@ -65,6 +68,8 @@ interface Sale {
   updatedBy?: string;
   createdAt?: string;
   updatedAt?: string;
+  isDeleted?: boolean;
+  deletedAt?: string;
 }
 
 interface NewSaleItem {
@@ -82,7 +87,48 @@ interface UserDetail {
   photoURL?: string;
 }
 
+interface AuditLog {
+  id: number;
+  saleId: number;
+  action: "CREATE" | "UPDATE" | "DELETE" | "RESTORE";
+  fieldName?: string;
+  oldValue?: string;
+  newValue?: string;
+  difference?: string;
+  changedBy: string;
+  changedByEmail?: string;
+  changedAt: string;
+  ipAddress?: string;
+  userAgent?: string;
+  notes?: string;
+  snapshot?: any;
+}
+
+interface DeletedSale {
+  id: number;
+  originalSaleId: number;
+  saleData: any;
+  customerName: string;
+  customerPhone: string | null;
+  totalAmount: number;
+  saleDate: string;
+  deletedAt: string;
+  deletedBy: string;
+  deletedByEmail: string;
+  restockedItems: boolean;
+  deletionReason: string | null;
+  saleItemsSummary: string;
+  paymentsSummary: string;
+  statusAtDeletion: string;
+  expiresAt: string;
+  restoredAt?: string;
+  restoredBy?: string;
+}
+
+// ==================== MAIN COMPONENT ====================
+
 export default function EnhancedSalesPage() {
+  // Existing state
   const [sales, setSales] = useState<Sale[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
@@ -114,6 +160,7 @@ export default function EnhancedSalesPage() {
   const [editingSale, setEditingSale] = useState<Sale | null>(null);
   const [deletingPaymentId, setDeletingPaymentId] = useState<number | null>(null);
   const [currentUser, setCurrentUser] = useState<string>("");
+  const [currentUserEmail, setCurrentUserEmail] = useState<string>("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
@@ -123,10 +170,58 @@ export default function EnhancedSalesPage() {
 
   // Filter state variables
   const [customerFilter, setCustomerFilter] = useState("");
-  const [dateFilter, setDateFilter] = useState<"all" | "today" | "week" | "month" | "custom">("today"); // Default to today
+  const [dateFilter, setDateFilter] = useState<"all" | "today" | "week" | "month" | "custom">("today");
   const [customStartDate, setCustomStartDate] = useState("");
   const [customEndDate, setCustomEndDate] = useState("");
   const [showDateFilter, setShowDateFilter] = useState(false);
+  
+  // Product search filter
+  const [productNameFilter, setProductNameFilter] = useState("");
+  
+  // Create sale modal state
+  const [showCreateSaleModal, setShowCreateSaleModal] = useState(false);
+  const [newSaleDate, setNewSaleDate] = useState(new Date().toISOString().split('T')[0]);
+  const [newSaleCustomerId, setNewSaleCustomerId] = useState<number | null>(null);
+  const [newSaleCustomerSearch, setNewSaleCustomerSearch] = useState("");
+  const [newSaleShowCustomerDropdown, setNewSaleShowCustomerDropdown] = useState(false);
+  const [newSaleItems, setNewSaleItems] = useState<NewSaleItem[]>([]);
+  const [newSaleCurrentItem, setNewSaleCurrentItem] = useState<NewSaleItem>({
+    productId: 0,
+    quantity: 0,
+    price: 0,
+    productName: ""
+  });
+  const [newSaleProductSearch, setNewSaleProductSearch] = useState("");
+  const [newSaleShowProductDropdown, setNewSaleShowProductDropdown] = useState(false);
+  const [newSalePayments, setNewSalePayments] = useState<NewPayment[]>([]);
+  const [newSaleCurrentPayment, setNewSaleCurrentPayment] = useState<NewPayment>({
+    amount: "",
+    method: "CASH",
+    referenceId: "",
+    checkDepositDate: "",
+    dueDate: ""
+  });
+  
+  // Deleted sales tracking state
+  const [deletedSales, setDeletedSales] = useState<DeletedSale[]>([]);
+  const [showDeletedModal, setShowDeletedModal] = useState(false);
+  const [deletedSalesLoading, setDeletedSalesLoading] = useState(false);
+  const [deletedSalesPage, setDeletedSalesPage] = useState(1);
+  const [deletedSalesTotal, setDeletedSalesTotal] = useState(0);
+  const [deletedSearchTerm, setDeletedSearchTerm] = useState("");
+  const [deletedDateFilter, setDeletedDateFilter] = useState<"all" | "today" | "week" | "month" | "custom">("week");
+  const [deletedCustomStartDate, setDeletedCustomStartDate] = useState("");
+  const [deletedCustomEndDate, setDeletedCustomEndDate] = useState("");
+  const [restoringSaleId, setRestoringSaleId] = useState<number | null>(null);
+  const [showDeleteDetailsModal, setShowDeleteDetailsModal] = useState<DeletedSale | null>(null);
+  const [deletionReason, setDeletionReason] = useState("");
+  const [showDeletionReasonModal, setShowDeletionReasonModal] = useState<number | null>(null);
+  
+  // Audit log state
+  const [showAuditModal, setShowAuditModal] = useState(false);
+  const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
+  const [auditLogsLoading, setAuditLogsLoading] = useState(false);
+  const [selectedSaleForAudit, setSelectedSaleForAudit] = useState<Sale | null>(null);
   
   // Restock confirmation state
   const [showRestockConfirm, setShowRestockConfirm] = useState<number | null>(null);
@@ -142,6 +237,8 @@ export default function EnhancedSalesPage() {
   // Debug state
   const [debugInfo, setDebugInfo] = useState<string>("");
 
+  // ==================== HELPER FUNCTIONS ====================
+
   const formatPhoneNumber = (phone: string) => {
     if (!phone) return phone;
     const cleanPhone = phone.replace(/\D/g, "");
@@ -150,7 +247,6 @@ export default function EnhancedSalesPage() {
     return cleanPhone;
   };
 
-  // Format date helper
   const formatDate = (dateString: string | null | undefined): string => {
     if (!dateString) return "";
     try {
@@ -165,7 +261,22 @@ export default function EnhancedSalesPage() {
     }
   };
 
-  // Format time helper
+  const formatDateTime = (dateString: string | null | undefined): string => {
+    if (!dateString) return "";
+    try {
+      const date = new Date(dateString);
+      return date.toLocaleDateString('en-US', {
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit'
+      });
+    } catch {
+      return "";
+    }
+  };
+
   const formatTime = (dateString: string | null | undefined): string => {
     if (!dateString) return "";
     try {
@@ -179,7 +290,6 @@ export default function EnhancedSalesPage() {
     }
   };
 
-  // Format currency helper
   const formatCurrency = (amount: number): string => {
     return new Intl.NumberFormat('en-KE', {
       minimumFractionDigits: 2,
@@ -187,12 +297,8 @@ export default function EnhancedSalesPage() {
     }).format(amount);
   };
 
-  // Helper function to check if sale was recently updated
   const isRecentlyUpdated = useCallback((sale: Sale): boolean => {
-    if (!sale.updatedAt) {
-      return false;
-    }
-    
+    if (!sale.updatedAt) return false;
     try {
       const updatedDate = new Date(sale.updatedAt);
       const now = new Date();
@@ -204,12 +310,8 @@ export default function EnhancedSalesPage() {
     }
   }, []);
 
-  // Helper to check if sale was modified (not just created)
   const isSaleModified = useCallback((sale: Sale): boolean => {
-    if (!sale.updatedAt || !sale.createdAt) {
-      return false;
-    }
-    
+    if (!sale.updatedAt || !sale.createdAt) return false;
     try {
       const updatedDate = new Date(sale.updatedAt);
       const createdDate = new Date(sale.createdAt);
@@ -220,7 +322,6 @@ export default function EnhancedSalesPage() {
     }
   }, []);
 
-  // Corrected message templates
   const messageTypes = [
     { 
       value: "delivery", 
@@ -309,7 +410,6 @@ Swiftmetals`;
     return { ...sale, remainingAmount, status, payments: sale.payments || [] };
   }, []);
 
-  // Helper function to get user display name
   const getUserDisplayName = (email: string | null | undefined): { name: string, email: string } => {
     if (!email) return { name: "Unknown", email: "Unknown" };
     
@@ -332,154 +432,376 @@ Swiftmetals`;
     };
   };
 
-  useEffect(() => {
-    const fetchData = async () => {
-      setLoading(true);
-      setError(null);
+  // Get client IP (for audit logging)
+  const getClientIP = async (): Promise<string> => {
+    try {
+      const response = await fetch('https://api.ipify.org?format=json');
+      const data = await response.json();
+      return data.ip;
+    } catch {
+      return 'unknown';
+    }
+  };
+
+  // ==================== AUDIT LOG FUNCTIONS ====================
+
+  const fetchAuditLogs = async (saleId: number) => {
+    setAuditLogsLoading(true);
+    try {
+      const response = await fetch(`/api/sales/${saleId}/audit`);
+      const data = await response.json();
       
-      try {
-        const user = auth.currentUser;
-        let idToken = "";
-        
-        if (user) {
-          idToken = await user.getIdToken();
-          
-          const sessionRes = await fetch("/api/auth/session", {
-            headers: {
-              "Authorization": `Bearer ${idToken}`
-            }
-          });
-
-          if (sessionRes.ok) {
-            const sessionData = await sessionRes.json();
-            setCurrentUser(sessionData?.user?.email || sessionData?.email || "");
-          }
-        }
-
-        const endpoints = [
-          { url: "/api/sales", name: "Sales" },
-          { url: "/api/customers", name: "Customers", fallback: "/api/customer" },
-          { url: "/api/products", name: "Products" }
-        ];
-
-        const [salesRes, customersRes, productsRes] = await Promise.all([
-          fetch(endpoints[0].url).catch(err => {
-            console.error(`❌ ${endpoints[0].name} fetch failed:`, err);
-            return null;
-          }),
-          fetch(endpoints[1].url).catch(err => {
-            console.error(`❌ ${endpoints[1].name} fetch failed:`, err);
-            return null;
-          }),
-          fetch(endpoints[2].url).catch(err => {
-            console.error(`❌ ${endpoints[2].name} fetch failed:`, err);
-            return null;
-          })
-        ]);
-
-        let customersData = [];
-        if (!customersRes || !customersRes.ok) {
-          try {
-            const altRes = await fetch("/api/customer");
-            if (altRes.ok) customersData = await altRes.json();
-          } catch (err) {
-            console.error("❌ Fallback also failed:", err);
-          }
-        } else {
-          customersData = await customersRes.json();
-        }
-
-        if (!salesRes || !salesRes.ok) {
-          throw new Error("Failed to fetch sales data");
-        }
-        if (!productsRes || !productsRes.ok) {
-          throw new Error("Failed to fetch products data");
-        }
-
-        const [salesData, productsData] = await Promise.all([
-          salesRes.json(),
-          productsRes.json()
-        ]);
-
-        const validCustomers = Array.isArray(customersData) 
-          ? customersData 
-          : (customersData?.customers || customersData?.data || []);
-        
-        const processedSales = Array.isArray(salesData) 
-          ? salesData.map(calculateSaleStatus) 
-          : [];
-        
-        const validProducts = Array.isArray(productsData) ? productsData : [];
-        
-        setSales(processedSales);
-        setCustomers(validCustomers);
-        setProducts(validProducts);
-
-        console.log("Total sales loaded:", processedSales.length);
-        const salesWithUpdatedAt = processedSales.filter(s => s.updatedAt);
-        console.log("Sales with updatedAt:", salesWithUpdatedAt.length);
-
-        setDebugInfo(`Total sales: ${processedSales.length}, With updatedAt: ${salesWithUpdatedAt.length}`);
-
-        if (validCustomers.length === 0) {
-          console.warn("⚠️ No customers found");
-          setError("No customers found. Please add customers first.");
-        }
-      } catch (err: any) {
-        const errorMsg = err.message || "Failed to load data";
-        setError(errorMsg);
-        console.error("❌ Error fetching data:", err);
-        setSales([]);
-        setCustomers([]);
-        setProducts([]);
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    const unsubscribe = onAuthStateChanged(auth, (user) => {
-      if (user) {
-        fetchData();
+      if (response.ok) {
+        setAuditLogs(data.logs || []);
       } else {
-        setCurrentUser("");
-        setError("Please log in to access sales data");
-        setLoading(false);
+        console.error("Failed to fetch audit logs:", data.error);
+        setAuditLogs([]);
       }
-    });
+    } catch (error) {
+      console.error("Error fetching audit logs:", error);
+      setAuditLogs([]);
+    } finally {
+      setAuditLogsLoading(false);
+    }
+  };
 
-    return () => unsubscribe();
-  }, [calculateSaleStatus]);
+  const handleViewAuditLog = async (sale: Sale) => {
+    setSelectedSaleForAudit(sale);
+    setShowAuditModal(true);
+    await fetchAuditLogs(sale.id);
+  };
 
-  // Close dropdowns when clicking outside
-  useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      const target = event.target as HTMLElement;
-      if (!target.closest('.customer-dropdown-container')) {
-        setShowCustomerDropdown(false);
-      }
-      if (!target.closest('.product-dropdown-container')) {
-        setShowProductDropdown(false);
-      }
-      if (!target.closest('.date-filter-container')) {
-        setShowDateFilter(false);
-      }
-      if (!target.closest('.mobile-filter-container')) {
-        setShowMobileFilters(false);
-      }
-    };
+  // ==================== DELETED SALES FUNCTIONS ====================
 
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
+  const fetchDeletedSales = async () => {
+    setDeletedSalesLoading(true);
+    try {
+      let url = `/api/deleted-sales?page=${deletedSalesPage}&limit=50`;
+      
+      if (deletedSearchTerm) {
+        url += `&search=${encodeURIComponent(deletedSearchTerm)}`;
+      }
+      
+      if (deletedDateFilter !== "all") {
+        if (deletedDateFilter === "custom" && deletedCustomStartDate && deletedCustomEndDate) {
+          url += `&startDate=${deletedCustomStartDate}&endDate=${deletedCustomEndDate}`;
+        } else if (deletedDateFilter !== "custom") {
+          url += `&filter=${deletedDateFilter}`;
+        }
+      }
+      
+      const response = await fetch(url);
+      const data = await response.json();
+      
+      if (response.ok) {
+        setDeletedSales(data.deletedSales || []);
+        setDeletedSalesTotal(data.total || 0);
+      } else {
+        console.error("Failed to fetch deleted sales:", data.error);
+      }
+    } catch (error) {
+      console.error("Error fetching deleted sales:", error);
+    } finally {
+      setDeletedSalesLoading(false);
+    }
+  };
 
-  const paymentMethods = [
-    { value: "CASH", label: "Cash", color: "bg-green-100 text-green-800", icon: Banknote },
-    { value: "MPESA", label: "M-Pesa", color: "bg-blue-100 text-blue-800", icon: Smartphone },
-    { value: "BANK", label: "Bank", color: "bg-purple-100 text-purple-800", icon: Landmark },
-    { value: "CHECK", label: "Check", color: "bg-orange-100 text-orange-800", icon: DollarSign },
-    { value: "CARD", label: "Card", color: "bg-pink-100 text-pink-800", icon: CardIcon },
-    { value: "CREDIT", label: "Credit", color: "bg-yellow-100 text-yellow-800", icon: CreditCard }
-  ];
+  const handleRestoreSale = async (deletedSaleId: number) => {
+    if (!confirm("Are you sure you want to restore this sale? This will recreate the sale with all its original items and payments.")) {
+      return;
+    }
+    
+    setRestoringSaleId(deletedSaleId);
+    setError(null);
+    
+    try {
+      const ipAddress = await getClientIP();
+      const response = await fetch(`/api/deleted-sales/${deletedSaleId}/restore`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          restoredBy: currentUser,
+          restoredByEmail: currentUserEmail,
+          ipAddress
+        })
+      });
+      
+      const data = await response.json();
+      
+      if (response.ok) {
+        setSuccess("Sale restored successfully!");
+        setTimeout(() => setSuccess(null), 3000);
+        fetchDeletedSales();
+        
+        const salesRes = await fetch("/api/sales");
+        if (salesRes.ok) {
+          const refreshedSales = await salesRes.json();
+          const processedSales = refreshedSales.map(calculateSaleStatus);
+          setSales(processedSales);
+        }
+      } else {
+        throw new Error(data.error || "Failed to restore sale");
+      }
+    } catch (err: any) {
+      setError(err.message || "Failed to restore sale");
+      console.error("Error restoring sale:", err);
+    } finally {
+      setRestoringSaleId(null);
+    }
+  };
+
+  // ==================== SALE CRUD OPERATIONS ====================
+
+  const handleDeleteSaleWithReason = async (saleId: number, restockItems: boolean = false) => {
+    if (!deletionReason.trim()) {
+      setError("Please provide a reason for deletion");
+      return;
+    }
+    
+    setLoading(true);
+    setError(null);
+    setSuccess("Deleting sale, please wait...");
+    
+    try {
+      const ipAddress = await getClientIP();
+      const userAgent = navigator.userAgent;
+      
+      const response = await fetch(`/api/sales/${saleId}`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ 
+          restockItems,
+          deletedBy: currentUser,
+          deletedByEmail: currentUserEmail,
+          deletionReason: deletionReason,
+          ipAddress,
+          userAgent
+        })
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || "Failed to delete sale");
+      }
+
+      setSales(prevSales => prevSales.filter(s => s.id !== saleId));
+      setShowRestockConfirm(null);
+      setShowDeletionReasonModal(null);
+      setDeletionReason("");
+      
+      setSuccess(`Sale deleted successfully${restockItems ? ' with items restocked' : ''}!`);
+      setTimeout(() => setSuccess(null), 3000);
+      
+      if (showDeletedModal) {
+        fetchDeletedSales();
+      }
+    } catch (error: any) {
+      console.error("Error deleting sale:", error);
+      setError(error.message || "Failed to delete sale");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleUpdateSale = async () => {
+    if (!editingSale) return;
+
+    if (!currentUser) {
+      setError("Please log in to update a sale");
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+    setSuccess("Updating sale, please wait...");
+    
+    try {
+      const ipAddress = await getClientIP();
+      const userAgent = navigator.userAgent;
+      
+      const newTotalAmount = editSaleItems.reduce((total, item) => 
+        total + (item.quantity * item.price), 0);
+
+      const updateData = {
+        saleItems: editSaleItems.map(item => ({
+          productId: item.productId,
+          quantity: item.quantity,
+          price: item.price,
+        })),
+        payments: editPayments.filter(p => p.id).map(p => ({
+          id: p.id,
+          amount: Number(p.amount),
+          method: p.method,
+          referenceId: p.referenceId?.trim() || null,
+          checkDepositDate: p.checkDepositDate || null,
+        })),
+        newPayments: editPayments.filter(p => !p.id).map(p => ({
+          amount: Number(p.amount),
+          method: p.method,
+          referenceId: p.referenceId?.trim() || null,
+          checkDepositDate: p.checkDepositDate || null,
+          dueDate: p.dueDate || null,
+          date: new Date().toISOString(),
+          status: p.method === "CHECK" ? "PENDING" : "COMPLETED",
+        })),
+        amount: newTotalAmount,
+        dueDate: editingSale.dueDate || null,
+        updatedBy: currentUser,
+        updatedByEmail: currentUserEmail,
+        ipAddress,
+        userAgent,
+      };
+
+      const response = await fetch(`/api/sales/${editingSale.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(updateData),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || "Failed to update sale");
+      }
+
+      const updatedSale = await response.json();
+      const processedSale = calculateSaleStatus(updatedSale);
+
+      setSales(prevSales => 
+        prevSales.map(s => s.id === processedSale.id ? processedSale : s)
+      );
+
+      setEditingSale(null);
+      setEditSaleItems([]);
+      setEditPayments([]);
+      setCurrentPayment({
+        amount: "",
+        method: "CASH",
+        referenceId: "",
+        checkDepositDate: "",
+        dueDate: ""
+      });
+      
+      setSuccess("Sale updated successfully!");
+      setTimeout(() => setSuccess(null), 3000);
+
+      const salesRes = await fetch("/api/sales");
+      if (salesRes.ok) {
+        const refreshedSales = await salesRes.json();
+        const processedSales = refreshedSales.map(calculateSaleStatus);
+        setSales(processedSales);
+      }
+    } catch (err: any) {
+      setError(err.message || "Failed to update sale");
+      console.error("Error updating sale:", err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleCreateSale = async () => {
+    if (!newSaleCustomerId) {
+      setError("Please select a customer");
+      return;
+    }
+    if (newSaleItems.length === 0) {
+      setError("Please add at least one item to the sale");
+      return;
+    }
+    if (!currentUser) {
+      setError("Please log in to create a sale");
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+    setSuccess("Creating sale...");
+
+    try {
+      const ipAddress = await getClientIP();
+      const userAgent = navigator.userAgent;
+      
+      const totalAmount = newSaleItems.reduce((sum, item) => sum + (item.quantity * item.price), 0);
+      const totalPayments = newSalePayments.reduce((sum, p) => sum + Number(p.amount), 0);
+      
+      let status = "UNPAID";
+      if (totalPayments >= totalAmount - 0.01) {
+        status = "PAID";
+      } else if (totalPayments > 0) {
+        status = "PARTIAL";
+      }
+
+      const saleData = {
+        customerId: newSaleCustomerId,
+        date: newSaleDate,
+        amount: totalAmount,
+        status: status,
+        saleItems: newSaleItems.map(item => ({
+          productId: item.productId,
+          quantity: item.quantity,
+          price: item.price,
+        })),
+        payments: newSalePayments.map(p => ({
+          amount: Number(p.amount),
+          method: p.method,
+          referenceId: p.referenceId?.trim() || null,
+          checkDepositDate: p.checkDepositDate || null,
+          dueDate: p.dueDate || null,
+          date: newSaleDate,
+          status: p.method === "CHECK" ? "PENDING" : "COMPLETED",
+        })),
+        createdBy: currentUser,
+        createdByEmail: currentUserEmail,
+        updatedBy: currentUser,
+        updatedByEmail: currentUserEmail,
+        ipAddress,
+        userAgent,
+      };
+
+      const response = await fetch("/api/sales", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(saleData),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || "Failed to create sale");
+      }
+
+      const newSale = await response.json();
+      const processedSale = calculateSaleStatus(newSale);
+      
+      setSales(prev => [processedSale, ...prev]);
+      
+      setShowCreateSaleModal(false);
+      setNewSaleDate(new Date().toISOString().split('T')[0]);
+      setNewSaleCustomerId(null);
+      setNewSaleCustomerSearch("");
+      setNewSaleItems([]);
+      setNewSalePayments([]);
+      setNewSaleCurrentItem({
+        productId: 0,
+        quantity: 0,
+        price: 0,
+        productName: ""
+      });
+      setNewSaleCurrentPayment({
+        amount: "",
+        method: "CASH",
+        referenceId: "",
+        checkDepositDate: "",
+        dueDate: ""
+      });
+      
+      setSuccess("Sale created successfully!");
+      setTimeout(() => setSuccess(null), 3000);
+    } catch (err: any) {
+      setError(err.message || "Failed to create sale");
+      console.error("Error creating sale:", err);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const handleAddItemToEditSale = () => {
     if (stockValidationTimeout) clearTimeout(stockValidationTimeout);
@@ -565,93 +887,100 @@ Swiftmetals`;
     })));
   };
 
-  const handleUpdateSale = async () => {
-    if (!editingSale) return;
-
-    if (!currentUser) {
-      setError("Please log in to update a sale");
+  const handleAddItemToNewSale = () => {
+    if (!newSaleCurrentItem.productId || newSaleCurrentItem.quantity <= 0 || newSaleCurrentItem.price <= 0) {
+      setError("Please fill in all item details");
       return;
     }
-
-    setLoading(true);
-    setError(null);
-    setSuccess("Updating sale, please wait...");
     
-    try {
-      const newTotalAmount = editSaleItems.reduce((total, item) => 
-        total + (item.quantity * item.price), 0);
+    const product = products.find(p => p.id === newSaleCurrentItem.productId);
+    if (!product) {
+      setError("Product not found");
+      return;
+    }
+    
+    const existingItemIndex = newSaleItems.findIndex(item => item.productId === newSaleCurrentItem.productId);
 
-      const updateData = {
-        saleItems: editSaleItems.map(item => ({
-          productId: item.productId,
-          quantity: item.quantity,
-          price: item.price,
-        })),
-        payments: editPayments.filter(p => p.id).map(p => ({
-          id: p.id,
-          amount: Number(p.amount),
-          method: p.method,
-          referenceId: p.referenceId?.trim() || null,
-          checkDepositDate: p.checkDepositDate || null,
-        })),
-        newPayments: editPayments.filter(p => !p.id).map(p => ({
-          amount: Number(p.amount),
-          method: p.method,
-          referenceId: p.referenceId?.trim() || null,
-          checkDepositDate: p.checkDepositDate || null,
-          dueDate: p.dueDate || null,
-          date: new Date().toISOString(),
-          status: p.method === "CHECK" ? "PENDING" : "COMPLETED",
-        })),
-        amount: newTotalAmount,
-        dueDate: editingSale.dueDate || null,
-        updatedBy: currentUser,
-      };
+    if (existingItemIndex >= 0) {
+      const updatedItems = [...newSaleItems];
+      updatedItems[existingItemIndex].quantity += newSaleCurrentItem.quantity;
+      updatedItems[existingItemIndex].price = newSaleCurrentItem.price;
+      setNewSaleItems(updatedItems);
+    } else {
+      setNewSaleItems([...newSaleItems, { 
+        ...newSaleCurrentItem, 
+        productName: product.name,
+        originalPrice: product.price
+      }]);
+    }
+    
+    setNewSaleCurrentItem({
+      productId: 0,
+      quantity: 0,
+      price: 0,
+      productName: ""
+    });
+    setNewSaleProductSearch("");
+    setError(null);
+  };
 
-      const response = await fetch(`/api/sales/${editingSale.id}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(updateData),
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || "Failed to update sale");
+  const handleAddPaymentToNewSale = () => {
+    if (newSaleCurrentPayment.method === "CREDIT") {
+      if (!newSaleCurrentPayment.dueDate) {
+        setError("Due date is required for credit/pay later");
+        return;
       }
-
-      const updatedSale = await response.json();
-      const processedSale = calculateSaleStatus(updatedSale);
-
-      setSales(prevSales => 
-        prevSales.map(s => s.id === processedSale.id ? processedSale : s)
-      );
-
-      setEditingSale(null);
-      setEditSaleItems([]);
-      setEditPayments([]);
-      setCurrentPayment({
-        amount: "",
-        method: "CASH",
+      
+      setNewSalePayments([...newSalePayments, {
+        amount: "0",
+        method: newSaleCurrentPayment.method,
         referenceId: "",
         checkDepositDate: "",
-        dueDate: ""
-      });
-      
-      setSuccess("Sale updated successfully!");
-      setTimeout(() => setSuccess(null), 3000);
-
-      const salesRes = await fetch("/api/sales");
-      if (salesRes.ok) {
-        const refreshedSales = await salesRes.json();
-        const processedSales = refreshedSales.map(calculateSaleStatus);
-        setSales(processedSales);
+        dueDate: newSaleCurrentPayment.dueDate
+      }]);
+    } else {
+      const amount = parseFloat(newSaleCurrentPayment.amount);
+      if (!amount || amount <= 0) {
+        setError("Please enter a valid payment amount");
+        return;
       }
-    } catch (err: any) {
-      setError(err.message || "Failed to update sale");
-      console.error("Error updating sale:", err);
-    } finally {
-      setLoading(false);
+
+      const currentTotal = newSaleItems.reduce((sum, item) => sum + (item.quantity * item.price), 0);
+      const currentPayments = newSalePayments.reduce((sum, p) => sum + Number(p.amount), 0);
+      const remainingAmount = currentTotal - currentPayments;
+
+      if (amount > remainingAmount) {
+        setError(`Payment amount cannot exceed remaining balance of Ksh ${remainingAmount.toFixed(2)}`);
+        return;
+      }
+      
+      if (newSaleCurrentPayment.method === "CHECK" && !newSaleCurrentPayment.checkDepositDate) {
+        setError("Please specify check deposit date");
+        return;
+      }
+
+      if (["MPESA", "BANK", "CARD"].includes(newSaleCurrentPayment.method) && !newSaleCurrentPayment.referenceId?.trim()) {
+        setError("Please enter transaction reference");
+        return;
+      }
+      
+      setNewSalePayments([...newSalePayments, {
+        amount: newSaleCurrentPayment.amount,
+        method: newSaleCurrentPayment.method,
+        referenceId: newSaleCurrentPayment.referenceId || "",
+        checkDepositDate: newSaleCurrentPayment.checkDepositDate || "",
+        dueDate: ""
+      }]);
     }
+
+    setNewSaleCurrentPayment({
+      amount: "",
+      method: "CASH",
+      referenceId: "",
+      checkDepositDate: "",
+      dueDate: ""
+    });
+    setError(null);
   };
 
   const handleDeletePayment = async (paymentId: number, saleId: number) => {
@@ -697,40 +1026,6 @@ Swiftmetals`;
     } finally {
       setDeletingPaymentId(null);
     }
-  };
-
-  const handleDeleteSale = async (saleId: number, restockItems: boolean = false) => {
-    setLoading(true);
-    setError(null);
-    setSuccess("Deleting sale, please wait...");
-    
-    try {
-      const response = await fetch(`/api/sales/${saleId}`, {
-        method: "DELETE",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ restockItems })
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || "Failed to delete sale");
-      }
-
-      setSales(prevSales => prevSales.filter(s => s.id !== saleId));
-      setShowRestockConfirm(null);
-      
-      setSuccess(`Sale deleted successfully${restockItems ? ' with items restocked' : ''}!`);
-      setTimeout(() => setSuccess(null), 3000);
-    } catch (error: any) {
-      console.error("Error deleting sale:", error);
-      setError(error.message || "Failed to delete sale");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const showDeleteConfirmation = (saleId: number) => {
-    setShowRestockConfirm(saleId);
   };
 
   const addEditPayment = () => {
@@ -800,111 +1095,231 @@ Swiftmetals`;
 
   const clearFilters = () => {
     setCustomerFilter("");
-    setDateFilter("today"); // Reset to today
+    setDateFilter("today");
     setCustomStartDate("");
     setCustomEndDate("");
+    setProductNameFilter("");
     setExpandedSaleId(null);
   };
 
-  const isFilterActive = useMemo(() => {
-    return customerFilter.trim() !== "" || dateFilter !== "today"; // Changed from "all" to "today"
-  }, [customerFilter, dateFilter]);
+  const showDeleteConfirmationWithReason = (saleId: number) => {
+    setShowDeletionReasonModal(saleId);
+  };
 
-  // Calculate statistics including payment breakdown
+  // ==================== DATA FETCHING ====================
+
+  useEffect(() => {
+    const fetchData = async () => {
+      setLoading(true);
+      setError(null);
+      
+      try {
+        const user = auth.currentUser;
+        let idToken = "";
+        
+        if (user) {
+          idToken = await user.getIdToken();
+          setCurrentUser(user.displayName || user.email?.split('@')[0] || "");
+          setCurrentUserEmail(user.email || "");
+          
+          const sessionRes = await fetch("/api/auth/session", {
+            headers: {
+              "Authorization": `Bearer ${idToken}`
+            }
+          });
+
+          if (sessionRes.ok) {
+            const sessionData = await sessionRes.json();
+            setCurrentUser(sessionData?.user?.email || sessionData?.email || "");
+          }
+        }
+
+        const endpoints = [
+          { url: "/api/sales", name: "Sales" },
+          { url: "/api/customers", name: "Customers", fallback: "/api/customer" },
+          { url: "/api/products", name: "Products" }
+        ];
+
+        const [salesRes, customersRes, productsRes] = await Promise.all([
+          fetch(endpoints[0].url).catch(err => {
+            console.error(`❌ ${endpoints[0].name} fetch failed:`, err);
+            return null;
+          }),
+          fetch(endpoints[1].url).catch(err => {
+            console.error(`❌ ${endpoints[1].name} fetch failed:`, err);
+            return null;
+          }),
+          fetch(endpoints[2].url).catch(err => {
+            console.error(`❌ ${endpoints[2].name} fetch failed:`, err);
+            return null;
+          })
+        ]);
+
+        let customersData = [];
+        if (!customersRes || !customersRes.ok) {
+          try {
+            const altRes = await fetch("/api/customer");
+            if (altRes.ok) customersData = await altRes.json();
+          } catch (err) {
+            console.error("❌ Fallback also failed:", err);
+          }
+        } else {
+          customersData = await customersRes.json();
+        }
+
+        if (!salesRes || !salesRes.ok) {
+          throw new Error("Failed to fetch sales data");
+        }
+        if (!productsRes || !productsRes.ok) {
+          throw new Error("Failed to fetch products data");
+        }
+
+        const [salesData, productsData] = await Promise.all([
+          salesRes.json(),
+          productsRes.json()
+        ]);
+
+        const validCustomers = Array.isArray(customersData) 
+          ? customersData 
+          : (customersData?.customers || customersData?.data || []);
+        
+        const processedSales = Array.isArray(salesData) 
+          ? salesData.filter((s: any) => !s.isDeleted).map(calculateSaleStatus) 
+          : [];
+        
+        const validProducts = Array.isArray(productsData) ? productsData : [];
+        
+        setSales(processedSales);
+        setCustomers(validCustomers);
+        setProducts(validProducts);
+
+        console.log("Total sales loaded:", processedSales.length);
+        const salesWithUpdatedAt = processedSales.filter(s => s.updatedAt);
+        console.log("Sales with updatedAt:", salesWithUpdatedAt.length);
+
+        setDebugInfo(`Total sales: ${processedSales.length}, With updatedAt: ${salesWithUpdatedAt.length}`);
+
+        if (validCustomers.length === 0) {
+          console.warn("⚠️ No customers found");
+          setError("No customers found. Please add customers first.");
+        }
+      } catch (err: any) {
+        const errorMsg = err.message || "Failed to load data";
+        setError(errorMsg);
+        console.error("❌ Error fetching data:", err);
+        setSales([]);
+        setCustomers([]);
+        setProducts([]);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      if (user) {
+        fetchData();
+      } else {
+        setCurrentUser("");
+        setCurrentUserEmail("");
+        setError("Please log in to access sales data");
+        setLoading(false);
+      }
+    });
+
+    return () => unsubscribe();
+  }, [calculateSaleStatus]);
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      const target = event.target as HTMLElement;
+      if (!target.closest('.customer-dropdown-container')) {
+        setShowCustomerDropdown(false);
+      }
+      if (!target.closest('.product-dropdown-container')) {
+        setShowProductDropdown(false);
+      }
+      if (!target.closest('.date-filter-container')) {
+        setShowDateFilter(false);
+      }
+      if (!target.closest('.mobile-filter-container')) {
+        setShowMobileFilters(false);
+      }
+      if (!target.closest('.new-sale-customer-dropdown')) {
+        setNewSaleShowCustomerDropdown(false);
+      }
+      if (!target.closest('.new-sale-product-dropdown')) {
+        setNewSaleShowProductDropdown(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  // ==================== MEMOIZED VALUES ====================
+
+  const paymentMethods = [
+    { value: "CASH", label: "Cash", color: "bg-green-100 text-green-800", icon: Banknote },
+    { value: "MPESA", label: "M-Pesa", color: "bg-blue-100 text-blue-800", icon: Smartphone },
+    { value: "BANK", label: "Bank", color: "bg-purple-100 text-purple-800", icon: Landmark },
+    { value: "CHECK", label: "Check", color: "bg-orange-100 text-orange-800", icon: DollarSign },
+    { value: "CARD", label: "Card", color: "bg-pink-100 text-pink-800", icon: CardIcon },
+    { value: "CREDIT", label: "Credit", color: "bg-yellow-100 text-yellow-800", icon: CreditCard }
+  ];
+
   const stats = useMemo(() => {
     const recentlyUpdatedSales = sales.filter(sale => {
       return isRecentlyUpdated(sale) && isSaleModified(sale);
     });
     
-    // Get today's date for filtering
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     const tomorrow = new Date(today);
     tomorrow.setDate(tomorrow.getDate() + 1);
     
-    // Filter today's sales
     const todaySales = sales.filter(sale => {
       const saleDate = new Date(sale.date);
       return saleDate >= today && saleDate < tomorrow;
     });
     
-    // Calculate payment method breakdown
-    let cashAmount = 0;
-    let mpesaAmount = 0;
-    let bankAmount = 0;
-    let checkAmount = 0;
-    let cardAmount = 0;
-    let creditAmount = 0;
+    let cashAmount = 0, mpesaAmount = 0, bankAmount = 0, checkAmount = 0, cardAmount = 0, creditAmount = 0;
     
-    // For ALL sales
     sales.forEach(sale => {
       sale.payments?.forEach(payment => {
         const amount = Number(payment.amount) || 0;
         switch(payment.method) {
-          case "CASH":
-            cashAmount += amount;
-            break;
-          case "MPESA":
-            mpesaAmount += amount;
-            break;
-          case "BANK":
-            bankAmount += amount;
-            break;
-          case "CHECK":
-            checkAmount += amount;
-            break;
-          case "CARD":
-            cardAmount += amount;
-            break;
-          case "CREDIT":
-            creditAmount += amount;
-            break;
+          case "CASH": cashAmount += amount; break;
+          case "MPESA": mpesaAmount += amount; break;
+          case "BANK": bankAmount += amount; break;
+          case "CHECK": checkAmount += amount; break;
+          case "CARD": cardAmount += amount; break;
+          case "CREDIT": creditAmount += amount; break;
         }
       });
     });
     
-    // Calculate today's statistics
     const todayPaid = todaySales.filter(s => s.status === "PAID").reduce((acc, s) => acc + Number(s.amount), 0);
     const todayPartial = todaySales.filter(s => s.status === "PARTIAL").reduce((acc, s) => acc + Number(s.amount), 0);
     const todayUnpaid = todaySales.filter(s => s.status === "UNPAID").reduce((acc, s) => acc + Number(s.amount), 0);
     const todayOutstanding = todaySales.reduce((acc, s) => acc + Number(s.remainingAmount), 0);
     
-    // Calculate today's payment breakdown
-    let todayCash = 0;
-    let todayMpesa = 0;
-    let todayBank = 0;
-    let todayCheck = 0;
-    let todayCard = 0;
-    let todayCredit = 0;
+    let todayCash = 0, todayMpesa = 0, todayBank = 0, todayCheck = 0, todayCard = 0, todayCredit = 0;
     
     todaySales.forEach(sale => {
       sale.payments?.forEach(payment => {
         const amount = Number(payment.amount) || 0;
         switch(payment.method) {
-          case "CASH":
-            todayCash += amount;
-            break;
-          case "MPESA":
-            todayMpesa += amount;
-            break;
-          case "BANK":
-            todayBank += amount;
-            break;
-          case "CHECK":
-            todayCheck += amount;
-            break;
-          case "CARD":
-            todayCard += amount;
-            break;
-          case "CREDIT":
-            todayCredit += amount;
-            break;
+          case "CASH": todayCash += amount; break;
+          case "MPESA": todayMpesa += amount; break;
+          case "BANK": todayBank += amount; break;
+          case "CHECK": todayCheck += amount; break;
+          case "CARD": todayCard += amount; break;
+          case "CREDIT": todayCredit += amount; break;
         }
       });
     });
     
     return {
-      // Overall stats
       totalSales: sales.reduce((acc, s) => acc + Number(s.amount), 0),
       paidSales: sales.filter(s => s.status === "PAID").reduce((acc, s) => acc + Number(s.amount), 0),
       partialSales: sales.filter(s => s.status === "PARTIAL").reduce((acc, s) => acc + Number(s.amount), 0),
@@ -915,53 +1330,24 @@ Swiftmetals`;
       unpaidCount: sales.filter(s => s.status === "UNPAID").length,
       recentlyUpdatedCount: recentlyUpdatedSales.length,
       recentlyUpdatedAmount: recentlyUpdatedSales.reduce((acc, s) => acc + Number(s.amount), 0),
-      
-      // Overall payment breakdown
-      cashAmount,
-      mpesaAmount,
-      bankAmount,
-      checkAmount,
-      cardAmount,
-      creditAmount,
-      
-      // Today's stats
+      cashAmount, mpesaAmount, bankAmount, checkAmount, cardAmount, creditAmount,
       todaySales: todaySales.reduce((acc, s) => acc + Number(s.amount), 0),
-      todayPaid,
-      todayPartial,
-      todayUnpaid,
-      todayOutstanding,
+      todayPaid, todayPartial, todayUnpaid, todayOutstanding,
       todayCount: todaySales.length,
       todayPaidCount: todaySales.filter(s => s.status === "PAID").length,
       todayPartialCount: todaySales.filter(s => s.status === "PARTIAL").length,
       todayUnpaidCount: todaySales.filter(s => s.status === "UNPAID").length,
-      
-      // Today's payment breakdown
-      todayCash,
-      todayMpesa,
-      todayBank,
-      todayCheck,
-      todayCard,
-      todayCredit,
+      todayCash, todayMpesa, todayBank, todayCheck, todayCard, todayCredit,
     };
   }, [sales, isRecentlyUpdated, isSaleModified]);
 
   const filteredSales = useMemo(() => {
     switch (activeTab) {
-      case "paid":
-        return sales.filter(s => s.status === "PAID");
-      case "partial":
-        return sales.filter(s => s.status === "PARTIAL");
-      case "unpaid":
-        return sales.filter(s => s.status === "UNPAID");
-      case "recentlyUpdated":
-        return sales.filter(sale => {
-          const isRecent = isRecentlyUpdated(sale);
-          const isModified = isSaleModified(sale);
-          return isRecent && isModified;
-        });
-      case "overview":
-      default:
-        return sales;
+      case "paid": return sales.filter(s => s.status === "PAID");
+      case "partial": return sales.filter(s => s.status === "PARTIAL");
+      case "unpaid": return sales.filter(s => s.status === "UNPAID");
+      case "recentlyUpdated": return sales.filter(sale => isRecentlyUpdated(sale) && isSaleModified(sale));
+      default: return sales;
     }
   }, [sales, activeTab, isRecentlyUpdated, isSaleModified]);
 
@@ -977,6 +1363,15 @@ Swiftmetals`;
       });
     }
 
+    if (productNameFilter.trim()) {
+      const searchProduct = productNameFilter.toLowerCase().trim();
+      filtered = filtered.filter(sale => {
+        return sale.saleitems?.some(item => 
+          item.product.name.toLowerCase().includes(searchProduct)
+        );
+      });
+    }
+
     if (dateFilter !== "all") {
       const now = new Date();
       const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
@@ -987,21 +1382,17 @@ Swiftmetals`;
         const saleDate = new Date(sale.date);
         
         switch (dateFilter) {
-          case "today":
-            return saleDate >= today && saleDate < tomorrow;
-          
+          case "today": return saleDate >= today && saleDate < tomorrow;
           case "week": {
             const weekAgo = new Date(today);
             weekAgo.setDate(weekAgo.getDate() - 7);
             return saleDate >= weekAgo;
           }
-          
           case "month": {
             const monthAgo = new Date(today);
             monthAgo.setMonth(monthAgo.getMonth() - 1);
             return saleDate >= monthAgo;
           }
-          
           case "custom":
             if (customStartDate && customEndDate) {
               const start = new Date(customStartDate);
@@ -1010,17 +1401,14 @@ Swiftmetals`;
               return saleDate >= start && saleDate <= end;
             }
             return true;
-          
-          default:
-            return true;
+          default: return true;
         }
       });
     }
 
     return filtered;
-  }, [filteredSales, customerFilter, dateFilter, customStartDate, customEndDate]);
+  }, [filteredSales, customerFilter, dateFilter, customStartDate, customEndDate, productNameFilter]);
 
-  // Add sorting for recently updated sales (most recent first)
   const getSortedSales = (salesList: Sale[]) => {
     if (activeTab === "recentlyUpdated") {
       return [...salesList].sort((a, b) => {
@@ -1053,7 +1441,27 @@ Swiftmetals`;
     );
   }, [products, productSearch]);
 
-  // Handle sending messages via WhatsApp/SMS (directly opens messaging app)
+  const newSaleFilteredCustomers = useMemo(() => {
+    if (!newSaleCustomerSearch.trim()) return customers;
+    const searchLower = newSaleCustomerSearch.toLowerCase();
+    return customers.filter(c => 
+      c.name.toLowerCase().includes(searchLower) ||
+      (c.phone && c.phone.includes(searchLower))
+    );
+  }, [customers, newSaleCustomerSearch]);
+
+  const newSaleFilteredProducts = useMemo(() => {
+    if (!newSaleProductSearch.trim()) return products;
+    const searchLower = newSaleProductSearch.toLowerCase();
+    return products.filter(p => 
+      p.name.toLowerCase().includes(searchLower)
+    );
+  }, [products, newSaleProductSearch]);
+
+  const isFilterActive = useMemo(() => {
+    return customerFilter.trim() !== "" || dateFilter !== "today" || productNameFilter.trim() !== "";
+  }, [customerFilter, dateFilter, productNameFilter]);
+
   const handleSendMessage = (sale: Sale) => {
     if (!sale.customer?.phone) {
       setError("Customer phone number is required");
@@ -1074,6 +1482,8 @@ Swiftmetals`;
     }
   };
 
+  // ==================== RENDER ====================
+
   if (loading && sales.length === 0) {
     return (
       <div className="p-3 bg-gray-50 min-h-screen">
@@ -1084,7 +1494,7 @@ Swiftmetals`;
 
   return (
     <div className="p-2 sm:p-4 bg-gray-50 min-h-screen">
-      {/* Restock Confirmation Modal - Mobile Optimized */}
+      {/* Restock Confirmation Modal */}
       {showRestockConfirm && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-3 z-[60]">
           <div className="bg-white rounded-lg max-w-sm w-full p-4 mx-2">
@@ -1099,7 +1509,7 @@ Swiftmetals`;
             
             <div className="space-y-2">
               <button
-                onClick={() => handleDeleteSale(showRestockConfirm, true)}
+                onClick={() => handleDeleteSaleWithReason(showRestockConfirm, true)}
                 disabled={loading}
                 className="w-full bg-green-600 text-white px-3 py-2 rounded-lg hover:bg-green-700 disabled:opacity-50 flex items-center justify-center gap-2 text-sm"
               >
@@ -1108,7 +1518,7 @@ Swiftmetals`;
               </button>
               
               <button
-                onClick={() => handleDeleteSale(showRestockConfirm, false)}
+                onClick={() => handleDeleteSaleWithReason(showRestockConfirm, false)}
                 disabled={loading}
                 className="w-full bg-red-600 text-white px-3 py-2 rounded-lg hover:bg-red-700 disabled:opacity-50 flex items-center justify-center gap-2 text-sm"
               >
@@ -1128,64 +1538,121 @@ Swiftmetals`;
         </div>
       )}
 
-      {/* Header - Mobile Optimized */}
+      {/* Deletion Reason Modal */}
+      {showDeletionReasonModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-3 z-[60]">
+          <div className="bg-white rounded-lg max-w-sm w-full p-4">
+            <div className="flex items-center gap-2 mb-3">
+              <AlertTriangle className="text-yellow-500" size={20} />
+              <h3 className="text-lg font-bold text-black">Reason for Deletion</h3>
+            </div>
+            
+            <p className="text-sm text-gray-600 mb-3">
+              Please provide a reason for deleting this sale (for audit purposes):
+            </p>
+            
+            <textarea
+              value={deletionReason}
+              onChange={(e) => setDeletionReason(e.target.value)}
+              placeholder="e.g., Wrong customer, Duplicate entry, Incorrect items, etc."
+              className="w-full p-2 border border-gray-300 rounded text-sm text-black mb-3"
+              rows={3}
+            />
+            
+            <div className="flex gap-2">
+              <button
+                onClick={() => {
+                  setShowDeletionReasonModal(null);
+                  setDeletionReason("");
+                }}
+                className="flex-1 bg-gray-500 text-white px-3 py-2 rounded hover:bg-gray-600 text-sm"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  if (deletionReason.trim()) {
+                    setShowRestockConfirm(showDeletionReasonModal);
+                    setShowDeletionReasonModal(null);
+                  } else {
+                    setError("Please provide a reason for deletion");
+                  }
+                }}
+                className="flex-1 bg-red-600 text-white px-3 py-2 rounded hover:bg-red-700 text-sm"
+              >
+                Continue to Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Header */}
       <div className="flex flex-col gap-3 mb-4">
         <div className="flex justify-between items-start">
           <div>
             <h1 className="text-lg sm:text-xl font-bold text-black">Sales Management</h1>
             <p className="text-xs text-gray-600">Dashboard</p>
-            {/* Debug info */}
             {debugInfo && (
               <div className="text-xs text-gray-500 mt-1">
                 {debugInfo} | Recently Updated: {stats.recentlyUpdatedCount}
               </div>
             )}
           </div>
-          <button
-            onClick={() => {
-              const csvData = sales.map(sale => ({
-                'Sale ID': sale.id,
-                'Date': new Date(sale.date).toLocaleDateString(),
-                'Customer': sale.customer?.name || '-',
-                'Customer Phone': sale.customer?.phone || '-',
-                'Products': sale.saleitems?.map(item => `${item.product.name} (x${item.quantity})`).join('; ') || '-',
-                'Total Amount': sale.amount.toFixed(2),
-                'Status': sale.status,
-                'Amount Paid': (sale.amount - sale.remainingAmount).toFixed(2),
-                'Remaining Amount': sale.remainingAmount.toFixed(2),
-                'Due Date': sale.dueDate ? new Date(sale.dueDate).toLocaleDateString() : '-',
-                'Payment Methods': sale.payments?.map(p => p.method).join('; ') || '-',
-                'Created By': sale.createdBy || '-',
-                'Updated By': sale.updatedBy || '-',
-                'Last Updated': sale.updatedAt ? new Date(sale.updatedAt).toLocaleDateString() : '-'
-              }));
+          <div className="flex gap-2">
+            <button
+              onClick={() => setShowCreateSaleModal(true)}
+              className="bg-blue-600 text-white px-3 py-2 rounded-lg hover:bg-blue-700 flex items-center gap-1.5 text-sm shadow"
+            >
+              <Plus size={16} />
+              <span className="hidden xs:inline">Create Sale</span>
+            </button>
+            <button
+              onClick={() => {
+                const csvData = sales.map(sale => ({
+                  'Sale ID': sale.id,
+                  'Date': new Date(sale.date).toLocaleDateString(),
+                  'Customer': sale.customer?.name || '-',
+                  'Customer Phone': sale.customer?.phone || '-',
+                  'Products': sale.saleitems?.map(item => `${item.product.name} (x${item.quantity})`).join('; ') || '-',
+                  'Total Amount': sale.amount.toFixed(2),
+                  'Status': sale.status,
+                  'Amount Paid': (sale.amount - sale.remainingAmount).toFixed(2),
+                  'Remaining Amount': sale.remainingAmount.toFixed(2),
+                  'Due Date': sale.dueDate ? new Date(sale.dueDate).toLocaleDateString() : '-',
+                  'Payment Methods': sale.payments?.map(p => p.method).join('; ') || '-',
+                  'Created By': sale.createdBy || '-',
+                  'Updated By': sale.updatedBy || '-',
+                  'Last Updated': sale.updatedAt ? new Date(sale.updatedAt).toLocaleDateString() : '-'
+                }));
 
-              const headers = Object.keys(csvData[0] || {});
-              const csvContent = [
-                headers.join(','),
-                ...csvData.map(row => 
-                  headers.map(header => {
-                    const value = row[header as keyof typeof row];
-                    return `"${String(value).replace(/"/g, '""')}"`;
-                  }).join(',')
-                )
-              ].join('\n');
+                const headers = Object.keys(csvData[0] || {});
+                const csvContent = [
+                  headers.join(','),
+                  ...csvData.map(row => 
+                    headers.map(header => {
+                      const value = row[header as keyof typeof row];
+                      return `"${String(value).replace(/"/g, '""')}"`;
+                    }).join(',')
+                  )
+                ].join('\n');
 
-              const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-              const link = document.createElement('a');
-              const url = URL.createObjectURL(blob);
-              link.setAttribute('href', url);
-              link.setAttribute('download', `sales_report_${new Date().toISOString().split('T')[0]}.csv`);
-              link.style.visibility = 'hidden';
-              document.body.appendChild(link);
-              link.click();
-              document.body.removeChild(link);
-            }}
-            className="bg-green-600 text-white px-3 py-2 rounded-lg hover:bg-green-700 flex items-center gap-1.5 text-sm shadow"
-          >
-            <Download size={16} />
-            <span className="hidden xs:inline">Export</span>
-          </button>
+                const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+                const link = document.createElement('a');
+                const url = URL.createObjectURL(blob);
+                link.setAttribute('href', url);
+                link.setAttribute('download', `sales_report_${new Date().toISOString().split('T')[0]}.csv`);
+                link.style.visibility = 'hidden';
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+              }}
+              className="bg-green-600 text-white px-3 py-2 rounded-lg hover:bg-green-700 flex items-center gap-1.5 text-sm shadow"
+            >
+              <Download size={16} />
+              <span className="hidden xs:inline">Export</span>
+            </button>
+          </div>
         </div>
 
         {/* Mobile Filter Toggle */}
@@ -1236,6 +1703,28 @@ Swiftmetals`;
             </div>
 
             <div>
+              <label className="block text-xs font-medium text-gray-700 mb-1">Search Product</label>
+              <div className="relative">
+                <Search className="absolute left-2 top-1/2 transform -translate-y-1/2 text-gray-400" size={14} />
+                <input
+                  type="text"
+                  placeholder="Product name..."
+                  value={productNameFilter}
+                  onChange={(e) => setProductNameFilter(e.target.value)}
+                  className="w-full pl-7 pr-7 py-1.5 text-sm border border-gray-300 rounded-lg text-black"
+                />
+                {productNameFilter && (
+                  <button
+                    onClick={() => setProductNameFilter("")}
+                    className="absolute right-2 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                  >
+                    <XCircle size={14} />
+                  </button>
+                )}
+              </div>
+            </div>
+
+            <div>
               <label className="block text-xs font-medium text-gray-700 mb-1">Date Range</label>
               <div className="space-y-2">
                 <div className="flex gap-1 flex-wrap">
@@ -1263,23 +1752,16 @@ Swiftmetals`;
                       <input
                         type="date"
                         value={customStartDate}
-                        onChange={(e) => {
-                          setCustomStartDate(e.target.value);
-                        }}
+                        onChange={(e) => setCustomStartDate(e.target.value)}
                         className="w-full p-1.5 text-xs border rounded text-black"
-                        max={customEndDate || new Date().toISOString().split('T')[0]}
                       />
                     </div>
                     <div>
                       <input
                         type="date"
                         value={customEndDate}
-                        onChange={(e) => {
-                          setCustomEndDate(e.target.value);
-                        }}
+                        onChange={(e) => setCustomEndDate(e.target.value)}
                         className="w-full p-1.5 text-xs border rounded text-black"
-                        min={customStartDate}
-                        max={new Date().toISOString().split('T')[0]}
                       />
                     </div>
                   </div>
@@ -1289,27 +1771,35 @@ Swiftmetals`;
           </div>
         )}
 
-        {/* Active Filters Display - Mobile */}
+        {/* Active Filters Display */}
         {isFilterActive && (
           <div className="flex flex-wrap gap-1.5">
             {customerFilter && (
               <span className="inline-flex items-center gap-1 px-2 py-1 bg-blue-100 text-blue-800 rounded-full text-xs">
-                {customerFilter.length > 12 ? customerFilter.substring(0, 12) + '...' : customerFilter}
+                Customer: {customerFilter.length > 12 ? customerFilter.substring(0, 12) + '...' : customerFilter}
                 <button onClick={() => setCustomerFilter("")} className="text-blue-600 hover:text-blue-800">
                   <X size={10} />
                 </button>
               </span>
             )}
+            {productNameFilter && (
+              <span className="inline-flex items-center gap-1 px-2 py-1 bg-purple-100 text-purple-800 rounded-full text-xs">
+                Product: {productNameFilter.length > 12 ? productNameFilter.substring(0, 12) + '...' : productNameFilter}
+                <button onClick={() => setProductNameFilter("")} className="text-purple-600 hover:text-purple-800">
+                  <X size={10} />
+                </button>
+              </span>
+            )}
             {dateFilter !== "today" && (
-  <span className="inline-flex items-center gap-1 px-2 py-1 bg-green-100 text-green-800 rounded-full text-xs">
-    {  // FIXED: Removed the space after "today"
-     dateFilter === "week" ? "Week" :
-     dateFilter === "month" ? "Month" : "Custom"}
-    <button onClick={() => setDateFilter("today")} className="text-green-600 hover:text-green-800">
-      <X size={10} />
-    </button>
-  </span>
-)}
+              <span className="inline-flex items-center gap-1 px-2 py-1 bg-green-100 text-green-800 rounded-full text-xs">
+                {dateFilter === "week" ? "Week" :
+                 dateFilter === "month" ? "Month" : 
+                 dateFilter === "custom" ? "Custom" : "All"}
+                <button onClick={() => setDateFilter("today")} className="text-green-600 hover:text-green-800">
+                  <X size={10} />
+                </button>
+              </span>
+            )}
           </div>
         )}
       </div>
@@ -1334,11 +1824,10 @@ Swiftmetals`;
         </div>
       )}
 
-      {/* Payment Method Breakdown - Mobile Optimized */}
+      {/* Payment Method Breakdown */}
       <div className="bg-white rounded-lg shadow mb-3 p-3">
         <h2 className="text-base font-bold text-black mb-2">Payment Method Breakdown</h2>
         <div className="space-y-2">
-          {/* Show today's breakdown when viewing today's sales */}
           {dateFilter === "today" ? (
             <>
               <h3 className="text-sm font-semibold text-green-600">Today's Payments</h3>
@@ -1439,7 +1928,7 @@ Swiftmetals`;
         </div>
       </div>
 
-      {/* Stats Cards - Mobile Optimized */}
+      {/* Stats Cards */}
       <div className="grid grid-cols-2 gap-2 mb-4">
         <div className="bg-white p-3 rounded-lg shadow border-l-2 border-emerald-500">
           <div className="text-xs text-gray-600">Total Sales</div>
@@ -1471,7 +1960,6 @@ Swiftmetals`;
           <div className="text-base font-bold text-purple-600">Ksh {formatCurrency(stats.totalOutstanding)}</div>
           <div className="text-xs text-black">Total remaining</div>
         </div>
-        {/* Today's stats */}
         <div className="bg-white p-3 rounded-lg shadow border-l-2 border-green-500">
           <div className="text-xs text-gray-600">Today's Sales</div>
           <div className="text-base font-bold text-green-600">Ksh {formatCurrency(stats.todaySales)}</div>
@@ -1484,15 +1972,15 @@ Swiftmetals`;
         </div>
       </div>
 
-      {/* Tabs - Mobile Optimized */}
+      {/* Tabs */}
       <div className="bg-white rounded-lg shadow mb-3">
         <div className="flex overflow-x-auto scrollbar-thin border-b">
           {[
-            { key: "overview", label: "All", count: sales.length },
-            { key: "paid", label: "Paid", count: stats.paidCount },
-            { key: "partial", label: "Partial", count: stats.partialCount },
-            { key: "unpaid", label: "Unpaid", count: stats.unpaidCount },
-            { key: "recentlyUpdated", label: "Recent", count: stats.recentlyUpdatedCount }
+            { key: "overview", label: "All", count: sales.length, icon: null },
+            { key: "paid", label: "Paid", count: stats.paidCount, icon: null },
+            { key: "partial", label: "Partial", count: stats.partialCount, icon: null },
+            { key: "unpaid", label: "Unpaid", count: stats.unpaidCount, icon: null },
+            { key: "recentlyUpdated", label: "Recent", count: stats.recentlyUpdatedCount, icon: null },
           ].map((tab) => (
             <button
               key={tab.key}
@@ -1509,10 +1997,24 @@ Swiftmetals`;
               </div>
             </button>
           ))}
+          
+          {/* Deleted Sales Tab */}
+          <button
+            onClick={() => {
+              setShowDeletedModal(true);
+              fetchDeletedSales();
+            }}
+            className="flex-shrink-0 px-3 py-2.5 text-center transition-colors whitespace-nowrap min-w-[70px] text-black hover:text-gray-800"
+          >
+            <div className="flex flex-col items-center">
+              <Archive size={16} />
+              <span className="text-xs mt-1">Deleted</span>
+              <span className="text-xs text-gray-500">({deletedSalesTotal})</span>
+            </div>
+          </button>
         </div>
 
         <div className="p-2">
-          {/* Debug info for Recently Updated tab */}
           {activeTab === "recentlyUpdated" && (
             <div className="mb-3 p-2 bg-blue-50 rounded-lg border border-blue-200">
               <div className="text-xs text-blue-800">
@@ -1528,7 +2030,6 @@ Swiftmetals`;
             </div>
           )}
 
-          {/* Date Filter Info */}
           <div className="mb-3 p-2 bg-gray-50 rounded-lg border border-gray-200">
             <div className="text-xs text-gray-700 flex items-center gap-1">
               <Calendar size={12} />
@@ -1542,13 +2043,19 @@ Swiftmetals`;
                 ({sortedFilteredSales.length} sales, Ksh {formatCurrency(sortedFilteredSales.reduce((acc, s) => acc + Number(s.amount), 0))})
               </span>
             </div>
+            {productNameFilter && (
+              <div className="text-xs text-purple-600 mt-1 flex items-center gap-1">
+                <Search size={10} />
+                Filtering by product: "{productNameFilter}" 
+                ({sortedFilteredSales.length} sales containing this product)
+              </div>
+            )}
           </div>
 
-          {/* Sales List - Mobile Cards */}
+          {/* Sales List */}
           <div className="space-y-2">
             {sortedFilteredSales.map((sale) => (
               <div key={sale.id} className="bg-white border rounded-lg p-3 shadow-sm">
-                {/* Header */}
                 <div className="flex justify-between items-start mb-2">
                   <div>
                     <h3 className="font-semibold text-black text-sm truncate max-w-[150px]">
@@ -1567,7 +2074,6 @@ Swiftmetals`;
                       {sale.status}
                     </span>
                     
-                    {/* Recently Updated Badge */}
                     {isRecentlyUpdated(sale) && isSaleModified(sale) && (
                       <span className="px-1.5 py-0.5 rounded-full text-xs bg-yellow-100 text-yellow-800 border border-yellow-200 font-medium">
                         Updated
@@ -1583,7 +2089,6 @@ Swiftmetals`;
                   </div>
                 </div>
 
-                {/* Basic Info */}
                 <div className="grid grid-cols-2 gap-2 text-xs mb-2">
                   <div>
                     <span className="text-gray-600">Amount:</span>
@@ -1605,7 +2110,6 @@ Swiftmetals`;
                   )}
                 </div>
 
-                {/* Payment Methods Badges */}
                 {sale.payments && sale.payments.length > 0 && (
                   <div className="mb-2">
                     <div className="flex flex-wrap gap-1">
@@ -1630,7 +2134,6 @@ Swiftmetals`;
                   </div>
                 )}
 
-                {/* Last Updated Info */}
                 {sale.updatedAt && sale.updatedBy && (
                   <div className="mt-1 mb-2">
                     <div className="flex items-center gap-1 text-xs">
@@ -1645,10 +2148,8 @@ Swiftmetals`;
                   </div>
                 )}
 
-                {/* Expanded Details */}
                 {expandedSaleId === sale.id && (
                   <div className="mt-2 pt-2 border-t border-gray-200 space-y-2">
-                    {/* Products */}
                     {sale.saleitems && sale.saleitems.length > 0 && (
                       <div className="text-xs">
                         <div className="font-medium text-gray-700 mb-1">Products:</div>
@@ -1663,7 +2164,6 @@ Swiftmetals`;
                       </div>
                     )}
 
-                    {/* User Accountability */}
                     {(sale.createdBy || sale.updatedBy) && (
                       <div className="text-xs text-gray-500">
                         {sale.createdBy && (
@@ -1686,10 +2186,18 @@ Swiftmetals`;
                         )}
                       </div>
                     )}
+
+                    {/* Audit Log Button */}
+                    <button
+                      onClick={() => handleViewAuditLog(sale)}
+                      className="w-full mt-2 bg-gray-100 hover:bg-gray-200 text-gray-700 px-2 py-1.5 rounded text-xs flex items-center justify-center gap-1 transition-colors"
+                    >
+                      <History size={12} />
+                      View Audit History
+                    </button>
                   </div>
                 )}
 
-                {/* Action Buttons */}
                 <div className="mt-3 pt-2 border-t border-gray-200">
                   <div className="grid grid-cols-2 gap-1.5">
                     <select
@@ -1734,7 +2242,7 @@ Swiftmetals`;
                       </button>
                       
                       <button
-                        onClick={() => showDeleteConfirmation(sale.id)}
+                        onClick={() => showDeleteConfirmationWithReason(sale.id)}
                         disabled={loading}
                         className="px-1 py-1.5 text-xs bg-red-500 text-white rounded hover:bg-red-600 disabled:opacity-50 flex items-center justify-center gap-0.5"
                         title="Delete"
@@ -1770,7 +2278,382 @@ Swiftmetals`;
         </div>
       </div>
 
-      {/* Edit Sale Modal - Mobile Optimized */}
+      {/* Create Sale Modal */}
+      {showCreateSaleModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-start justify-center p-2 z-50 overflow-y-auto">
+          <div className="bg-white rounded-lg w-full max-w-md max-h-[90vh] overflow-y-auto mt-2">
+            <div className="p-3 border-b sticky top-0 bg-white z-10">
+              <div className="flex justify-between items-center">
+                <h2 className="text-lg font-bold text-black">Create New Sale</h2>
+                <button
+                  onClick={() => setShowCreateSaleModal(false)}
+                  className="text-gray-500 hover:text-gray-700"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+            </div>
+
+            <div className="p-3 space-y-4">
+              <div className="bg-blue-50 p-3 rounded-lg border border-blue-200">
+                <label className="block text-sm font-semibold text-blue-800 mb-2">
+                  Sale Date {new Date(newSaleDate).toDateString() !== new Date().toDateString() && 
+                    <span className="text-xs text-orange-600 ml-2">(Backdated Sale)</span>
+                  }
+                </label>
+                <input
+                  type="date"
+                  value={newSaleDate}
+                  onChange={(e) => setNewSaleDate(e.target.value)}
+                  className="w-full p-2 border border-blue-300 rounded-lg text-black text-sm"
+                  max={new Date().toISOString().split('T')[0]}
+                />
+                <p className="text-xs text-blue-600 mt-1">
+                  {new Date(newSaleDate).toDateString() === new Date().toDateString() 
+                    ? "Today's sale" 
+                    : "Backdated sale - will be recorded on the selected date"}
+                </p>
+              </div>
+
+              <div>
+                <h3 className="text-sm font-semibold mb-2 text-black">Select Customer</h3>
+                <div className="relative new-sale-customer-dropdown">
+                  <input
+                    type="text"
+                    placeholder="Search customer..."
+                    value={newSaleCustomerSearch}
+                    onChange={(e) => {
+                      setNewSaleCustomerSearch(e.target.value);
+                      setNewSaleShowCustomerDropdown(true);
+                    }}
+                    onFocus={() => setNewSaleShowCustomerDropdown(true)}
+                    className="w-full p-2 border border-gray-300 rounded text-black text-sm"
+                  />
+                  {newSaleShowCustomerDropdown && newSaleFilteredCustomers.length > 0 && (
+                    <div className="absolute z-20 w-full mt-1 bg-white border border-gray-300 rounded-lg shadow-lg max-h-40 overflow-y-auto">
+                      {newSaleFilteredCustomers.map(customer => (
+                        <div
+                          key={customer.id}
+                          onClick={() => {
+                            setNewSaleCustomerId(customer.id);
+                            setNewSaleCustomerSearch(customer.name);
+                            setNewSaleShowCustomerDropdown(false);
+                          }}
+                          className="p-2 hover:bg-blue-50 cursor-pointer border-b last:border-b-0 text-sm"
+                        >
+                          <div className="font-medium text-black truncate">{customer.name}</div>
+                          {customer.phone && (
+                            <div className="text-xs text-gray-500">{customer.phone}</div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                {newSaleCustomerId && (
+                  <div className="mt-2 text-xs text-green-600">
+                    Selected: {customers.find(c => c.id === newSaleCustomerId)?.name}
+                  </div>
+                )}
+              </div>
+
+              <div>
+                <h3 className="text-sm font-semibold mb-2 text-black flex items-center gap-1">
+                  <Calculator size={16} />
+                  Sale Items
+                </h3>
+                
+                <div className="space-y-2 mb-3 p-2 bg-gray-50 rounded-lg">
+                  <h4 className="font-medium text-black text-xs">Add Item</h4>
+                  <div className="space-y-2">
+                    <div className="relative new-sale-product-dropdown">
+                      <input
+                        type="text"
+                        placeholder="Search product..."
+                        value={newSaleProductSearch}
+                        onChange={(e) => {
+                          setNewSaleProductSearch(e.target.value);
+                          setNewSaleShowProductDropdown(true);
+                        }}
+                        onFocus={() => setNewSaleShowProductDropdown(true)}
+                        className="w-full p-1.5 border border-gray-300 rounded text-black text-sm"
+                      />
+                      {newSaleShowProductDropdown && newSaleFilteredProducts.length > 0 && (
+                        <div className="absolute z-20 w-full mt-1 bg-white border border-gray-300 rounded-lg shadow-lg max-h-40 overflow-y-auto">
+                          {newSaleFilteredProducts.map(product => {
+                            let productStock = 0;
+                            if (Array.isArray(product.stock)) {
+                              productStock = product.stock.reduce((total: number, s: any) => total + (s.quantity || 0), 0);
+                            } else if (typeof product.stock === 'object' && product.stock !== null) {
+                              productStock = (product.stock as any).quantity || 0;
+                            } else {
+                              productStock = Number(product.stock) || 0;
+                            }
+                            return (
+                              <div
+                                key={product.id}
+                                onClick={() => {
+                                  setNewSaleCurrentItem({
+                                    ...newSaleCurrentItem,
+                                    productId: product.id,
+                                    price: product.price || 0,
+                                    productName: product.name
+                                  });
+                                  setNewSaleProductSearch(product.name);
+                                  setNewSaleShowProductDropdown(false);
+                                }}
+                                className="p-2 hover:bg-blue-50 cursor-pointer border-b last:border-b-0 text-sm"
+                              >
+                                <div className="font-medium text-black truncate">{product.name}</div>
+                                <div className="text-xs text-gray-500">Price: Ksh {formatCurrency(product.price || 0)} | Stock: {productStock}</div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                    
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <input
+                          type="number"
+                          min="1"
+                          value={newSaleCurrentItem.quantity || ''}
+                          onChange={(e) => setNewSaleCurrentItem({...newSaleCurrentItem, quantity: parseInt(e.target.value) || 1})}
+                          placeholder="Qty"
+                          className="w-full p-1.5 border rounded text-black text-sm"
+                        />
+                      </div>
+                      
+                      <div>
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          value={newSaleCurrentItem.price || ''}
+                          onChange={(e) => setNewSaleCurrentItem({...newSaleCurrentItem, price: parseFloat(e.target.value) || 0})}
+                          placeholder="Price"
+                          className="w-full p-1.5 border rounded text-black text-sm"
+                        />
+                      </div>
+                    </div>
+                    
+                    <button
+                      onClick={handleAddItemToNewSale}
+                      disabled={!newSaleCurrentItem.productId || newSaleCurrentItem.quantity <= 0 || newSaleCurrentItem.price <= 0}
+                      className="w-full bg-blue-500 text-white px-3 py-1.5 rounded hover:bg-blue-600 disabled:opacity-50 text-sm flex items-center justify-center gap-1"
+                    >
+                      <Plus size={14} />
+                      Add Item
+                    </button>
+                  </div>
+                </div>
+
+                <div className="space-y-2 max-h-40 overflow-y-auto">
+                  {newSaleItems.map((item, index) => (
+                    <div key={index} className="bg-gray-50 p-2 rounded border text-sm">
+                      <div className="flex justify-between items-center mb-1">
+                        <div className="font-medium text-black truncate">{item.productName}</div>
+                        <button
+                          onClick={() => setNewSaleItems(newSaleItems.filter((_, i) => i !== index))}
+                          className="text-red-500 hover:text-red-700"
+                        >
+                          <X size={14} />
+                        </button>
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <input
+                          type="number"
+                          min="1"
+                          value={item.quantity}
+                          onChange={(e) => {
+                            const newItems = [...newSaleItems];
+                            newItems[index].quantity = parseInt(e.target.value) || 1;
+                            setNewSaleItems(newItems);
+                          }}
+                          className="w-full p-1 border rounded text-black text-xs"
+                        />
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          value={item.price}
+                          onChange={(e) => {
+                            const newItems = [...newSaleItems];
+                            newItems[index].price = parseFloat(e.target.value) || 0;
+                            setNewSaleItems(newItems);
+                          }}
+                          className="w-full p-1 border rounded text-black text-xs"
+                        />
+                      </div>
+                      <div className="text-xs text-green-600 mt-1">
+                        Subtotal: Ksh {formatCurrency(item.quantity * item.price)}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="bg-blue-50 p-2 rounded-lg border border-blue-200 mt-2">
+                  <div className="flex justify-between items-center">
+                    <span className="font-semibold text-black text-sm">Total:</span>
+                    <span className="font-bold text-blue-600">
+                      Ksh {formatCurrency(newSaleItems.reduce((sum, item) => sum + (item.quantity * item.price), 0))}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              <div>
+                <h3 className="text-sm font-semibold mb-2 text-black">Payments</h3>
+                
+                {newSalePayments.length > 0 && (
+                  <div className="space-y-1 mb-3">
+                    {newSalePayments.map((payment, index) => (
+                      <div key={index} className="flex justify-between items-center bg-white p-2 rounded border text-sm">
+                        <div className="flex items-center gap-1">
+                          <span className={`px-1.5 py-0.5 rounded-full text-xs ${
+                            paymentMethods.find(m => m.value === payment.method)?.color
+                          }`}>
+                            {payment.method}
+                          </span>
+                          {payment.amount !== "0" && (
+                            <span className="font-medium">Ksh {formatCurrency(parseFloat(payment.amount))}</span>
+                          )}
+                          {payment.dueDate && (
+                            <span className="text-xs text-gray-500">Due: {formatDate(payment.dueDate)}</span>
+                          )}
+                        </div>
+                        <button
+                          onClick={() => setNewSalePayments(newSalePayments.filter((_, i) => i !== index))}
+                          className="text-red-500 hover:text-red-700"
+                        >
+                          <X size={14} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                <div className="space-y-2 p-2 bg-gray-50 rounded-lg">
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <select
+                        value={newSaleCurrentPayment.method}
+                        onChange={(e) => setNewSaleCurrentPayment({...newSaleCurrentPayment, method: e.target.value as any})}
+                        className="w-full p-1.5 border rounded text-black text-sm"
+                      >
+                        {paymentMethods.map(method => (
+                          <option key={method.value} value={method.value}>{method.label}</option>
+                        ))}
+                      </select>
+                    </div>
+                    
+                    <div>
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={newSaleCurrentPayment.amount}
+                        onChange={(e) => setNewSaleCurrentPayment({...newSaleCurrentPayment, amount: e.target.value})}
+                        placeholder="Amount"
+                        className="w-full p-1.5 border rounded text-black text-sm"
+                        disabled={newSaleCurrentPayment.method === "CREDIT"}
+                      />
+                    </div>
+                  </div>
+                  
+                  {["MPESA", "BANK", "CARD"].includes(newSaleCurrentPayment.method) && (
+                    <input
+                      type="text"
+                      value={newSaleCurrentPayment.referenceId}
+                      onChange={(e) => setNewSaleCurrentPayment({...newSaleCurrentPayment, referenceId: e.target.value})}
+                      placeholder="Reference ID"
+                      className="w-full p-1.5 border rounded text-black text-sm"
+                    />
+                  )}
+                  
+                  {newSaleCurrentPayment.method === "CHECK" && (
+                    <input
+                      type="date"
+                      value={newSaleCurrentPayment.checkDepositDate}
+                      onChange={(e) => setNewSaleCurrentPayment({...newSaleCurrentPayment, checkDepositDate: e.target.value})}
+                      className="w-full p-1.5 border rounded text-black text-sm"
+                    />
+                  )}
+                  
+                  {newSaleCurrentPayment.method === "CREDIT" && (
+                    <input
+                      type="date"
+                      value={newSaleCurrentPayment.dueDate}
+                      onChange={(e) => setNewSaleCurrentPayment({...newSaleCurrentPayment, dueDate: e.target.value})}
+                      className="w-full p-1.5 border rounded text-black text-sm"
+                    />
+                  )}
+                  
+                  <button
+                    onClick={handleAddPaymentToNewSale}
+                    className="w-full bg-green-500 text-white px-3 py-1.5 rounded hover:bg-green-600 text-sm flex items-center justify-center gap-1"
+                  >
+                    <Plus size={14} />
+                    Add Payment
+                  </button>
+                </div>
+
+                <div className="bg-blue-50 p-2 rounded-lg text-sm mt-2">
+                  <div className="flex justify-between mb-1">
+                    <span>Total Sale:</span>
+                    <span className="font-bold">Ksh {formatCurrency(newSaleItems.reduce((sum, item) => sum + (item.quantity * item.price), 0))}</span>
+                  </div>
+                  <div className="flex justify-between mb-1">
+                    <span>Total Payments:</span>
+                    <span className="font-bold text-green-600">
+                      Ksh {formatCurrency(newSalePayments.reduce((sum, p) => sum + Number(p.amount), 0))}
+                    </span>
+                  </div>
+                  <div className="flex justify-between pt-1 border-t">
+                    <span>Remaining:</span>
+                    <span className={`font-bold ${
+                      Math.max(0, newSaleItems.reduce((sum, item) => sum + (item.quantity * item.price), 0) - newSalePayments.reduce((sum, p) => sum + Number(p.amount), 0)) > 0 
+                        ? 'text-red-600' : 'text-green-600'
+                    }`}>
+                      Ksh {formatCurrency(Math.max(0, newSaleItems.reduce((sum, item) => sum + (item.quantity * item.price), 0) - newSalePayments.reduce((sum, p) => sum + Number(p.amount), 0)))}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex gap-2 pt-3 border-t">
+                <button
+                  onClick={() => setShowCreateSaleModal(false)}
+                  disabled={loading}
+                  className="flex-1 bg-gray-500 text-white px-3 py-2 rounded hover:bg-gray-600 disabled:opacity-50 text-sm"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleCreateSale}
+                  disabled={loading || !newSaleCustomerId || newSaleItems.length === 0}
+                  className="flex-1 bg-blue-600 text-white px-3 py-2 rounded hover:bg-blue-700 disabled:opacity-50 text-sm flex items-center justify-center gap-1"
+                >
+                  {loading ? (
+                    <>
+                      <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
+                      Creating...
+                    </>
+                  ) : (
+                    <>
+                      <Save size={16} />
+                      Create Sale
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Sale Modal */}
       {editingSale && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-start justify-center p-2 z-50 overflow-y-auto">
           <div className="bg-white rounded-lg w-full max-w-md max-h-[90vh] overflow-y-auto mt-2">
@@ -1787,7 +2670,6 @@ Swiftmetals`;
             </div>
 
             <div className="p-3 space-y-4">
-              {/* Sale Info */}
               <div className="bg-gray-50 p-3 rounded-lg">
                 <h3 className="font-semibold mb-2 text-black text-sm">Sale Information</h3>
                 <div className="grid grid-cols-2 gap-2 text-xs">
@@ -1812,14 +2694,12 @@ Swiftmetals`;
                 </div>
               </div>
 
-              {/* Edit Items */}
               <div>
                 <h3 className="text-sm font-semibold mb-2 text-black flex items-center gap-1">
                   <Calculator size={16} />
                   Edit Sale Items
                 </h3>
                 
-                {/* Add New Item */}
                 <div className="space-y-2 mb-3 p-2 bg-gray-50 rounded-lg">
                   <h4 className="font-medium text-black text-xs">Add New Item</h4>
                   <div className="space-y-2">
@@ -1895,7 +2775,6 @@ Swiftmetals`;
                   </div>
                 </div>
 
-                {/* Existing Items */}
                 <div className="space-y-2 max-h-40 overflow-y-auto">
                   {editSaleItems.map((item, index) => (
                     <div key={index} className="bg-gray-50 p-2 rounded border text-sm">
@@ -1956,11 +2835,9 @@ Swiftmetals`;
                 </div>
               </div>
 
-              {/* Payments */}
               <div>
                 <h3 className="text-sm font-semibold mb-2 text-black">Payments</h3>
                 
-                {/* Current Payments */}
                 {editPayments.length > 0 && (
                   <div className="space-y-1 mb-3">
                     {editPayments.map((payment, index) => (
@@ -1987,7 +2864,6 @@ Swiftmetals`;
                   </div>
                 )}
 
-                {/* Add New Payment */}
                 <div className="space-y-2 p-2 bg-gray-50 rounded-lg">
                   <div className="grid grid-cols-2 gap-2">
                     <div>
@@ -2053,7 +2929,6 @@ Swiftmetals`;
                   </button>
                 </div>
 
-                {/* Payment Summary */}
                 <div className="bg-blue-50 p-2 rounded-lg text-sm">
                   <div className="flex justify-between mb-1">
                     <span>Total Sale:</span>
@@ -2077,7 +2952,6 @@ Swiftmetals`;
                 </div>
               </div>
 
-              {/* Action Buttons */}
               <div className="flex gap-2 pt-3 border-t">
                 <button
                   onClick={() => setEditingSale(null)}
@@ -2104,6 +2978,447 @@ Swiftmetals`;
                   )}
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Deleted Sales Modal */}
+      {showDeletedModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-start justify-center p-2 z-50 overflow-y-auto">
+          <div className="bg-white rounded-lg w-full max-w-4xl max-h-[90vh] overflow-y-auto mt-2">
+            <div className="p-3 border-b sticky top-0 bg-white z-10">
+              <div className="flex justify-between items-center">
+                <h2 className="text-lg font-bold text-black flex items-center gap-2">
+                  <Archive size={20} />
+                  Deleted Sales Archive
+                </h2>
+                <button
+                  onClick={() => {
+                    setShowDeletedModal(false);
+                    setDeletedSales([]);
+                  }}
+                  className="text-gray-500 hover:text-gray-700"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+            </div>
+
+            <div className="p-3 space-y-3">
+              <div className="bg-gray-50 p-3 rounded-lg space-y-2">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <div>
+                    <label className="block text-xs font-medium text-gray-700 mb-1">Search</label>
+                    <div className="relative">
+                      <Search className="absolute left-2 top-1/2 transform -translate-y-1/2 text-gray-400" size={14} />
+                      <input
+                        type="text"
+                        placeholder="Search by customer, deleter, or items..."
+                        value={deletedSearchTerm}
+                        onChange={(e) => {
+                          setDeletedSearchTerm(e.target.value);
+                          setDeletedSalesPage(1);
+                          fetchDeletedSales();
+                        }}
+                        className="w-full pl-7 pr-2 py-1.5 text-sm border border-gray-300 rounded text-black"
+                      />
+                    </div>
+                  </div>
+                  
+                  <div>
+                    <label className="block text-xs font-medium text-gray-700 mb-1">Deleted Date</label>
+                    <select
+                      value={deletedDateFilter}
+                      onChange={(e) => {
+                        setDeletedDateFilter(e.target.value as any);
+                        setDeletedSalesPage(1);
+                        fetchDeletedSales();
+                      }}
+                      className="w-full p-1.5 text-sm border border-gray-300 rounded text-black"
+                    >
+                      <option value="all">All Time</option>
+                      <option value="today">Today</option>
+                      <option value="week">Last 7 Days</option>
+                      <option value="month">Last 30 Days</option>
+                      <option value="custom">Custom Range</option>
+                    </select>
+                  </div>
+                </div>
+                
+                {deletedDateFilter === "custom" && (
+                  <div className="grid grid-cols-2 gap-2">
+                    <input
+                      type="date"
+                      value={deletedCustomStartDate}
+                      onChange={(e) => {
+                        setDeletedCustomStartDate(e.target.value);
+                        fetchDeletedSales();
+                      }}
+                      className="p-1.5 text-sm border rounded text-black"
+                      placeholder="Start Date"
+                    />
+                    <input
+                      type="date"
+                      value={deletedCustomEndDate}
+                      onChange={(e) => {
+                        setDeletedCustomEndDate(e.target.value);
+                        fetchDeletedSales();
+                      }}
+                      className="p-1.5 text-sm border rounded text-black"
+                      placeholder="End Date"
+                    />
+                  </div>
+                )}
+              </div>
+
+              {deletedSalesLoading ? (
+                <div className="text-center py-8 text-gray-500">Loading deleted sales...</div>
+              ) : deletedSales.length === 0 ? (
+                <div className="text-center py-8 text-gray-500">No deleted sales found</div>
+              ) : (
+                <div className="space-y-3">
+                  {deletedSales.map((deletedSale) => (
+                    <div key={deletedSale.id} className="bg-white border rounded-lg p-3 shadow-sm">
+                      <div className="flex justify-between items-start mb-2">
+                        <div>
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <h3 className="font-semibold text-black text-sm">
+                              #{deletedSale.originalSaleId} - {deletedSale.customerName}
+                            </h3>
+                            <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${
+                              deletedSale.statusAtDeletion === "PAID" ? "bg-green-100 text-green-800" :
+                              deletedSale.statusAtDeletion === "PARTIAL" ? "bg-orange-100 text-orange-800" :
+                              "bg-red-100 text-red-800"
+                            }`}>
+                              {deletedSale.statusAtDeletion}
+                            </span>
+                            {deletedSale.restockedItems && (
+                              <span className="px-2 py-0.5 rounded-full text-xs bg-blue-100 text-blue-800">
+                                Restocked
+                              </span>
+                            )}
+                            {deletedSale.expiresAt && new Date(deletedSale.expiresAt) < new Date() ? (
+                              <span className="px-2 py-0.5 rounded-full text-xs bg-red-100 text-red-800">
+                                Expired
+                              </span>
+                            ) : deletedSale.expiresAt && (
+                              <span className="px-2 py-0.5 rounded-full text-xs bg-yellow-100 text-yellow-800">
+                                Expires: {formatDate(deletedSale.expiresAt)}
+                              </span>
+                            )}
+                          </div>
+                          <div className="text-xs text-gray-500 mt-1">
+                            Original Date: {formatDate(deletedSale.saleDate)} | 
+                            Deleted: {formatDateTime(deletedSale.deletedAt)}
+                          </div>
+                        </div>
+                        <div className="flex gap-1">
+                          <button
+                            onClick={() => setShowDeleteDetailsModal(deletedSale)}
+                            className="p-1 text-blue-600 hover:text-blue-800"
+                            title="View Details"
+                          >
+                            <Info size={16} />
+                          </button>
+                          {!deletedSale.restoredAt && new Date(deletedSale.expiresAt) > new Date() && (
+                            <button
+                              onClick={() => handleRestoreSale(deletedSale.id)}
+                              disabled={restoringSaleId === deletedSale.id}
+                              className="p-1 text-green-600 hover:text-green-800 disabled:opacity-50"
+                              title="Restore Sale"
+                            >
+                              {restoringSaleId === deletedSale.id ? (
+                                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-green-600"></div>
+                              ) : (
+                                <RotateCcw size={16} />
+                              )}
+                            </button>
+                          )}
+                          {deletedSale.restoredAt && (
+                            <span className="px-2 py-0.5 rounded-full text-xs bg-green-100 text-green-800">
+                              Restored {formatDate(deletedSale.restoredAt)}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-2 text-xs mb-2">
+                        <div>
+                          <span className="text-gray-600">Total Amount:</span>
+                          <span className="font-semibold text-emerald-600 ml-1">
+                            Ksh {formatCurrency(deletedSale.totalAmount)}
+                          </span>
+                        </div>
+                        <div>
+                          <span className="text-gray-600">Deleted By:</span>
+                          <span className="font-medium text-red-600 ml-1">
+                            {getUserDisplayName(deletedSale.deletedBy).name}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="text-xs text-gray-600 mb-2">
+                        <div className="font-medium">Items:</div>
+                        <div className="truncate">{deletedSale.saleItemsSummary}</div>
+                      </div>
+
+                      {deletedSale.deletionReason && (
+                        <div className="text-xs bg-yellow-50 p-2 rounded border border-yellow-200">
+                          <span className="font-medium">Reason for deletion:</span> {deletedSale.deletionReason}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                  
+                  {deletedSalesTotal > 50 && (
+                    <div className="flex justify-center gap-2 mt-4">
+                      <button
+                        onClick={() => {
+                          setDeletedSalesPage(Math.max(1, deletedSalesPage - 1));
+                          fetchDeletedSales();
+                        }}
+                        disabled={deletedSalesPage === 1}
+                        className="px-3 py-1 text-sm bg-gray-100 rounded disabled:opacity-50"
+                      >
+                        Previous
+                      </button>
+                      <span className="text-sm text-gray-600">
+                        Page {deletedSalesPage} of {Math.ceil(deletedSalesTotal / 50)}
+                      </span>
+                      <button
+                        onClick={() => {
+                          setDeletedSalesPage(deletedSalesPage + 1);
+                          fetchDeletedSales();
+                        }}
+                        disabled={deletedSalesPage >= Math.ceil(deletedSalesTotal / 50)}
+                        className="px-3 py-1 text-sm bg-gray-100 rounded disabled:opacity-50"
+                      >
+                        Next
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Deleted Sale Details Modal */}
+      {showDeleteDetailsModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-3 z-[70]">
+          <div className="bg-white rounded-lg max-w-lg w-full max-h-[80vh] overflow-y-auto">
+            <div className="p-3 border-b sticky top-0 bg-white">
+              <div className="flex justify-between items-center">
+                <h3 className="text-lg font-bold text-black">Deleted Sale Details</h3>
+                <button
+                  onClick={() => setShowDeleteDetailsModal(null)}
+                  className="text-gray-500 hover:text-gray-700"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+            </div>
+            
+            <div className="p-3 space-y-3">
+              <div className="bg-gray-50 p-3 rounded-lg">
+                <h4 className="font-semibold text-sm mb-2">Sale Information</h4>
+                <div className="grid grid-cols-2 gap-2 text-sm">
+                  <div>
+                    <span className="text-gray-600">Original ID:</span>
+                    <span className="ml-1 font-medium">#{showDeleteDetailsModal.originalSaleId}</span>
+                  </div>
+                  <div>
+                    <span className="text-gray-600">Customer:</span>
+                    <span className="ml-1">{showDeleteDetailsModal.customerName}</span>
+                  </div>
+                  <div>
+                    <span className="text-gray-600">Phone:</span>
+                    <span className="ml-1">{showDeleteDetailsModal.customerPhone || "-"}</span>
+                  </div>
+                  <div>
+                    <span className="text-gray-600">Total:</span>
+                    <span className="ml-1 font-bold text-emerald-600">
+                      Ksh {formatCurrency(showDeleteDetailsModal.totalAmount)}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-gray-600">Original Date:</span>
+                    <span className="ml-1">{formatDate(showDeleteDetailsModal.saleDate)}</span>
+                  </div>
+                  <div>
+                    <span className="text-gray-600">Status at Deletion:</span>
+                    <span className={`ml-1 px-2 py-0.5 rounded text-xs ${
+                      showDeleteDetailsModal.statusAtDeletion === "PAID" ? "bg-green-100 text-green-800" :
+                      showDeleteDetailsModal.statusAtDeletion === "PARTIAL" ? "bg-orange-100 text-orange-800" :
+                      "bg-red-100 text-red-800"
+                    }`}>
+                      {showDeleteDetailsModal.statusAtDeletion}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="bg-red-50 p-3 rounded-lg">
+                <h4 className="font-semibold text-sm mb-2 text-red-800">Deletion Information</h4>
+                <div className="space-y-1 text-sm">
+                  <div>
+                    <span className="text-gray-600">Deleted By:</span>
+                    <span className="ml-1 font-medium text-red-700">
+                      {getUserDisplayName(showDeleteDetailsModal.deletedBy).name}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-gray-600">Deleted At:</span>
+                    <span className="ml-1">{formatDateTime(showDeleteDetailsModal.deletedAt)}</span>
+                  </div>
+                  <div>
+                    <span className="text-gray-600">Items Restocked:</span>
+                    <span className={`ml-1 font-medium ${showDeleteDetailsModal.restockedItems ? 'text-green-600' : 'text-red-600'}`}>
+                      {showDeleteDetailsModal.restockedItems ? "Yes" : "No"}
+                    </span>
+                  </div>
+                  {showDeleteDetailsModal.deletionReason && (
+                    <div>
+                      <span className="text-gray-600">Reason:</span>
+                      <div className="mt-1 p-2 bg-white rounded border text-gray-700">
+                        {showDeleteDetailsModal.deletionReason}
+                      </div>
+                    </div>
+                  )}
+                  {showDeleteDetailsModal.restoredAt && (
+                    <>
+                      <div>
+                        <span className="text-gray-600">Restored By:</span>
+                        <span className="ml-1 font-medium text-green-700">
+                          {getUserDisplayName(showDeleteDetailsModal.restoredBy).name}
+                        </span>
+                      </div>
+                      <div>
+                        <span className="text-gray-600">Restored At:</span>
+                        <span className="ml-1">{formatDateTime(showDeleteDetailsModal.restoredAt)}</span>
+                      </div>
+                    </>
+                  )}
+                </div>
+              </div>
+
+              <div className="bg-gray-50 p-3 rounded-lg">
+                <h4 className="font-semibold text-sm mb-2">Items Sold</h4>
+                <div className="text-sm space-y-1">
+                  {showDeleteDetailsModal.saleItemsSummary.split(', ').map((item, idx) => (
+                    <div key={idx} className="text-gray-700">• {item}</div>
+                  ))}
+                </div>
+              </div>
+
+              {showDeleteDetailsModal.paymentsSummary && (
+                <div className="bg-gray-50 p-3 rounded-lg">
+                  <h4 className="font-semibold text-sm mb-2">Payments</h4>
+                  <div className="text-sm space-y-1">
+                    {showDeleteDetailsModal.paymentsSummary.split(', ').map((payment, idx) => (
+                      <div key={idx} className="text-gray-700">• {payment}</div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Audit Log Modal */}
+      {showAuditModal && selectedSaleForAudit && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-3 z-[70]">
+          <div className="bg-white rounded-lg max-w-2xl w-full max-h-[80vh] overflow-y-auto">
+            <div className="p-3 border-b sticky top-0 bg-white">
+              <div className="flex justify-between items-center">
+                <h3 className="text-lg font-bold text-black flex items-center gap-2">
+                  <History size={20} />
+                  Audit History - Sale #{selectedSaleForAudit.id}
+                </h3>
+                <button
+                  onClick={() => {
+                    setShowAuditModal(false);
+                    setSelectedSaleForAudit(null);
+                    setAuditLogs([]);
+                  }}
+                  className="text-gray-500 hover:text-gray-700"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+            </div>
+            
+            <div className="p-3">
+              {auditLogsLoading ? (
+                <div className="text-center py-8 text-gray-500">Loading audit logs...</div>
+              ) : auditLogs.length === 0 ? (
+                <div className="text-center py-8 text-gray-500">No audit records found for this sale</div>
+              ) : (
+                <div className="space-y-3">
+                  {auditLogs.map((log) => (
+                    <div key={log.id} className="border rounded-lg p-3">
+                      <div className="flex justify-between items-start mb-2">
+                        <div>
+                          <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-bold ${
+                            log.action === "CREATE" ? "bg-green-100 text-green-800" :
+                            log.action === "UPDATE" ? "bg-blue-100 text-blue-800" :
+                            log.action === "DELETE" ? "bg-red-100 text-red-800" :
+                            "bg-purple-100 text-purple-800"
+                          }`}>
+                            {log.action}
+                          </span>
+                          <div className="text-xs text-gray-500 mt-1">
+                            {formatDateTime(log.changedAt)}
+                          </div>
+                        </div>
+                        <div className="text-xs text-right">
+                          <div className="font-medium text-gray-700">By: {getUserDisplayName(log.changedBy).name}</div>
+                          {log.ipAddress && <div className="text-gray-400">IP: {log.ipAddress}</div>}
+                        </div>
+                      </div>
+                      
+                      {log.fieldName && (
+                        <div className="text-sm mt-2">
+                          <div className="font-medium text-gray-700">Field: {log.fieldName}</div>
+                          <div className="grid grid-cols-2 gap-2 mt-1 text-xs">
+                            <div className="bg-red-50 p-1 rounded">
+                              <span className="text-red-600">Old: </span>
+                              <span className="text-gray-700">{log.oldValue || "-"}</span>
+                            </div>
+                            <div className="bg-green-50 p-1 rounded">
+                              <span className="text-green-600">New: </span>
+                              <span className="text-gray-700">{log.newValue || "-"}</span>
+                            </div>
+                          </div>
+                          {log.difference && (
+                            <div className="mt-1 text-xs text-blue-600">
+                              {log.difference}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                      
+                      {log.notes && (
+                        <div className="mt-2 text-xs bg-yellow-50 p-2 rounded">
+                          <span className="font-medium">Note:</span> {log.notes}
+                        </div>
+                      )}
+                      
+                      {log.snapshot && (
+                        <details className="mt-2">
+                          <summary className="text-xs text-gray-500 cursor-pointer">View Full Snapshot</summary>
+                          <pre className="mt-1 text-xs bg-gray-100 p-2 rounded overflow-x-auto">
+                            {JSON.stringify(log.snapshot, null, 2)}
+                          </pre>
+                        </details>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
         </div>

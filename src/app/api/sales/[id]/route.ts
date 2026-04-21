@@ -1,6 +1,210 @@
 import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 
+// Helper to normalize email
+function normalizeEmail(email: string): string {
+  if (!email) return '';
+  return email.trim().toLowerCase();
+}
+
+// Check if string is a valid email
+function isValidEmail(str: string): boolean {
+  if (!str) return false;
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  return emailRegex.test(str);
+}
+
+// ================== AUDIT LOG HELPER ==================
+async function createAuditLog(
+  saleId: number,
+  action: string,
+  changedBy: string,
+  changedByEmail: string | undefined,
+  ipAddress: string | undefined,
+  userAgent: string | undefined,
+  fieldName?: string,
+  oldValue?: string,
+  newValue?: string,
+  difference?: string,
+  snapshot?: any,
+  notes?: string
+) {
+  try {
+    await prisma.saleauditlog.create({
+      data: {
+        saleId,
+        action,
+        fieldName,
+        oldValue,
+        newValue,
+        difference,
+        changedBy,
+        changedByEmail,
+        ipAddress,
+        userAgent,
+        snapshot: snapshot ? JSON.parse(JSON.stringify(snapshot)) : undefined,
+        notes
+      }
+    });
+    console.log(`📝 Audit log created: ${action} on sale ${saleId} by ${changedBy}`);
+  } catch (error) {
+    console.error("❌ Failed to create audit log:", error);
+  }
+}
+
+// ================== SOFT DELETE HELPER ==================
+async function createDeletedSaleRecord(
+  sale: any,
+  deletedBy: string,
+  deletedByEmail: string | undefined,
+  deletionReason: string,
+  ipAddress: string | undefined,
+  restockedItems: boolean
+) {
+  try {
+    // Create summary of sale items
+    const saleItemsSummary = sale.saleitem?.map((item: any) => 
+      `${item.product?.name || `Product ${item.productId}`} (${item.quantity} units @ Ksh ${item.price})`
+    ).join(', ') || 'No items';
+    
+    // Create summary of payments
+    const paymentsSummary = sale.payment?.map((p: any) => 
+      `${p.method}: Ksh ${p.amount}${p.referenceId ? ` (Ref: ${p.referenceId})` : ''}`
+    ).join(', ') || 'No payments';
+    
+    // Calculate expiration date (7 days from now)
+    const expiresAt = new Date();
+    expiresAt.setDate(expiresAt.getDate() + 7);
+    
+    const deletedSale = await prisma.deletedsale.create({
+      data: {
+        originalSaleId: sale.id,
+        saleData: JSON.parse(JSON.stringify(sale)),
+        customerName: sale.customer?.name || 'Unknown Customer',
+        customerPhone: sale.customer?.phone || null,
+        customerId: sale.customerId,
+        totalAmount: sale.amount,
+        saleDate: sale.date,
+        statusAtDeletion: sale.status,
+        dueDate: sale.dueDate,
+        deletedBy,
+        deletedByEmail,
+        deletionReason,
+        ipAddress,
+        saleItemsSummary,
+        paymentsSummary,
+        restockedItems,
+        expiresAt
+      }
+    });
+    
+    console.log(`📦 Deleted sale record created: ${deletedSale.id} for original sale ${sale.id}, expires at ${expiresAt}`);
+    return deletedSale;
+  } catch (error) {
+    console.error("❌ Failed to create deleted sale record:", error);
+    throw error;
+  }
+}
+
+// Helper function to handle restocking items
+async function handleRestockItems(sale: any) {
+  try {
+    const productUpdates: { productId: number, quantity: number }[] = [];
+    
+    for (const saleItem of sale.saleitem) {
+      const product = saleItem.product;
+      
+      if (product) {
+        productUpdates.push({
+          productId: product.id,
+          quantity: saleItem.quantity
+        });
+      }
+    }
+    
+    for (const update of productUpdates) {
+      const existingStock = await prisma.stock.findFirst({
+        where: { productId: update.productId }
+      });
+      
+      if (existingStock) {
+        await prisma.stock.update({
+          where: { id: existingStock.id },
+          data: { 
+            quantity: existingStock.quantity + update.quantity,
+            updatedAt: new Date()
+          },
+        });
+        
+        if (existingStock.quantity + update.quantity > 0) {
+          await prisma.product.update({
+            where: { id: update.productId },
+            data: { 
+              inStock: true,
+              updatedAt: new Date()
+            }
+          });
+        }
+      } else {
+        const product = await prisma.product.findUnique({
+          where: { id: update.productId }
+        });
+        
+        if (product) {
+          await prisma.stock.create({
+            data: {
+              name: product.name,
+              quantity: update.quantity,
+              costPrice: product.productionCost || product.price * 0.7,
+              sellingPrice: product.price,
+              productId: update.productId,
+              notes: `Restocked from deleted sale #${sale.id}`,
+              createdAt: new Date(),
+              updatedAt: new Date()
+            },
+          });
+          
+          if (update.quantity > 0) {
+            await prisma.product.update({
+              where: { id: update.productId },
+              data: { 
+                inStock: true,
+                updatedAt: new Date()
+              }
+            });
+          }
+        }
+      }
+    }
+  } catch (error) {
+    console.error("❌ Error during restocking:", error);
+  }
+}
+
+// Helper to compare objects for audit log
+function getObjectDifferences(oldObj: any, newObj: any): { fieldName: string; oldValue: string; newValue: string; difference: string }[] {
+  const differences: { fieldName: string; oldValue: string; newValue: string; difference: string }[] = [];
+  
+  // Fields to track for sale
+  const fieldsToTrack = ['amount', 'status', 'dueDate', 'paymentMethod'];
+  
+  for (const field of fieldsToTrack) {
+    const oldVal = oldObj[field];
+    const newVal = newObj[field];
+    
+    if (JSON.stringify(oldVal) !== JSON.stringify(newVal)) {
+      differences.push({
+        fieldName: field,
+        oldValue: String(oldVal ?? 'null'),
+        newValue: String(newVal ?? 'null'),
+        difference: `Changed from ${oldVal ?? 'null'} to ${newVal ?? 'null'}`
+      });
+    }
+  }
+  
+  return differences;
+}
+
 // ---------------- GET /api/sales/[id] ----------------
 export async function GET(
   req: NextRequest,
@@ -15,6 +219,10 @@ export async function GET(
         customer: true,
         saleitem: { include: { product: true } },
         payment: true,
+        saleauditlog: {
+          orderBy: { changedAt: 'desc' },
+          take: 50 // Limit audit logs to last 50 entries
+        }
       },
     });
 
@@ -40,8 +248,15 @@ export async function PUT(
   try {
     const { id } = await params;
     const body = await req.json();
+    
+    // Extract audit info from request
+    const changedBy = body.updatedBy || body.changedBy || "SYSTEM";
+    const changedByEmail = body.updatedByEmail || body.changedByEmail;
+    const ipAddress = body.ipAddress || req.headers.get('x-forwarded-for') || req.headers.get('x-real-ip') || undefined;
+    const userAgent = body.userAgent || req.headers.get('user-agent') || undefined;
 
-    const sale = await prisma.sale.findUnique({
+    // Get original sale before update for audit comparison
+    const originalSale = await prisma.sale.findUnique({
       where: { id: Number(id) },
       include: {
         payment: true,
@@ -49,13 +264,34 @@ export async function PUT(
       },
     });
 
-    if (!sale) {
+    if (!originalSale) {
       return NextResponse.json({ error: "Sale not found" }, { status: 404 });
     }
 
+    // Create a snapshot of the original state
+    const originalSnapshot = {
+      amount: originalSale.amount,
+      status: originalSale.status,
+      dueDate: originalSale.dueDate,
+      paymentMethod: originalSale.paymentMethod,
+      saleItems: originalSale.saleitem.map(item => ({
+        productId: item.productId,
+        productName: item.product?.name,
+        quantity: item.quantity,
+        price: item.price,
+        total: item.total
+      })),
+      payments: originalSale.payment.map(p => ({
+        id: p.id,
+        amount: p.amount,
+        method: p.method,
+        referenceId: p.referenceId,
+        status: p.status
+      }))
+    };
+
     // ------------------ Comprehensive Sale Items Update ------------------
     if (body.saleItems && Array.isArray(body.saleItems)) {
-      // Get current sale items to identify which ones to delete
       const currentSaleItems = await prisma.saleitem.findMany({
         where: { saleId: Number(id) }
       });
@@ -64,12 +300,10 @@ export async function PUT(
         .map((item: any) => item.id)
         .filter((id: any) => id !== undefined);
 
-      // Identify items to delete (present in DB but not in incoming data)
       const itemsToDelete = currentSaleItems.filter(
         (currentItem) => !incomingItemIds.includes(currentItem.id)
       );
 
-      // Delete removed items
       if (itemsToDelete.length > 0) {
         await prisma.saleitem.deleteMany({
           where: {
@@ -78,15 +312,12 @@ export async function PUT(
         });
       }
 
-      // Process each incoming sale item
       for (const item of body.saleItems) {
-        // Validate required fields
         if (!item.productId || item.quantity === undefined || item.price === undefined) {
           console.warn("Skipping invalid sale item:", item);
           continue;
         }
 
-        // Verify product exists
         const product = await prisma.product.findUnique({
           where: { id: item.productId }
         });
@@ -96,11 +327,9 @@ export async function PUT(
           continue;
         }
 
-        // Calculate item total
         const itemTotal = item.quantity * item.price;
 
         if (item.id) {
-          // Update existing sale item
           await prisma.saleitem.update({
             where: { id: item.id },
             data: {
@@ -111,7 +340,6 @@ export async function PUT(
             },
           });
         } else {
-          // Create new sale item
           await prisma.saleitem.create({
             data: {
               saleId: Number(id),
@@ -126,9 +354,13 @@ export async function PUT(
     }
 
     // ------------------ Update existing payments ------------------
+    const paymentChanges: any[] = [];
+    
     if (body.payments && Array.isArray(body.payments)) {
       for (const p of body.payments) {
         if (!p.id) continue;
+        
+        const originalPayment = originalSale.payment.find(op => op.id === p.id);
         
         await prisma.payment.update({
           where: { id: p.id },
@@ -140,13 +372,23 @@ export async function PUT(
             status: p.method === "CHECK" && !p.checkDepositDate ? "PENDING" : "CLEARED",
           },
         });
+        
+        // Track payment changes for audit
+        if (originalPayment && originalPayment.amount !== Number(p.amount)) {
+          paymentChanges.push({
+            fieldName: `payment_${p.id}_amount`,
+            oldValue: String(originalPayment.amount),
+            newValue: String(p.amount),
+            difference: `Payment amount changed from ${originalPayment.amount} to ${p.amount}`
+          });
+        }
       }
     }
 
     // ------------------ Add new payments ------------------
+    let newPaymentsCount = 0;
     if (body.newPayments && Array.isArray(body.newPayments)) {
       for (const np of body.newPayments) {
-        // Validate payment data
         if (!np.amount || !np.method) {
           console.warn("Skipping invalid payment:", np);
           continue;
@@ -163,11 +405,11 @@ export async function PUT(
             paidAt: new Date(),
           },
         });
+        newPaymentsCount++;
       }
     }
 
     // ------------------ Recalculate totals & status ------------------
-    // Recalculate total sale amount from sale items
     const updatedSaleItems = await prisma.saleitem.findMany({
       where: { saleId: Number(id) },
       include: { product: true }
@@ -198,11 +440,11 @@ export async function PUT(
       where: { id: Number(id) },
       data: {
         amount: recalculatedAmount,
-        dueDate: body.dueDate ? new Date(body.dueDate) : sale.dueDate,
-        paymentMethod: body.paymentMethod ?? sale.paymentMethod,
-        checkDepositDate: body.checkDepositDate ? new Date(body.checkDepositDate) : sale.checkDepositDate,
+        dueDate: body.dueDate ? new Date(body.dueDate) : originalSale.dueDate,
+        paymentMethod: body.paymentMethod ?? originalSale.paymentMethod,
+        checkDepositDate: body.checkDepositDate ? new Date(body.checkDepositDate) : originalSale.checkDepositDate,
         status,
-        updatedBy: body.updatedBy ?? null,
+        updatedBy: changedBy,
       },
       include: {
         customer: true,
@@ -210,6 +452,79 @@ export async function PUT(
         payment: true,
       },
     });
+
+    // Create snapshot of the new state
+    const newSnapshot = {
+      amount: updatedSale.amount,
+      status: updatedSale.status,
+      dueDate: updatedSale.dueDate,
+      paymentMethod: updatedSale.paymentMethod,
+      saleItems: updatedSale.saleitem.map(item => ({
+        productId: item.productId,
+        productName: item.product?.name,
+        quantity: item.quantity,
+        price: item.price,
+        total: item.total
+      })),
+      payments: updatedSale.payment.map(p => ({
+        id: p.id,
+        amount: p.amount,
+        method: p.method,
+        referenceId: p.referenceId,
+        status: p.status
+      }))
+    };
+
+    // Create audit log for the update
+    const differences = getObjectDifferences(originalSnapshot, newSnapshot);
+    
+    // Add payment changes
+    differences.push(...paymentChanges);
+    
+    if (newPaymentsCount > 0) {
+      differences.push({
+        fieldName: 'new_payments',
+        oldValue: '0',
+        newValue: String(newPaymentsCount),
+        difference: `Added ${newPaymentsCount} new payment(s)`
+      });
+    }
+    
+    if (differences.length > 0) {
+      // Log each individual change
+      for (const diff of differences) {
+        await createAuditLog(
+          Number(id),
+          "UPDATE",
+          changedBy,
+          changedByEmail,
+          ipAddress,
+          userAgent,
+          diff.fieldName,
+          diff.oldValue,
+          diff.newValue,
+          diff.difference,
+          { before: originalSnapshot, after: newSnapshot },
+          `Sale updated: ${diff.difference}`
+        );
+      }
+    } else {
+      // Log a generic update if no specific changes were tracked
+      await createAuditLog(
+        Number(id),
+        "UPDATE",
+        changedBy,
+        changedByEmail,
+        ipAddress,
+        userAgent,
+        undefined,
+        undefined,
+        undefined,
+        "Sale record updated",
+        { before: originalSnapshot, after: newSnapshot },
+        "Sale updated with changes to items or payments"
+      );
+    }
 
     return NextResponse.json({ 
       ...updatedSale, 
@@ -233,21 +548,30 @@ export async function DELETE(
   try {
     const { id } = await params;
     const body = await req.json();
-    const { restockItems = false } = body; // Default to false if not provided
+    const { 
+      restockItems = false, 
+      deletedBy, 
+      deletedByEmail, 
+      deletionReason,
+      ipAddress,
+      userAgent 
+    } = body;
 
     // First, get the sale with its items to know what products to restock
     const sale = await prisma.sale.findUnique({
       where: { id: Number(id) },
       include: {
+        customer: true,
         saleitem: { 
           include: { 
             product: {
               include: {
-                stock: true // Include stock records for the product
+                stock: true
               }
             } 
           } 
         },
+        payment: true,
       },
     });
 
@@ -255,12 +579,49 @@ export async function DELETE(
       return NextResponse.json({ error: "Sale not found" }, { status: 404 });
     }
 
-    // Separate the restocking logic from the deletion logic
+    // Validate deletion reason
+    if (!deletionReason || deletionReason.trim() === "") {
+      return NextResponse.json({ 
+        error: "Deletion reason is required for audit purposes" 
+      }, { status: 400 });
+    }
+
+    const deletingUser = deletedBy || "SYSTEM";
+    const deletingUserEmail = deletedByEmail;
+
+    // Create audit log before deletion
+   // Create audit log before deletion
+await createAuditLog(
+  Number(id),
+  "DELETE",
+  deletingUser,
+  deletingUserEmail,
+  ipAddress || req.headers.get('x-forwarded-for') || undefined,
+  userAgent || req.headers.get('user-agent') || undefined,
+  undefined,
+  undefined,
+  undefined,
+  `Sale deleted. Reason: ${deletionReason}. Restocked: ${restockItems}`, // Changed from restockedItems to restockItems
+  { saleData: sale, restockedItems: restockItems, deletionReason }, // Also fix here
+  `Sale deleted with reason: ${deletionReason}`
+);
+
+    // Create deleted sale record in archive
+    await createDeletedSaleRecord(
+      sale,
+      deletingUser,
+      deletingUserEmail,
+      deletionReason,
+      ipAddress || req.headers.get('x-forwarded-for') || undefined,
+      restockItems
+    );
+
+    // Handle restocking if requested
     if (restockItems) {
       await handleRestockItems(sale);
     }
 
-    // Use transaction only for deletion operations (reduced workload)
+    // Use transaction for deletion operations
     const result = await prisma.$transaction(async (tx) => {
       // Batch delete related records
       await Promise.all([
@@ -291,13 +652,19 @@ export async function DELETE(
 
       return deletedSale;
     }, {
-      timeout: 10000, // Increase transaction timeout to 10 seconds
+      timeout: 10000,
     });
 
     return NextResponse.json({ 
-      message: `Sale deleted successfully${restockItems ? ' with items restocked' : ''}`, 
+      message: `Sale deleted successfully${restockItems ? ' with items restocked' : ''}. Record saved in archive for 7 days.`, 
       sale: result,
-      restockedItems: restockItems ? sale.saleitem.length : 0
+      restockedItems: restockItems ? sale.saleitem.length : 0,
+      auditInfo: {
+        deletedBy: deletingUser,
+        deletionReason,
+        archived: true,
+        expiresIn: "7 days"
+      }
     });
   } catch (error: any) {
     console.error("❌ Delete Sale Error:", error);
@@ -305,87 +672,5 @@ export async function DELETE(
       { error: error.message || "Failed to delete sale" },
       { status: 500 }
     );
-  }
-}
-
-// Helper function to handle restocking items (outside transaction)
-async function handleRestockItems(sale: any) {
-  try {
-    const productUpdates: { productId: number, quantity: number }[] = [];
-    
-    // First, collect all product updates
-    for (const saleItem of sale.saleitem) {
-      const product = saleItem.product;
-      
-      if (product) {
-        productUpdates.push({
-          productId: product.id,
-          quantity: saleItem.quantity
-        });
-      }
-    }
-    
-    // Process stock updates in batches
-    for (const update of productUpdates) {
-      const existingStock = await prisma.stock.findFirst({
-        where: { productId: update.productId }
-      });
-      
-      if (existingStock) {
-        // Update existing stock
-        await prisma.stock.update({
-          where: { id: existingStock.id },
-          data: { 
-            quantity: existingStock.quantity + update.quantity,
-            updatedAt: new Date()
-          },
-        });
-        
-        // Update product inStock status if needed
-        if (existingStock.quantity + update.quantity > 0) {
-          await prisma.product.update({
-            where: { id: update.productId },
-            data: { 
-              inStock: true,
-              updatedAt: new Date()
-            }
-          });
-        }
-      } else {
-        // Create new stock record
-        const product = await prisma.product.findUnique({
-          where: { id: update.productId }
-        });
-        
-        if (product) {
-          await prisma.stock.create({
-            data: {
-              name: product.name,
-              quantity: update.quantity,
-              costPrice: product.productionCost || product.price * 0.7,
-              sellingPrice: product.price,
-              productId: update.productId,
-              notes: `Restocked from deleted sale #${sale.id}`,
-              createdAt: new Date(),
-              updatedAt: new Date()
-            },
-          });
-          
-          // Update product inStock status
-          if (update.quantity > 0) {
-            await prisma.product.update({
-              where: { id: update.productId },
-              data: { 
-                inStock: true,
-                updatedAt: new Date()
-              }
-            });
-          }
-        }
-      }
-    }
-  } catch (error) {
-    console.error("❌ Error during restocking:", error);
-    // Don't throw here, just log the error and continue with deletion
   }
 }

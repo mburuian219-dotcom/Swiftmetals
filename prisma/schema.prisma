@@ -31,6 +31,7 @@ model customer {
   order             order[]
   sale              sale[]
   smsreminder       smsreminder[]
+  deletedsale       deletedsale[]        // Added relation
 }
 
 model expense {
@@ -255,12 +256,19 @@ model sale {
   paymentMethod    String    @default("CASH")
   remindersSent    Int       @default(0)
 
+  // Soft delete fields
+  isDeleted        Boolean   @default(false)
+  deletedAt        DateTime?
+  deletedBy        String?
+  deletionReason   String?
+
   invoice          invoice[]
   payment          payment[]
   paymentschedule  paymentschedule[]
   saleitem         saleitem[]
   smsreminder      smsreminder[]
   cashledger       cashledger[]
+  auditLogs        saleauditlog[]      // Added relation for audit logs
 
   customer         customer @relation(fields: [customerId], references: [id])
 
@@ -277,6 +285,8 @@ model sale {
   @@index([dueDate])
   @@index([paymentMethod])
   @@index([status])
+  @@index([isDeleted])      // Added index for soft delete queries
+  @@index([deletedAt])
 }
 
 model saleitem {
@@ -341,7 +351,6 @@ model staffInventory {
   @@index([productId])
 }
 
-
 model smsreminder {
   id          Int       @id @default(autoincrement())
   saleId      Int
@@ -369,6 +378,86 @@ model systemsetting {
   updatedAt   DateTime
 
   @@index([key])
+}
+
+// ==================== NEW MODELS FOR AUDIT & SOFT DELETE ====================
+
+// 1. Audit Log for tracking all changes to sales
+model saleauditlog {
+  id              Int      @id @default(autoincrement())
+  saleId          Int
+  action          String   // "CREATE", "UPDATE", "DELETE", "RESTORE"
+  fieldName       String?  // Which field was changed (for updates)
+  oldValue        String?  // JSON string of old value
+  newValue        String?  // JSON string of new value
+  difference      String?  // Human readable description of change
+  changedBy       String   // User email or ID who made the change
+  changedByEmail  String?
+  changedAt       DateTime @default(now())
+  ipAddress       String?
+  userAgent       String?
+  
+  // For bulk operations or additional context
+  snapshot        Json?    // Full before/after snapshot
+  notes           String?
+  
+  // Relations
+  sale            sale     @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  
+  @@index([saleId])
+  @@index([action])
+  @@index([changedAt])
+  @@index([changedBy])
+}
+
+// 2. Deleted Sales Archive (soft delete storage)
+model deletedsale {
+  id                Int      @id @default(autoincrement())
+  originalSaleId    Int      @unique  // Original sale ID before deletion
+  saleData          Json              // Complete sale data as JSON
+  
+  // Customer info at time of deletion (denormalized for search)
+  customerName      String
+  customerPhone     String?
+  customerId        Int?
+  
+  // Sale details
+  totalAmount       Float
+  saleDate          DateTime
+  statusAtDeletion  String   // "PAID", "PARTIAL", "UNPAID"
+  dueDate           DateTime?
+  
+  // Deletion metadata
+  deletedAt         DateTime @default(now())
+  deletedBy         String
+  deletedByEmail    String?
+  deletionReason    String?
+  ipAddress         String?
+  
+  // Restore tracking
+  restoredAt        DateTime?
+  restoredBy        String?
+  restoredByEmail   String?
+  
+  // Additional data
+  saleItemsSummary  String   // Human readable summary of items
+  paymentsSummary   String?  // Human readable summary of payments
+  restockedItems    Boolean  @default(false)  // Whether items were restocked
+  
+  // For automatic cleanup (7 days after deletion)
+  expiresAt         DateTime
+  
+  // Relations - link back to original customer (optional, since customer might be deleted)
+  customer          customer? @relation(fields: [customerId], references: [id])
+  
+  @@index([deletedAt])
+  @@index([expiresAt])
+  @@index([originalSaleId])
+  @@index([customerName])
+  @@index([deletedBy])
+  @@index([statusAtDeletion])
+  @@index([customerId])
+  @@index([restoredAt])
 }
 
 enum payment_status {

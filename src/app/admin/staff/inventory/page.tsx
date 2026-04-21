@@ -50,46 +50,8 @@ import {
   SortDesc,
   FilterX,
   Zap,
-  Battery,
-  BatteryCharging,
-  BatteryFull,
-  Thermometer,
-  Wifi,
-  Bluetooth,
-  Cpu,
-  HardDrive,
-  MemoryStick,
-  Phone as PhoneIcon,
-  Laptop,
-  Headphones,
-  Speaker,
-  Keyboard,
-  Mouse,
-  Monitor as MonitorIcon,
-  Printer,
-  Scan,
-  Server,
-  Router,
-  Camera,
-  Video,
-  Mic,
-  Gamepad,
-  Watch,
-  Tablet as TabletIcon,
-  Book,
-  BookOpen,
-  BookMarked,
-  BookCopy,
-  BookCheck,
-  BookX,
-  BookPlus,
-  BookMinus,
-  BookOpenCheck,
-  BookKey,
-  BookLock,
-  BookUp,
-  BookDown,
-  BookHeart,
+  PackagePlus,
+  PackageMinus,
   TrendingUp,
   Smartphone,
   Tablet,
@@ -107,8 +69,6 @@ import {
   PackageCheck,
   PackageX,
   PackageSearch,
-  PackagePlus,
-  PackageMinus,
   ChevronRight,
   ChevronLeft,
   Maximize2,
@@ -249,6 +209,25 @@ interface ReturnForm {
   notes?: string;
 }
 
+interface RestockForm {
+  productId: number;
+  quantity: string;
+  costPrice: string;
+  supplier?: string;
+  notes?: string;
+  productName?: string;
+  paymentSource: string;
+  creditorId: string;
+}
+
+interface Creditor {
+  id: number;
+  name: string;
+  phone?: string;
+  email?: string;
+  totalOwed: number;
+}
+
 interface AssignmentStats {
   totalAssignments: number;
   totalItemsGiven: number;
@@ -296,7 +275,7 @@ interface BatchAssignmentItem {
 // Helper: Get current week dates (Monday to Sunday)
 const getCurrentWeekDates = () => {
   const now = new Date();
-  const dayOfWeek = now.getDay(); // 0 = Sunday, 1 = Monday, etc.
+  const dayOfWeek = now.getDay();
   const diffToMonday = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
   
   const monday = new Date(now);
@@ -335,491 +314,7 @@ const isCurrentWeek = (startDate: string | null, endDate: string | null) => {
   return now >= start && now <= end;
 };
 
-// Enhanced Product Search Modal Component with Bulk Selection
-const ProductSearchModal: React.FC<ProductSearchModalProps> = ({ 
-  isOpen, 
-  onClose, 
-  onSelect, 
-  onSelectBulk,
-  products,
-  excludedIds = [],
-  bulkMode = true
-}) => {
-  const [searchTerm, setSearchTerm] = useState("");
-  const [selectedCategory, setSelectedCategory] = useState<string>("all");
-  const [sortBy, setSortBy] = useState<'name' | 'price' | 'stock' | 'category'>('name');
-  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
-  const [filteredProducts, setFilteredProducts] = useState<Product[]>([]);
-  const [selectedProducts, setSelectedProducts] = useState<Product[]>([]);
-  const [bulkQuantity, setBulkQuantity] = useState("1");
-  const [selectAll, setSelectAll] = useState(false);
-  const searchInputRef = useRef<HTMLInputElement>(null);
-
-  const categories = useMemo(() => {
-    const cats = new Set(products.map(p => p.category).filter(Boolean) as string[]);
-    return Array.from(cats);
-  }, [products]);
-
-  useEffect(() => {
-    if (isOpen && searchInputRef.current) {
-      setTimeout(() => searchInputRef.current?.focus(), 100);
-    }
-    // Reset on open
-    setSelectedProducts([]);
-    setSelectAll(false);
-  }, [isOpen]);
-
-  useEffect(() => {
-    let result = products.filter(product => 
-      !excludedIds.includes(product.id)
-    );
-
-    // Apply search filter
-    if (searchTerm.trim()) {
-      const term = searchTerm.toLowerCase();
-      result = result.filter(product =>
-        product.name.toLowerCase().includes(term) ||
-        product.description?.toLowerCase().includes(term) ||
-        product.sku?.toLowerCase().includes(term) ||
-        product.category?.toLowerCase().includes(term) ||
-        product.brand?.toLowerCase().includes(term) ||
-        product.model?.toLowerCase().includes(term)
-      );
-    }
-
-    // Apply category filter
-    if (selectedCategory !== "all") {
-      result = result.filter(product => product.category === selectedCategory);
-    }
-
-    // Apply sorting
-    result.sort((a, b) => {
-      let aVal: any, bVal: any;
-      
-      switch(sortBy) {
-        case 'name':
-          aVal = a.name.toLowerCase();
-          bVal = b.name.toLowerCase();
-          break;
-        case 'price':
-          aVal = a.price;
-          bVal = b.price;
-          break;
-        case 'stock':
-          aVal = a.stockQuantity || 0;
-          bVal = b.stockQuantity || 0;
-          break;
-        case 'category':
-          aVal = a.category?.toLowerCase() || '';
-          bVal = b.category?.toLowerCase() || '';
-          break;
-        default:
-          aVal = a.name.toLowerCase();
-          bVal = b.name.toLowerCase();
-      }
-
-      if (aVal < bVal) return sortOrder === 'asc' ? -1 : 1;
-      if (aVal > bVal) return sortOrder === 'asc' ? 1 : -1;
-      return 0;
-    });
-
-    setFilteredProducts(result);
-  }, [searchTerm, selectedCategory, sortBy, sortOrder, products, excludedIds]);
-
-  const getProductIcon = (category?: string) => {
-    if (!category) return <Package className="w-4 h-4" />;
-    
-    const cat = category.toLowerCase();
-    if (cat.includes('phone') || cat.includes('mobile')) return <SmartphoneIcon className="w-4 h-4" />;
-    if (cat.includes('laptop') || cat.includes('computer')) return <LaptopIcon className="w-4 h-4" />;
-    if (cat.includes('tablet')) return <TabletIcon2 className="w-4 h-4" />;
-    if (cat.includes('monitor') || cat.includes('screen')) return <Monitor className="w-4 h-4" />;
-    if (cat.includes('headphone') || cat.includes('earphone')) return <HeadphonesIcon className="w-4 h-4" />;
-    if (cat.includes('speaker')) return <SpeakerIcon className="w-4 h-4" />;
-    if (cat.includes('keyboard')) return <KeyboardIcon className="w-4 h-4" />;
-    if (cat.includes('mouse')) return <MouseIcon className="w-4 h-4" />;
-    if (cat.includes('printer')) return <PrinterIcon className="w-4 h-4" />;
-    if (cat.includes('camera')) return <CameraIcon className="w-4 h-4" />;
-    if (cat.includes('book')) return <Book className="w-4 h-4" />;
-    return <Package className="w-4 h-4" />;
-  };
-
-  const handleProductSelect = (product: Product) => {
-    if (selectedProducts.some(p => p.id === product.id)) {
-      setSelectedProducts(selectedProducts.filter(p => p.id !== product.id));
-    } else {
-      setSelectedProducts([...selectedProducts, product]);
-    }
-  };
-
-  const toggleSelectAll = () => {
-    if (selectAll) {
-      setSelectedProducts([]);
-    } else {
-      setSelectedProducts(filteredProducts);
-    }
-    setSelectAll(!selectAll);
-  };
-
-  const handleBulkAdd = () => {
-    if (bulkMode && onSelectBulk) {
-      onSelectBulk(selectedProducts);
-    } else {
-      selectedProducts.forEach(product => onSelect(product));
-    }
-    setSelectedProducts([]);
-    setSelectAll(false);
-    onClose();
-  };
-
-  const handleAddWithQuantity = () => {
-    if (bulkMode && onSelectBulk) {
-      const productsWithDefaultQuantity = selectedProducts.map(product => product);
-      onSelectBulk(productsWithDefaultQuantity);
-    }
-    setSelectedProducts([]);
-    setSelectAll(false);
-    onClose();
-  };
-
-  if (!isOpen) return null;
-
-  return (
-    <div className="fixed inset-0 bg-black/70 flex items-center justify-center p-2 md:p-4 z-[100]">
-      <div className="bg-white rounded-2xl w-full max-w-5xl shadow-2xl max-h-[90vh] flex flex-col">
-        {/* Header */}
-        <div className="sticky top-0 bg-gradient-to-r from-blue-600 to-purple-600 text-white p-4 md:p-5 rounded-t-2xl">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <div className="p-2 bg-white/20 rounded-lg">
-                <Search className="w-5 h-5 md:w-6 md:h-6" />
-              </div>
-              <div>
-                <h2 className="text-xl md:text-2xl font-bold">Select Products for Weekly Assignment</h2>
-                <p className="text-blue-100 text-sm">
-                  {selectedProducts.length} product{selectedProducts.length !== 1 ? 's' : ''} selected
-                  {bulkMode && " • All items will be added with quantity 1 by default"}
-                </p>
-              </div>
-            </div>
-            <button
-              onClick={onClose}
-              className="p-2 hover:bg-white/20 rounded-lg transition-colors"
-            >
-              <X className="w-5 h-5 md:w-6 md:h-6" />
-            </button>
-          </div>
-        </div>
-
-        {/* Bulk Controls */}
-        {bulkMode && selectedProducts.length > 0 && (
-          <div className="bg-blue-50 border-b border-blue-200 p-3">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-4">
-                <div className="flex items-center gap-2">
-                  <span className="text-sm font-medium text-blue-800">
-                    {selectedProducts.length} products selected
-                  </span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <span className="text-sm text-blue-700">Default quantity:</span>
-                  <div className="flex items-center gap-1">
-                    <button
-                      onClick={() => setBulkQuantity(prev => Math.max(1, parseInt(prev) - 1).toString())}
-                      className="w-6 h-6 flex items-center justify-center bg-white border border-blue-300 rounded text-blue-700 hover:bg-blue-50"
-                    >
-                      -
-                    </button>
-                    <input
-                      type="number"
-                      min="1"
-                      max="100"
-                      value={bulkQuantity}
-                      onChange={(e) => setBulkQuantity(e.target.value)}
-                      className="w-16 px-2 py-1 text-center border border-blue-300 rounded text-sm text-blue-800"
-                    />
-                    <button
-                      onClick={() => setBulkQuantity(prev => (parseInt(prev) + 1).toString())}
-                      className="w-6 h-6 flex items-center justify-center bg-white border border-blue-300 rounded text-blue-700 hover:bg-blue-50"
-                    >
-                      +
-                    </button>
-                  </div>
-                </div>
-              </div>
-              <button
-                onClick={toggleSelectAll}
-                className="flex items-center gap-2 px-3 py-1.5 bg-white border border-blue-300 text-blue-700 rounded-lg hover:bg-blue-50 text-sm"
-              >
-                {selectAll ? 'Deselect All' : 'Select All'}
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* Search Bar */}
-        <div className="p-4 border-b border-slate-200 bg-white">
-          <div className="relative">
-            <Search className="absolute left-4 top-1/2 transform -translate-y-1/2 w-5 h-5 text-slate-400" />
-            <input
-              ref={searchInputRef}
-              type="text"
-              placeholder="Search by name, SKU, category, brand, or description..."
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              className="w-full pl-12 pr-4 py-3 border-2 border-slate-300 rounded-xl focus:border-blue-500 focus:ring-2 focus:ring-blue-200 text-base placeholder-slate-500"
-              autoFocus
-            />
-          </div>
-
-          {/* Filters */}
-          <div className="flex flex-wrap items-center gap-3 mt-3">
-            <div className="flex items-center gap-2">
-              <Filter className="w-4 h-4 text-slate-600" />
-              <select
-                value={selectedCategory}
-                onChange={(e) => setSelectedCategory(e.target.value)}
-                className="px-3 py-1.5 border border-slate-300 rounded-lg bg-white text-sm text-slate-800"
-              >
-                <option value="all">All Categories</option>
-                {categories.map(category => (
-                  <option key={category} value={category}>{category}</option>
-                ))}
-              </select>
-            </div>
-
-            <div className="flex items-center gap-2">
-              {sortBy === 'name' && <SortAsc className="w-4 h-4 text-slate-600" />}
-              {sortBy === 'price' && <DollarSign className="w-4 h-4 text-slate-600" />}
-              {sortBy === 'stock' && <Package className="w-4 h-4 text-slate-600" />}
-              <select
-                value={sortBy}
-                onChange={(e) => setSortBy(e.target.value as any)}
-                className="px-3 py-1.5 border border-slate-300 rounded-lg bg-white text-sm text-slate-800"
-              >
-                <option value="name">Sort by Name</option>
-                <option value="price">Sort by Price</option>
-                <option value="stock">Sort by Stock</option>
-                <option value="category">Sort by Category</option>
-              </select>
-            </div>
-
-            <button
-              onClick={() => setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc')}
-              className="p-1.5 border border-slate-300 rounded-lg hover:bg-slate-50"
-            >
-              {sortOrder === 'asc' ? (
-                <SortAsc className="w-4 h-4 text-slate-800" />
-              ) : (
-                <SortDesc className="w-4 h-4 text-slate-800" />
-              )}
-            </button>
-
-            {(searchTerm || selectedCategory !== 'all') && (
-              <button
-                onClick={() => {
-                  setSearchTerm("");
-                  setSelectedCategory("all");
-                }}
-                className="flex items-center gap-1 px-3 py-1.5 border border-red-300 text-red-700 rounded-lg hover:bg-red-50 text-sm"
-              >
-                <FilterX className="w-4 h-4" />
-                Clear Filters
-              </button>
-            )}
-          </div>
-        </div>
-
-        {/* Products Grid */}
-        <div className="flex-1 overflow-y-auto p-4">
-          {filteredProducts.length === 0 ? (
-            <div className="text-center py-12">
-              <Package className="w-16 h-16 text-slate-300 mx-auto mb-4" />
-              <h3 className="text-lg font-semibold text-slate-900 mb-2">No products found</h3>
-              <p className="text-slate-700 mb-4">Try a different search term or category</p>
-              {searchTerm && (
-                <button
-                  onClick={() => setSearchTerm("")}
-                  className="text-blue-600 hover:text-blue-800 font-medium"
-                >
-                  Clear search
-                </button>
-              )}
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {filteredProducts.map(product => {
-                const isSelected = selectedProducts.some(p => p.id === product.id);
-                return (
-                  <div
-                    key={product.id}
-                    onClick={() => handleProductSelect(product)}
-                    className={`group cursor-pointer border-2 rounded-xl p-4 transition-all duration-200 ${
-                      isSelected 
-                        ? 'border-blue-500 bg-blue-50 shadow-lg' 
-                        : 'border-slate-200 hover:border-blue-500 hover:shadow-lg bg-white'
-                    }`}
-                  >
-                    <div className="flex items-start gap-3 mb-3">
-                      <div className="flex-shrink-0 relative">
-                        <div className={`w-12 h-12 rounded-lg flex items-center justify-center ${
-                          isSelected ? 'bg-gradient-to-br from-blue-200 to-blue-300' : 'bg-gradient-to-br from-blue-100 to-blue-200'
-                        }`}>
-                          {getProductIcon(product.category)}
-                        </div>
-                        {isSelected && (
-                          <div className="absolute -top-2 -right-2 w-6 h-6 bg-blue-500 rounded-full flex items-center justify-center">
-                            <Check className="w-3 h-3 text-white" />
-                          </div>
-                        )}
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <h4 className={`font-bold text-sm truncate ${
-                          isSelected ? 'text-blue-800' : 'text-slate-900 group-hover:text-blue-700'
-                        }`}>
-                          {product.name}
-                        </h4>
-                        {product.category && (
-                          <div className="inline-flex items-center gap-1 px-2 py-0.5 bg-slate-100 rounded text-xs text-slate-700 mt-1">
-                            {product.category}
-                          </div>
-                        )}
-                        {product.sku && (
-                          <div className="text-xs text-slate-600 font-mono mt-1">
-                            SKU: {product.sku}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-
-                    <div className="space-y-2">
-                      <div className="flex items-center justify-between">
-                        <span className="text-slate-700 text-sm">Price:</span>
-                        <span className="font-bold text-green-700">
-                          KES {product.price.toLocaleString()}
-                        </span>
-                      </div>
-                      
-                      <div className="flex items-center justify-between">
-                        <span className="text-slate-700 text-sm">Stock:</span>
-                        <div className="flex items-center gap-2">
-                          <span className={`font-bold ${
-                            product.stockQuantity > 10 ? 'text-green-700' : 
-                            product.stockQuantity > 0 ? 'text-orange-700' : 'text-red-700'
-                          }`}>
-                            {product.stockQuantity || 0}
-                          </span>
-                          <div className={`w-2 h-2 rounded-full ${
-                            product.stockQuantity > 10 ? 'bg-green-600' : 
-                            product.stockQuantity > 0 ? 'bg-orange-600' : 'bg-red-600'
-                          }`}></div>
-                        </div>
-                      </div>
-
-                      {product.brand && (
-                        <div className="flex items-center justify-between">
-                          <span className="text-slate-700 text-sm">Brand:</span>
-                          <span className="font-medium text-slate-800">{product.brand}</span>
-                        </div>
-                      )}
-                    </div>
-
-                    {bulkMode && (
-                      <div className="mt-3 pt-3 border-t border-slate-100">
-                        <div className="text-xs text-slate-700 mb-2">Default quantity:</div>
-                        <div className="flex items-center gap-2">
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setBulkQuantity(prev => Math.max(1, parseInt(prev) - 1).toString());
-                            }}
-                            className="w-6 h-6 flex items-center justify-center bg-slate-100 rounded text-slate-700 hover:bg-slate-200"
-                          >
-                            -
-                          </button>
-                          <span className="text-sm font-medium text-slate-900">{bulkQuantity}</span>
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setBulkQuantity(prev => (parseInt(prev) + 1).toString());
-                            }}
-                            className="w-6 h-6 flex items-center justify-center bg-slate-100 rounded text-slate-700 hover:bg-slate-200"
-                          >
-                            +
-                          </button>
-                        </div>
-                      </div>
-                    )}
-
-                    <div className="mt-4 pt-3 border-t border-slate-100">
-                      <button className={`w-full py-2 rounded-lg font-medium transition-all flex items-center justify-center gap-2 text-sm ${
-                        isSelected
-                          ? 'bg-gradient-to-r from-green-600 to-green-700 text-white'
-                          : 'bg-gradient-to-r from-blue-600 to-blue-700 text-white hover:from-blue-700 hover:to-blue-800'
-                      }`}>
-                        {isSelected ? (
-                          <>
-                            <Check className="w-4 h-4" />
-                            Selected
-                          </>
-                        ) : (
-                          <>
-                            <Plus className="w-4 h-4" />
-                            Select Product
-                          </>
-                        )}
-                      </button>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
-
-        {/* Footer */}
-        <div className="border-t border-slate-200 p-4 bg-slate-50 rounded-b-2xl">
-          <div className="flex items-center justify-between">
-            <div className="text-sm text-slate-800">
-              Showing <span className="font-bold">{filteredProducts.length}</span> of{" "}
-              <span className="font-bold">{products.length}</span> products •{" "}
-              <span className="font-bold text-blue-700">{selectedProducts.length}</span> selected
-            </div>
-            <div className="flex items-center gap-2">
-              <button
-                onClick={onClose}
-                className="px-4 py-2 border border-slate-300 text-slate-800 rounded-lg hover:bg-white font-medium"
-              >
-                Cancel
-              </button>
-              {selectedProducts.length > 0 && (
-                <>
-                  {bulkMode ? (
-                    <button
-                      onClick={handleBulkAdd}
-                      className="px-4 py-2 bg-gradient-to-r from-blue-600 to-blue-700 text-white rounded-lg hover:from-blue-700 hover:to-blue-800 font-medium"
-                    >
-                      Add {selectedProducts.length} Product{selectedProducts.length !== 1 ? 's' : ''} (×{bulkQuantity})
-                    </button>
-                  ) : (
-                    <button
-                      onClick={handleBulkAdd}
-                      className="px-4 py-2 bg-gradient-to-r from-blue-600 to-blue-700 text-white rounded-lg hover:from-blue-700 hover:to-blue-800 font-medium"
-                    >
-                      Add {selectedProducts.length} Product{selectedProducts.length !== 1 ? 's' : ''}
-                    </button>
-                  )}
-                </>
-              )}
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-};
-
-// Enhanced Product Selection Card
+// Product Selection Card Component
 const ProductSelectionCard: React.FC<{
   product: Product;
   onRemove?: () => void;
@@ -828,7 +323,8 @@ const ProductSelectionCard: React.FC<{
   availableStock: number;
   onSetMax?: () => void;
   onSetMin?: () => void;
-}> = ({ product, onRemove, quantity = 1, onQuantityChange, availableStock, onSetMax, onSetMin }) => {
+  onRestock?: () => void;
+}> = ({ product, onRemove, quantity = 1, onQuantityChange, availableStock, onSetMax, onSetMin, onRestock }) => {
   const handleQuantityChange = (newQty: number) => {
     if (newQty < 1) return;
     if (newQty > availableStock) {
@@ -862,14 +358,25 @@ const ProductSelectionCard: React.FC<{
           </div>
         </div>
         
-        {onRemove && (
-          <button
-            onClick={onRemove}
-            className="p-1.5 text-slate-500 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors opacity-0 group-hover:opacity-100"
-          >
-            <X className="w-4 h-4" />
-          </button>
-        )}
+        <div className="flex items-center gap-1">
+          {onRestock && (
+            <button
+              onClick={onRestock}
+              className="p-1.5 text-green-600 hover:text-green-700 hover:bg-green-50 rounded-lg transition-colors"
+              title="Restock this product"
+            >
+              <PackagePlus className="w-4 h-4" />
+            </button>
+          )}
+          {onRemove && (
+            <button
+              onClick={onRemove}
+              className="p-1.5 text-slate-500 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors opacity-0 group-hover:opacity-100"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          )}
+        </div>
       </div>
 
       <div className="grid grid-cols-2 gap-4">
@@ -936,8 +443,16 @@ const ProductSelectionCard: React.FC<{
         </div>
         <div className="flex items-center justify-between text-xs mt-1">
           <span className="text-slate-600">Available stock:</span>
-          <span className={`font-medium ${availableStock > 10 ? 'text-green-700' : 'text-orange-700'}`}>
+          <span className={`font-medium ${availableStock > 10 ? 'text-green-700' : availableStock > 0 ? 'text-orange-700' : 'text-red-700'}`}>
             {availableStock} units
+            {availableStock === 0 && (
+              <button
+                onClick={onRestock}
+                className="ml-2 text-blue-600 hover:text-blue-800 underline"
+              >
+                Restock now
+              </button>
+            )}
           </span>
         </div>
       </div>
@@ -945,7 +460,540 @@ const ProductSelectionCard: React.FC<{
   );
 };
 
-// Main Enhanced Component - SINGLE ASSIGNMENT FLOW
+// Product Search Modal Component
+const ProductSearchModal: React.FC<ProductSearchModalProps> = ({ 
+  isOpen, 
+  onClose, 
+  onSelect, 
+  onSelectBulk,
+  products,
+  excludedIds = [],
+  bulkMode = true
+}) => {
+  const [searchTerm, setSearchTerm] = useState("");
+  const [selectedCategory, setSelectedCategory] = useState<string>("all");
+  const [sortBy, setSortBy] = useState<'name' | 'price' | 'stock' | 'category'>('name');
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
+  const [filteredProducts, setFilteredProducts] = useState<Product[]>([]);
+  const [selectedProducts, setSelectedProducts] = useState<Product[]>([]);
+  const [selectAll, setSelectAll] = useState(false);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+
+  const categories = useMemo(() => {
+    const cats = new Set(products.map(p => p.category).filter(Boolean) as string[]);
+    return Array.from(cats);
+  }, [products]);
+
+  useEffect(() => {
+    if (isOpen && searchInputRef.current) {
+      setTimeout(() => searchInputRef.current?.focus(), 100);
+    }
+    setSelectedProducts([]);
+    setSelectAll(false);
+  }, [isOpen]);
+
+  useEffect(() => {
+    let result = products.filter(product => !excludedIds.includes(product.id));
+
+    if (searchTerm.trim()) {
+      const term = searchTerm.toLowerCase();
+      result = result.filter(product =>
+        product.name.toLowerCase().includes(term) ||
+        product.description?.toLowerCase().includes(term) ||
+        product.sku?.toLowerCase().includes(term) ||
+        product.category?.toLowerCase().includes(term) ||
+        product.brand?.toLowerCase().includes(term) ||
+        product.model?.toLowerCase().includes(term)
+      );
+    }
+
+    if (selectedCategory !== "all") {
+      result = result.filter(product => product.category === selectedCategory);
+    }
+
+    result.sort((a, b) => {
+      let aVal: any, bVal: any;
+      
+      switch(sortBy) {
+        case 'name':
+          aVal = a.name.toLowerCase();
+          bVal = b.name.toLowerCase();
+          break;
+        case 'price':
+          aVal = a.price;
+          bVal = b.price;
+          break;
+        case 'stock':
+          aVal = a.stockQuantity || 0;
+          bVal = b.stockQuantity || 0;
+          break;
+        case 'category':
+          aVal = a.category?.toLowerCase() || '';
+          bVal = b.category?.toLowerCase() || '';
+          break;
+        default:
+          aVal = a.name.toLowerCase();
+          bVal = b.name.toLowerCase();
+      }
+
+      if (aVal < bVal) return sortOrder === 'asc' ? -1 : 1;
+      if (aVal > bVal) return sortOrder === 'asc' ? 1 : -1;
+      return 0;
+    });
+
+    setFilteredProducts(result);
+  }, [searchTerm, selectedCategory, sortBy, sortOrder, products, excludedIds]);
+
+  const handleProductSelect = (product: Product) => {
+    if (selectedProducts.some(p => p.id === product.id)) {
+      setSelectedProducts(selectedProducts.filter(p => p.id !== product.id));
+    } else {
+      setSelectedProducts([...selectedProducts, product]);
+    }
+  };
+
+  const toggleSelectAll = () => {
+    if (selectAll) {
+      setSelectedProducts([]);
+    } else {
+      setSelectedProducts(filteredProducts);
+    }
+    setSelectAll(!selectAll);
+  };
+
+  const handleBulkAdd = () => {
+    if (bulkMode && onSelectBulk) {
+      onSelectBulk(selectedProducts);
+    } else {
+      selectedProducts.forEach(product => onSelect(product));
+    }
+    setSelectedProducts([]);
+    setSelectAll(false);
+    onClose();
+  };
+
+  if (!isOpen) return null;
+
+  return (
+    <div className="fixed inset-0 bg-black/70 flex items-center justify-center p-2 md:p-4 z-[100]">
+      <div className="bg-white rounded-2xl w-full max-w-5xl shadow-2xl max-h-[90vh] flex flex-col">
+        <div className="sticky top-0 bg-gradient-to-r from-blue-600 to-purple-600 text-white p-4 rounded-t-2xl">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="p-2 bg-white/20 rounded-lg">
+                <Search className="w-5 h-5" />
+              </div>
+              <div>
+                <h2 className="text-xl font-bold">Select Products</h2>
+                <p className="text-blue-100 text-sm">
+                  {selectedProducts.length} product{selectedProducts.length !== 1 ? 's' : ''} selected
+                </p>
+              </div>
+            </div>
+            <button onClick={onClose} className="p-2 hover:bg-white/20 rounded-lg">
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+        </div>
+
+        <div className="p-4 border-b border-slate-200 bg-white">
+          <div className="relative">
+            <Search className="absolute left-4 top-1/2 transform -translate-y-1/2 w-5 h-5 text-slate-400" />
+            <input
+              ref={searchInputRef}
+              type="text"
+              placeholder="Search by name, SKU, category, brand..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="w-full pl-12 pr-4 py-3 border-2 border-slate-300 rounded-xl focus:border-blue-500 focus:ring-2 focus:ring-blue-200 text-sm"
+              autoFocus
+            />
+          </div>
+
+          <div className="flex flex-wrap items-center gap-3 mt-3">
+            <div className="flex items-center gap-2">
+              <Filter className="w-4 h-4 text-slate-600" />
+              <select
+                value={selectedCategory}
+                onChange={(e) => setSelectedCategory(e.target.value)}
+                className="px-3 py-1.5 border border-slate-300 rounded-lg bg-white text-sm"
+              >
+                <option value="all">All Categories</option>
+                {categories.map(category => (
+                  <option key={category} value={category}>{category}</option>
+                ))}
+              </select>
+            </div>
+
+            <button
+              onClick={() => setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc')}
+              className="p-1.5 border border-slate-300 rounded-lg hover:bg-slate-50"
+            >
+              {sortOrder === 'asc' ? <SortAsc className="w-4 h-4" /> : <SortDesc className="w-4 h-4" />}
+            </button>
+
+            {(searchTerm || selectedCategory !== 'all') && (
+              <button
+                onClick={() => {
+                  setSearchTerm("");
+                  setSelectedCategory("all");
+                }}
+                className="flex items-center gap-1 px-3 py-1.5 border border-red-300 text-red-700 rounded-lg hover:bg-red-50 text-sm"
+              >
+                <FilterX className="w-4 h-4" />
+                Clear
+              </button>
+            )}
+          </div>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-4">
+          {filteredProducts.length === 0 ? (
+            <div className="text-center py-12">
+              <Package className="w-16 h-16 text-slate-300 mx-auto mb-4" />
+              <h3 className="text-lg font-semibold text-slate-900 mb-2">No products found</h3>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {filteredProducts.map(product => {
+                const isSelected = selectedProducts.some(p => p.id === product.id);
+                const stockLevel = product.stockQuantity || 0;
+                return (
+                  <div
+                    key={product.id}
+                    onClick={() => handleProductSelect(product)}
+                    className={`cursor-pointer border-2 rounded-xl p-4 transition-all ${
+                      isSelected ? 'border-blue-500 bg-blue-50' : 'border-slate-200 hover:border-blue-500 bg-white'
+                    }`}
+                  >
+                    <div className="flex items-start gap-3 mb-3">
+                      <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-blue-100 to-blue-200 flex items-center justify-center">
+                        <Package className="w-5 h-5 text-blue-600" />
+                      </div>
+                      <div className="flex-1">
+                        <h4 className={`font-bold text-sm ${isSelected ? 'text-blue-800' : 'text-slate-900'}`}>
+                          {product.name}
+                        </h4>
+                        {product.category && (
+                          <span className="inline-block px-2 py-0.5 bg-slate-100 rounded text-xs mt-1">
+                            {product.category}
+                          </span>
+                        )}
+                      </div>
+                      {isSelected && <Check className="w-5 h-5 text-blue-600" />}
+                    </div>
+                    <div className="space-y-2">
+                      <div className="flex justify-between">
+                        <span className="text-slate-600 text-sm">Price:</span>
+                        <span className="font-bold text-green-700">KES {product.price.toLocaleString()}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-slate-600 text-sm">Stock:</span>
+                        <span className={`font-medium ${stockLevel > 10 ? 'text-green-700' : stockLevel > 0 ? 'text-orange-700' : 'text-red-700'}`}>
+                          {stockLevel} units
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        <div className="border-t border-slate-200 p-4 bg-slate-50 rounded-b-2xl">
+          <div className="flex items-center justify-between">
+            <div className="text-sm text-slate-600">
+              {filteredProducts.length} products • {selectedProducts.length} selected
+            </div>
+            <div className="flex gap-2">
+              <button onClick={onClose} className="px-4 py-2 border border-slate-300 rounded-lg hover:bg-white">
+                Cancel
+              </button>
+              {selectedProducts.length > 0 && (
+                <button
+                  onClick={handleBulkAdd}
+                  className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+                >
+                  Add {selectedProducts.length} Product{selectedProducts.length !== 1 ? 's' : ''}
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// Quick Restock Modal Component
+const QuickRestockModal: React.FC<{
+  isOpen: boolean;
+  onClose: () => void;
+  onRestock: (data: RestockForm) => Promise<boolean>;
+  product: Product | null;
+}> = ({ isOpen, onClose, onRestock, product }) => {
+  const [form, setForm] = useState<RestockForm>({
+    productId: 0,
+    quantity: "",
+    costPrice: "",
+    supplier: "",
+    notes: "",
+    paymentSource: "CASH",
+    creditorId: ""
+  });
+  const [submitting, setSubmitting] = useState(false);
+  const [creditors, setCreditors] = useState<Creditor[]>([]);
+  const [loadingCreditors, setLoadingCreditors] = useState(false);
+
+  // Fetch creditors for credit payment option
+  const fetchCreditors = async () => {
+    setLoadingCreditors(true);
+    try {
+      const response = await fetch("/api/creditors");
+      if (response.ok) {
+        const data = await response.json();
+        setCreditors(data);
+      }
+    } catch (error) {
+      console.error("Error fetching creditors:", error);
+    } finally {
+      setLoadingCreditors(false);
+    }
+  };
+
+  useEffect(() => {
+    if (isOpen && form.paymentSource === "CREDIT") {
+      fetchCreditors();
+    }
+  }, [isOpen, form.paymentSource]);
+
+  useEffect(() => {
+    if (product && isOpen) {
+      setForm({
+        productId: product.id,
+        quantity: "",
+        costPrice: product.productionCost?.toString() || "",
+        supplier: "",
+        notes: "",
+        paymentSource: "CASH",
+        creditorId: "",
+        productName: product.name
+      });
+    }
+  }, [product, isOpen]);
+
+  const handleSubmit = async () => {
+    if (!form.quantity || !form.costPrice) {
+      alert("Please fill in quantity and cost price");
+      return;
+    }
+
+    if (form.paymentSource === "CREDIT" && !form.creditorId) {
+      alert("Please select a creditor for credit payment");
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      const success = await onRestock(form);
+      if (success) {
+        onClose();
+      }
+    } catch (error) {
+      console.error("Restock error:", error);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  if (!isOpen || !product) return null;
+
+  return (
+    <div className="fixed inset-0 bg-black/70 flex items-center justify-center p-4 z-[150]">
+      <div className="bg-white rounded-2xl w-full max-w-md shadow-2xl max-h-[90vh] overflow-y-auto">
+        <div className="bg-gradient-to-r from-green-600 to-emerald-600 text-white p-4 rounded-t-2xl sticky top-0">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="p-2 bg-white/20 rounded-lg">
+                <PackagePlus className="w-5 h-5" />
+              </div>
+              <div>
+                <h2 className="text-lg font-bold">Quick Restock</h2>
+                <p className="text-green-100 text-sm">{product.name}</p>
+              </div>
+            </div>
+            <button onClick={onClose} className="p-2 hover:bg-white/20 rounded-lg">
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+        </div>
+
+        <div className="p-5 space-y-4">
+          <div>
+            <label className="block text-sm font-semibold text-slate-900 mb-2">
+              Current Stock
+            </label>
+            <div className="text-2xl font-bold text-slate-900">
+              {product.stockQuantity || 0} units
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-sm font-semibold text-slate-900 mb-2">
+              Quantity to Add *
+            </label>
+            <input
+              type="number"
+              min="1"
+              value={form.quantity}
+              onChange={(e) => setForm({ ...form, quantity: e.target.value })}
+              placeholder="Enter quantity"
+              className="w-full px-4 py-3 border-2 border-slate-300 rounded-xl focus:border-green-500 focus:ring-2 focus:ring-green-200 text-sm"
+              autoFocus
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-semibold text-slate-900 mb-2">
+              Cost Price (per unit) *
+            </label>
+            <div className="relative">
+              <span className="absolute left-4 top-1/2 transform -translate-y-1/2 text-slate-600">KES</span>
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                value={form.costPrice}
+                onChange={(e) => setForm({ ...form, costPrice: e.target.value })}
+                placeholder="0.00"
+                className="w-full pl-16 pr-4 py-3 border-2 border-slate-300 rounded-xl focus:border-green-500 focus:ring-2 focus:ring-green-200 text-sm"
+              />
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-sm font-semibold text-slate-900 mb-2">
+              Payment Source *
+            </label>
+            <select
+              value={form.paymentSource}
+              onChange={(e) => setForm({ ...form, paymentSource: e.target.value, creditorId: "" })}
+              className="w-full px-4 py-3 border-2 border-slate-300 rounded-xl focus:border-green-500 focus:ring-2 focus:ring-green-200 text-sm"
+            >
+              <option value="CASH">Cash</option>
+              <option value="BANK">Bank Transfer</option>
+              <option value="MPESA">M-Pesa</option>
+              <option value="CREDIT">Credit (Pay Later)</option>
+            </select>
+          </div>
+
+          {form.paymentSource === "CREDIT" && (
+            <div>
+              <label className="block text-sm font-semibold text-slate-900 mb-2">
+                Select Creditor *
+              </label>
+              <select
+                value={form.creditorId}
+                onChange={(e) => setForm({ ...form, creditorId: e.target.value })}
+                className="w-full px-4 py-3 border-2 border-slate-300 rounded-xl focus:border-green-500 focus:ring-2 focus:ring-green-200 text-sm"
+                disabled={loadingCreditors}
+              >
+                <option value="">Select creditor...</option>
+                {creditors.map(creditor => (
+                  <option key={creditor.id} value={creditor.id}>
+                    {creditor.name} (Owed: KES {creditor.totalOwed.toLocaleString()})
+                  </option>
+                ))}
+              </select>
+              <p className="text-xs text-slate-600 mt-1">
+                The creditor's balance will be updated automatically
+              </p>
+            </div>
+          )}
+
+          <div>
+            <label className="block text-sm font-semibold text-slate-900 mb-2">
+              Supplier (Optional)
+            </label>
+            <input
+              type="text"
+              value={form.supplier}
+              onChange={(e) => setForm({ ...form, supplier: e.target.value })}
+              placeholder="Supplier name"
+              className="w-full px-4 py-3 border-2 border-slate-300 rounded-xl focus:border-green-500 focus:ring-2 focus:ring-green-200 text-sm"
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-semibold text-slate-900 mb-2">
+              Notes (Optional)
+            </label>
+            <textarea
+              value={form.notes}
+              onChange={(e) => setForm({ ...form, notes: e.target.value })}
+              placeholder="Add notes about this restock..."
+              rows={2}
+              className="w-full px-4 py-3 border-2 border-slate-300 rounded-xl focus:border-green-500 focus:ring-2 focus:ring-green-200 text-sm"
+            />
+          </div>
+
+          <div className="bg-blue-50 rounded-xl p-3">
+            <div className="flex items-center justify-between text-sm">
+              <span className="text-slate-700">New Stock After Restock:</span>
+              <span className="font-bold text-green-700">
+                {(product.stockQuantity || 0) + (parseInt(form.quantity) || 0)} units
+              </span>
+            </div>
+            <div className="flex items-center justify-between text-sm mt-1">
+              <span className="text-slate-700">Total Cost:</span>
+              <span className="font-bold text-blue-700">
+                KES {((parseInt(form.quantity) || 0) * (parseFloat(form.costPrice) || 0)).toLocaleString()}
+              </span>
+            </div>
+            {form.paymentSource === "CREDIT" && form.creditorId && (
+              <div className="flex items-center justify-between text-sm mt-1">
+                <span className="text-slate-700">Payment:</span>
+                <span className="font-medium text-amber-700">Credit - Will be added to creditor balance</span>
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="sticky bottom-0 border-t border-slate-200 p-4 bg-white rounded-b-2xl">
+          <div className="flex gap-3">
+            <button
+              onClick={onClose}
+              disabled={submitting}
+              className="flex-1 px-4 py-3 border-2 border-slate-300 text-slate-800 rounded-xl hover:bg-slate-50 font-medium text-sm"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={handleSubmit}
+              disabled={submitting || !form.quantity || !form.costPrice || (form.paymentSource === "CREDIT" && !form.creditorId)}
+              className="flex-1 px-4 py-3 bg-gradient-to-r from-green-600 to-emerald-600 text-white rounded-xl hover:from-green-700 hover:to-emerald-700 font-medium text-sm flex items-center justify-center gap-2"
+            >
+              {submitting ? (
+                <>
+                  <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
+                  Restocking...
+                </>
+              ) : (
+                <>
+                  <PackagePlus className="w-5 h-5" />
+                  Restock Product
+                </>
+              )}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// Main Component
 export default function StaffInventoryManagementPage() {
   // States
   const [staffList, setStaffList] = useState<Staff[]>([]);
@@ -957,6 +1005,8 @@ export default function StaffInventoryManagementPage() {
   const [showAssignModal, setShowAssignModal] = useState(false);
   const [showReturnModal, setShowReturnModal] = useState(false);
   const [showProductSearch, setShowProductSearch] = useState(false);
+  const [showQuickRestock, setShowQuickRestock] = useState(false);
+  const [restockProduct, setRestockProduct] = useState<Product | null>(null);
   const [selectedStaff, setSelectedStaff] = useState<Staff | null>(null);
   
   const currentWeek = getCurrentWeekDates();
@@ -981,6 +1031,17 @@ export default function StaffInventoryManagementPage() {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [sortBy, setSortBy] = useState<'staff' | 'week' | 'totalValue' | 'priority'>('week');
   const [viewMode, setViewMode] = useState<'list' | 'cards' | 'grid' | 'weeks'>('weeks');
+  const [isMobile, setIsMobile] = useState(false);
+
+  // Handle window resize for mobile detection
+  useEffect(() => {
+    const checkMobile = () => {
+      setIsMobile(window.innerWidth < 768);
+    };
+    checkMobile();
+    window.addEventListener('resize', checkMobile);
+    return () => window.removeEventListener('resize', checkMobile);
+  }, []);
 
   // Fetch all data
   const fetchData = useCallback(async () => {
@@ -1005,6 +1066,14 @@ export default function StaffInventoryManagementPage() {
       if (productsRes.status === 'fulfilled' && productsRes.value.ok) {
         const data = await productsRes.value.json();
         productsData = Array.isArray(data) ? data : [];
+        
+        // Calculate stock quantity for each product
+        productsData = productsData.map(product => ({
+          ...product,
+          stockQuantity: product.stock?.reduce((sum, s) => sum + s.quantity, 0) || 0,
+          avgCostPrice: product.stock?.reduce((sum, s) => sum + (s.costPrice * s.quantity), 0) / 
+                        (product.stock?.reduce((sum, s) => sum + s.quantity, 0) || 1) || 0
+        }));
       }
 
       if (inventoryRes.status === 'fulfilled' && inventoryRes.value.ok) {
@@ -1043,7 +1112,7 @@ export default function StaffInventoryManagementPage() {
     }
   }, []);
 
-  // Helper to calculate assignment status based on weekly system
+  // Helper to calculate assignment status
   const calculateAssignmentStatus = (assignment: any): StaffInventory['status'] => {
     const remaining = (assignment.quantityGiven || 0) - 
                      (assignment.quantitySold || 0) - 
@@ -1054,13 +1123,53 @@ export default function StaffInventoryManagementPage() {
     const now = new Date();
     const weekEnd = assignment.weekEndDate ? new Date(assignment.weekEndDate) : null;
     
-    // Check if week is over
     if (weekEnd && now > weekEnd) {
       return 'OVERDUE';
     }
     
     if (assignment.quantitySold === 0) return 'PENDING';
     return 'ACTIVE';
+  };
+
+  // Handle restock from within assignment using the restock API
+  const handleQuickRestock = async (restockData: RestockForm): Promise<boolean> => {
+    try {
+      const totalCost = parseInt(restockData.quantity) * parseFloat(restockData.costPrice);
+      
+      const response = await fetch("/api/restock", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          productId: restockData.productId,
+          quantity: parseInt(restockData.quantity),
+          costPrice: parseFloat(restockData.costPrice),
+          totalCost: totalCost,
+          paymentSource: restockData.paymentSource,
+          creditorId: restockData.paymentSource === "CREDIT" ? parseInt(restockData.creditorId) : undefined,
+          supplier: restockData.supplier,
+          notes: restockData.notes
+        })
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || "Failed to restock");
+      }
+
+      const result = await response.json();
+      
+      setSuccess(`✅ Restocked ${restockData.quantity} units of ${restockData.productName}`);
+      setTimeout(() => setSuccess(null), 3000);
+      
+      // Refresh products to update stock levels
+      await fetchData();
+      
+      return true;
+    } catch (err: any) {
+      setError(err.message || "Failed to restock");
+      setTimeout(() => setError(null), 5000);
+      return false;
+    }
   };
 
   // Initial load
@@ -1072,26 +1181,22 @@ export default function StaffInventoryManagementPage() {
   useEffect(() => {
     let filtered = [...inventoryAssignments];
 
-    // Apply search filter
     if (searchTerm.trim()) {
       const term = searchTerm.toLowerCase();
       filtered = filtered.filter(assignment =>
         assignment.staff?.name?.toLowerCase().includes(term) ||
         assignment.product?.name?.toLowerCase().includes(term) ||
         assignment.product?.sku?.toLowerCase().includes(term) ||
-        (assignment.product?.category?.toLowerCase() || '').includes(term) ||
-        (assignment.staff?.phone || '').includes(term)
+        (assignment.product?.category?.toLowerCase() || '').includes(term)
       );
     }
 
-    // Apply status filter
     if (activeFilter !== 'all') {
       filtered = filtered.filter(assignment => 
         assignment.status === activeFilter.toUpperCase()
       );
     }
 
-    // Apply sorting
     filtered.sort((a, b) => {
       let aVal: any, bVal: any;
       
@@ -1101,10 +1206,8 @@ export default function StaffInventoryManagementPage() {
           bVal = b.staff?.name?.toLowerCase() || '';
           break;
         case 'week':
-          const aWeekStart = a.weekStartDate || '';
-          const bWeekStart = b.weekStartDate || '';
-          aVal = new Date(aWeekStart).getTime();
-          bVal = new Date(bWeekStart).getTime();
+          aVal = new Date(a.weekStartDate || '').getTime();
+          bVal = new Date(b.weekStartDate || '').getTime();
           break;
         case 'totalValue':
           aVal = a.totalSalesAmount || 0;
@@ -1116,19 +1219,17 @@ export default function StaffInventoryManagementPage() {
           bVal = priorityOrder[b.priority as keyof typeof priorityOrder] || 0;
           break;
         default:
-          const aDate = a.weekStartDate || '';
-          const bDate = b.weekStartDate || '';
-          aVal = new Date(aDate).getTime();
-          bVal = new Date(bDate).getTime();
+          aVal = new Date(a.weekStartDate || '').getTime();
+          bVal = new Date(b.weekStartDate || '').getTime();
       }
 
-      return bVal - aVal; // Newest first
+      return bVal - aVal;
     });
 
     setFilteredAssignments(filtered);
   }, [searchTerm, activeFilter, inventoryAssignments, sortBy]);
 
-  // Calculate comprehensive stats with weekly data
+  // Calculate stats
   const calculateStats = (): AssignmentStats => {
     const assignments = inventoryAssignments;
     const totalItemsGiven = assignments.reduce((sum, inv) => sum + (inv.quantityGiven || 0), 0);
@@ -1143,7 +1244,6 @@ export default function StaffInventoryManagementPage() {
     const overdueAssignments = assignments.filter(inv => inv.status === 'OVERDUE');
     const pendingAssignments = assignments.filter(inv => inv.status === 'PENDING');
     
-    // Count current week assignments
     const currentWeekAssignments = assignments.filter(inv => inv.isCurrentWeek).length;
     const currentWeekSales = assignments
       .filter(inv => inv.isCurrentWeek)
@@ -1152,11 +1252,9 @@ export default function StaffInventoryManagementPage() {
       .filter(inv => inv.isCurrentWeek)
       .reduce((sum, inv) => sum + inv.quantityReturned, 0);
     
-    // Count unique staff and products
     const staffIds = new Set(assignments.map(inv => inv.staffId));
     const productIds = new Set(assignments.map(inv => inv.productId));
 
-    // Calculate average completion rate
     const completionRates = assignments
       .filter(inv => inv.quantityGiven > 0)
       .map(inv => ((inv.quantitySold + inv.quantityReturned) / inv.quantityGiven) * 100);
@@ -1164,7 +1262,6 @@ export default function StaffInventoryManagementPage() {
       ? completionRates.reduce((sum, rate) => sum + rate, 0) / completionRates.length 
       : 0;
 
-    // Group by week for weekly performance
     const weeklyMap = new Map<string, { weekStart: string; weekEnd: string; totalGiven: number; totalSold: number; totalReturned: number; }>();
     
     assignments.forEach(assignment => {
@@ -1217,13 +1314,11 @@ export default function StaffInventoryManagementPage() {
     };
   };
 
-  // Get available stock for a product
   const getAvailableStock = (productId: number): number => {
     const product = products.find(p => p.id === productId);
     return product?.stockQuantity || 0;
   };
 
-  // Get remaining stock after considering current weekly assignments
   const getRemainingStockAfterAssignments = (productId: number, weekStartDate?: string): number => {
     const now = new Date();
     const targetWeekStart = weekStartDate || form.weekStartDate;
@@ -1233,12 +1328,10 @@ export default function StaffInventoryManagementPage() {
         if (inv.productId !== productId) return false;
         if (inv.status === 'COMPLETED') return false;
         
-        // If we have a target week, only count assignments for that week
         if (targetWeekStart && inv.weekStartDate) {
           return inv.weekStartDate === targetWeekStart;
         }
         
-        // Otherwise count all active assignments (including current week)
         const weekEnd = inv.weekEndDate ? new Date(inv.weekEndDate) : null;
         return weekEnd && now <= weekEnd;
       })
@@ -1251,15 +1344,13 @@ export default function StaffInventoryManagementPage() {
     return Math.max(0, availableStock - totalAssigned);
   };
 
-  // Handle bulk product selection
   const handleBulkProductSelect = (selectedProducts: Product[]) => {
     const newItems: AssignmentItem[] = selectedProducts.map(product => ({
       productId: product.id.toString(),
-      quantity: "1", // Default to 1 for each product
+      quantity: "1",
       product
     }));
     
-    // Add new items, avoid duplicates
     const existingIds = new Set(form.items.map(item => item.productId));
     const itemsToAdd = newItems.filter(item => !existingIds.has(item.productId));
     
@@ -1268,7 +1359,6 @@ export default function StaffInventoryManagementPage() {
     setTimeout(() => setSuccess(null), 3000);
   };
 
-  // Handle single product selection
   const handleProductSelect = (product: Product) => {
     const existingIndex = form.items.findIndex(item => item.productId === product.id.toString());
     
@@ -1291,26 +1381,23 @@ export default function StaffInventoryManagementPage() {
     setTimeout(() => setSuccess(null), 3000);
   };
 
-  // Update product quantity in form
   const updateItemQuantity = (index: number, newQuantity: number) => {
     const newItems = [...form.items];
     newItems[index].quantity = newQuantity.toString();
     setForm({ ...form, items: newItems });
   };
 
-  // Remove product from form
   const removeItemFromForm = (index: number) => {
     const newItems = form.items.filter((_, i) => i !== index);
     setForm({ ...form, items: newItems });
   };
 
-  // Batch quantity operations
   const setAllQuantitiesToMax = () => {
     const newItems = form.items.map(item => {
       const availableStock = getRemainingStockAfterAssignments(parseInt(item.productId), form.weekStartDate);
       return {
         ...item,
-        quantity: Math.min(availableStock, 10).toString() // Cap at 10 max
+        quantity: Math.min(availableStock, 10).toString()
       };
     });
     setForm({ ...form, items: newItems });
@@ -1334,7 +1421,6 @@ export default function StaffInventoryManagementPage() {
     setTimeout(() => setSuccess(null), 3000);
   };
 
-  // Validate assignment form
   const validateAssignment = (): { isValid: boolean; errors: string[] } => {
     const errors: string[] = [];
 
@@ -1367,7 +1453,6 @@ export default function StaffInventoryManagementPage() {
     return { isValid: errors.length === 0, errors };
   };
 
-  // Handle form submission - Assign weekly inventory with BATCH API
   const handleAssignInventory = async () => {
     const validation = validateAssignment();
     if (!validation.isValid) {
@@ -1380,7 +1465,6 @@ export default function StaffInventoryManagementPage() {
     setError(null);
 
     try {
-      // Prepare batch items for API
       const batchItems: BatchAssignmentItem[] = form.items
         .filter(item => item.productId && item.quantity)
         .map(item => ({
@@ -1388,7 +1472,6 @@ export default function StaffInventoryManagementPage() {
           quantityGiven: parseInt(item.quantity)
         }));
 
-      // Send BATCH assignment to API
       const response = await fetch("/api/staff-inventory/batch", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1409,7 +1492,6 @@ export default function StaffInventoryManagementPage() {
 
       const result = await response.json();
 
-      // Reset form and close modal
       setForm({ 
         staffId: "", 
         items: [],
@@ -1420,13 +1502,8 @@ export default function StaffInventoryManagementPage() {
       });
       setShowAssignModal(false);
       
-      if (result.success) {
-        setSuccess(`✅ Successfully assigned ${batchItems.length} items for the week! Total value: KES ${result.totalValue?.toLocaleString() || 'N/A'}`);
-      } else {
-        setSuccess(`✅ Partially assigned ${result.assignedCount || batchItems.length} items. ${result.message || ''}`);
-      }
-
-      // Refresh data
+      setSuccess(`✅ Successfully assigned ${batchItems.length} items for the week!`);
+      
       setTimeout(() => {
         fetchData();
         setSuccess(null);
@@ -1441,7 +1518,6 @@ export default function StaffInventoryManagementPage() {
     }
   };
 
-  // Handle inventory return
   const handleReturnInventory = async () => {
     const validItems = returnForm.items.filter(item => item.quantityReturned && parseInt(item.quantityReturned) > 0);
     
@@ -1455,7 +1531,6 @@ export default function StaffInventoryManagementPage() {
     setError(null);
 
     try {
-      // Send multiple individual return requests (or create a batch endpoint if needed)
       const promises = validItems.map(item =>
         fetch(`/api/staff-inventory/${item.assignmentId}/return`, {
           method: "POST",
@@ -1467,14 +1542,11 @@ export default function StaffInventoryManagementPage() {
       );
 
       const responses = await Promise.all(promises);
-      
-      // Check all responses
       const errors = responses.filter(res => !res.ok);
       if (errors.length > 0) {
         throw new Error(`Failed to return ${errors.length} items`);
       }
 
-      // Reset and refresh
       setReturnForm({ items: [], notes: "" });
       setShowReturnModal(false);
       setSelectedStaff(null);
@@ -1494,15 +1566,12 @@ export default function StaffInventoryManagementPage() {
     }
   };
 
-  // Handle complete assignment
   const handleCompleteAssignment = async (assignmentId: number) => {
-    if (!confirm("Are you sure you want to complete this assignment? This will mark all remaining inventory as returned for this week.")) return;
+    if (!confirm("Are you sure you want to complete this assignment?")) return;
 
     try {
       const assignment = inventoryAssignments.find(a => a.id === assignmentId);
-      if (!assignment) {
-        throw new Error("Assignment not found");
-      }
+      if (!assignment) throw new Error("Assignment not found");
 
       const remaining = assignment.quantityGiven - assignment.quantitySold - assignment.quantityReturned;
       
@@ -1510,14 +1579,10 @@ export default function StaffInventoryManagementPage() {
         const response = await fetch(`/api/staff-inventory/${assignmentId}/return`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            quantityReturned: remaining
-          })
+          body: JSON.stringify({ quantityReturned: remaining })
         });
 
-        if (!response.ok) {
-          throw new Error("Failed to complete assignment");
-        }
+        if (!response.ok) throw new Error("Failed to complete assignment");
       }
 
       setSuccess("Assignment completed successfully!");
@@ -1531,27 +1596,15 @@ export default function StaffInventoryManagementPage() {
     }
   };
 
-  // Handle close week for all assignments
   const handleCloseWeek = async (staffId?: number) => {
-    let message = "Close current week?";
-    if (staffId) {
-      const staff = staffList.find(s => s.id === staffId);
-      message = `Close current week for ${staff?.name}?`;
-    } else {
-      message = "Close current week for all staff?";
-    }
-    
-    if (!confirm(`${message} This will mark all remaining inventory as returned for the current week.`)) return;
+    let message = staffId ? "Close current week for this staff?" : "Close current week for all staff?";
+    if (!confirm(message)) return;
 
     try {
       let url = "/api/staff/close-week";
-      if (staffId) {
-        url = `/api/staff/${staffId}/close-week`;
-      }
+      if (staffId) url = `/api/staff/${staffId}/close-week`;
 
-      const response = await fetch(url, {
-        method: 'POST',
-      });
+      const response = await fetch(url, { method: 'POST' });
 
       if (!response.ok) {
         const errorData = await response.json();
@@ -1572,7 +1625,6 @@ export default function StaffInventoryManagementPage() {
     }
   };
 
-  // Get status badge color
   const getStatusColor = (status: string) => {
     switch(status) {
       case 'ACTIVE': return 'bg-emerald-100 text-emerald-800 border border-emerald-200';
@@ -1583,7 +1635,6 @@ export default function StaffInventoryManagementPage() {
     }
   };
 
-  // Get priority badge color
   const getPriorityColor = (priority: string) => {
     switch(priority) {
       case 'CRITICAL': return 'bg-red-100 text-red-800 border border-red-200';
@@ -1594,7 +1645,6 @@ export default function StaffInventoryManagementPage() {
     }
   };
 
-  // Open return modal for a staff
   const openReturnModal = (staff: Staff) => {
     setSelectedStaff(staff);
     
@@ -1631,16 +1681,84 @@ export default function StaffInventoryManagementPage() {
     setShowReturnModal(true);
   };
 
-  // Get excluded product IDs (products already in form)
   const excludedProductIds = useMemo(() => {
     return form.items.map(item => parseInt(item.productId)).filter(id => !isNaN(id));
   }, [form.items]);
 
-  // Stats calculation
   const stats = calculateStats();
 
-  // Mobile breakpoint
-  const isMobile = typeof window !== 'undefined' && window.innerWidth < 768;
+  // Mobile-friendly assignment card component
+  const AssignmentCard = ({ assignment }: { assignment: StaffInventory }) => {
+    const remaining = assignment.quantityGiven - assignment.quantitySold - assignment.quantityReturned;
+    const weekRange = assignment.weekStartDate && assignment.weekEndDate 
+      ? formatWeekRange(assignment.weekStartDate, assignment.weekEndDate)
+      : 'No week';
+
+    return (
+      <div className="bg-white rounded-xl border border-slate-200 p-4 mb-3 shadow-sm">
+        <div className="flex items-center justify-between mb-3">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-blue-100 to-blue-50 flex items-center justify-center">
+              <User className="w-5 h-5 text-blue-600" />
+            </div>
+            <div>
+              <div className="font-semibold text-slate-900">{assignment.staff?.name}</div>
+              <div className="text-xs text-slate-600">{weekRange}</div>
+            </div>
+          </div>
+          <span className={`px-2 py-1 rounded-full text-xs font-medium ${getStatusColor(assignment.status)}`}>
+            {assignment.status}
+          </span>
+        </div>
+
+        <div className="border-t border-slate-100 pt-3">
+          <div className="flex items-center gap-3 mb-3">
+            <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-purple-100 to-purple-50 flex items-center justify-center">
+              <Package className="w-5 h-5 text-purple-600" />
+            </div>
+            <div className="flex-1">
+              <div className="font-medium text-slate-900">{assignment.product?.name}</div>
+              {assignment.product?.sku && (
+                <div className="text-xs text-slate-600 font-mono">{assignment.product.sku}</div>
+              )}
+            </div>
+          </div>
+
+          <div className="grid grid-cols-3 gap-2 text-center mb-3">
+            <div>
+              <div className="text-xs text-slate-600">Given</div>
+              <div className="font-bold text-slate-900">{assignment.quantityGiven}</div>
+            </div>
+            <div>
+              <div className="text-xs text-slate-600">Sold</div>
+              <div className="font-bold text-emerald-700">{assignment.quantitySold}</div>
+            </div>
+            <div>
+              <div className="text-xs text-slate-600">Left</div>
+              <div className="font-bold text-blue-700">{remaining}</div>
+            </div>
+          </div>
+
+          <div className="flex gap-2">
+            {remaining > 0 && assignment.isCurrentWeek && (
+              <button
+                onClick={() => openReturnModal(assignment.staff)}
+                className="flex-1 px-3 py-2 bg-amber-50 text-amber-700 rounded-lg text-sm font-medium"
+              >
+                Return
+              </button>
+            )}
+            <button
+              onClick={() => handleCompleteAssignment(assignment.id)}
+              className="flex-1 px-3 py-2 bg-green-50 text-green-700 rounded-lg text-sm font-medium"
+            >
+              Complete
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  };
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-blue-50/30 p-2 md:p-4">
@@ -1650,27 +1768,25 @@ export default function StaffInventoryManagementPage() {
           <div className="flex items-center gap-2">
             <button
               onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
-              className="p-2 rounded-xl bg-white shadow-sm hover:shadow transition-shadow"
+              className="p-2 rounded-xl bg-white shadow-sm"
             >
               <Menu className="w-5 h-5 text-slate-800" />
             </button>
             <div>
-              <h1 className="text-lg font-bold text-slate-900">Weekly Staff Inventory</h1>
-              <p className="text-xs text-slate-700">Manage weekly product assignments</p>
+              <h1 className="text-lg font-bold text-slate-900">Staff Inventory</h1>
+              <p className="text-xs text-slate-700">Weekly assignments</p>
             </div>
           </div>
           <div className="flex items-center gap-1">
             <button
               onClick={fetchData}
-              className="p-2 rounded-xl bg-white shadow-sm hover:shadow transition-shadow"
-              title="Refresh"
+              className="p-2 bg-white rounded-xl shadow-sm"
             >
               <RefreshCw className="w-4 h-4 text-slate-800" />
             </button>
             <button
               onClick={() => setShowAssignModal(true)}
-              className="p-2 bg-gradient-to-r from-blue-600 to-blue-700 text-white rounded-xl shadow-sm hover:shadow transition-all hover:scale-105"
-              title="Assign Weekly Inventory"
+              className="p-2 bg-gradient-to-r from-blue-600 to-blue-700 text-white rounded-xl shadow-sm"
             >
               <Plus className="w-4 h-4" />
             </button>
@@ -1712,131 +1828,100 @@ export default function StaffInventoryManagementPage() {
             className="flex items-center gap-2 px-4 py-2.5 border-2 border-slate-200 rounded-xl hover:border-blue-300 hover:bg-blue-50 transition-all text-slate-800 font-medium group"
           >
             <RefreshCw className="w-4 h-4 transition-transform group-hover:rotate-180" />
-            Refresh Data
+            Refresh
           </button>
           <button
             onClick={() => setShowAssignModal(true)}
-            className="flex items-center gap-2 bg-gradient-to-r from-blue-600 to-purple-600 text-white px-5 py-2.5 rounded-xl hover:from-blue-700 hover:to-purple-700 transition-all shadow-lg hover:shadow-xl font-medium group hover:scale-[1.02]"
+            className="flex items-center gap-2 bg-gradient-to-r from-blue-600 to-purple-600 text-white px-5 py-2.5 rounded-xl hover:from-blue-700 hover:to-purple-700 transition-all shadow-lg font-medium"
           >
-            <Plus className="w-5 h-5 transition-transform group-hover:scale-110" />
-            <span>Assign Inventory</span>
+            <Plus className="w-5 h-5" />
+            Assign Inventory
           </button>
         </div>
       </div>
 
-      {/* Stats Dashboard */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
-        {/* ... Stats cards remain the same ... */}
-        <div className="bg-gradient-to-br from-blue-50 to-white rounded-2xl border border-blue-100 shadow-sm p-4">
+      {/* Stats Dashboard - Responsive Grid */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
+        <div className="bg-gradient-to-br from-blue-50 to-white rounded-2xl border border-blue-100 shadow-sm p-3 md:p-4">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-sm font-medium text-slate-700 mb-1">Current Week</p>
-              <p className="text-2xl font-bold text-blue-700">{stats.currentWeekAssignments}</p>
-              <p className="text-xs text-slate-700 mt-1">Active assignments this week</p>
+              <p className="text-xs md:text-sm font-medium text-slate-700 mb-1">Current Week</p>
+              <p className="text-xl md:text-2xl font-bold text-blue-700">{stats.currentWeekAssignments}</p>
+              <p className="text-xs text-slate-700 mt-1 hidden md:block">Active assignments</p>
             </div>
-            <div className="p-3 rounded-xl bg-gradient-to-br from-blue-100 to-blue-50">
-              <CalendarDays className="w-6 h-6 text-blue-600" />
+            <div className="p-2 md:p-3 rounded-xl bg-gradient-to-br from-blue-100 to-blue-50">
+              <CalendarDays className="w-5 h-5 md:w-6 md:h-6 text-blue-600" />
             </div>
-          </div>
-          <div className="mt-3 h-1 bg-blue-100 rounded-full overflow-hidden">
-            <div 
-              className="h-full bg-gradient-to-r from-blue-500 to-blue-600 rounded-full"
-              style={{ width: `${(stats.currentWeekAssignments / Math.max(stats.totalAssignments, 1)) * 100}%` }}
-            ></div>
           </div>
         </div>
 
-        <div className="bg-gradient-to-br from-emerald-50 to-white rounded-2xl border border-emerald-100 shadow-sm p-4">
+        <div className="bg-gradient-to-br from-emerald-50 to-white rounded-2xl border border-emerald-100 shadow-sm p-3 md:p-4">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-sm font-medium text-slate-700 mb-1">This Week Sales</p>
-              <p className="text-2xl font-bold text-emerald-700">{stats.currentWeekSales}</p>
-              <p className="text-xs text-slate-700 mt-1">Items sold this week</p>
+              <p className="text-xs md:text-sm font-medium text-slate-700 mb-1">Week Sales</p>
+              <p className="text-xl md:text-2xl font-bold text-emerald-700">{stats.currentWeekSales}</p>
+              <p className="text-xs text-slate-700 mt-1 hidden md:block">Items sold</p>
             </div>
-            <div className="p-3 rounded-xl bg-gradient-to-br from-emerald-100 to-emerald-50">
-              <ShoppingBag className="w-6 h-6 text-emerald-600" />
+            <div className="p-2 md:p-3 rounded-xl bg-gradient-to-br from-emerald-100 to-emerald-50">
+              <ShoppingBag className="w-5 h-5 md:w-6 md:h-6 text-emerald-600" />
             </div>
-          </div>
-          <div className="mt-3 h-1 bg-emerald-100 rounded-full overflow-hidden">
-            <div 
-              className="h-full bg-gradient-to-r from-emerald-500 to-emerald-600 rounded-full"
-              style={{ width: `${Math.min((stats.currentWeekSales / 100) * 100, 100)}%` }}
-            ></div>
           </div>
         </div>
 
-        <div className="bg-gradient-to-br from-green-50 to-white rounded-2xl border border-green-100 shadow-sm p-4">
+        <div className="bg-gradient-to-br from-green-50 to-white rounded-2xl border border-green-100 shadow-sm p-3 md:p-4">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-sm font-medium text-slate-700 mb-1">Total Sales Value</p>
-              <p className="text-2xl font-bold text-green-700">
-                KES {stats.totalSalesValue.toLocaleString()}
+              <p className="text-xs md:text-sm font-medium text-slate-700 mb-1">Sales Value</p>
+              <p className="text-lg md:text-2xl font-bold text-green-700">
+                KES {(stats.totalSalesValue / 1000).toFixed(1)}K
               </p>
-              <p className="text-xs text-slate-700 mt-1">
-                Profit: KES {stats.totalProfit.toLocaleString()}
-              </p>
+              <p className="text-xs text-slate-700 mt-1 hidden md:block">Total sales</p>
             </div>
-            <div className="p-3 rounded-xl bg-gradient-to-br from-green-100 to-green-50">
-              <DollarSign className="w-6 h-6 text-green-600" />
+            <div className="p-2 md:p-3 rounded-xl bg-gradient-to-br from-green-100 to-green-50">
+              <DollarSign className="w-5 h-5 md:w-6 md:h-6 text-green-600" />
             </div>
-          </div>
-          <div className="mt-3 h-1 bg-green-100 rounded-full overflow-hidden">
-            <div 
-              className="h-full bg-gradient-to-r from-green-500 to-green-600 rounded-full"
-              style={{ width: `${Math.min((stats.totalSalesValue / 100000) * 100, 100)}%` }}
-            ></div>
           </div>
         </div>
 
-        <div className="bg-gradient-to-br from-amber-50 to-white rounded-2xl border border-amber-100 shadow-sm p-4">
+        <div className="bg-gradient-to-br from-amber-50 to-white rounded-2xl border border-amber-100 shadow-sm p-3 md:p-4">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-sm font-medium text-slate-700 mb-1">Sell-through Rate</p>
-              <p className="text-2xl font-bold text-amber-700">
+              <p className="text-xs md:text-sm font-medium text-slate-700 mb-1">Sell-through</p>
+              <p className="text-xl md:text-2xl font-bold text-amber-700">
                 {stats.averageCompletionRate.toFixed(1)}%
               </p>
-              <p className="text-xs text-slate-700 mt-1">
-                Weekly performance average
-              </p>
+              <p className="text-xs text-slate-700 mt-1 hidden md:block">Weekly average</p>
             </div>
-            <div className="p-3 rounded-xl bg-gradient-to-br from-amber-100 to-amber-50">
-              <TrendingUp className="w-6 h-6 text-amber-600" />
+            <div className="p-2 md:p-3 rounded-xl bg-gradient-to-br from-amber-100 to-amber-50">
+              <TrendingUp className="w-5 h-5 md:w-6 md:h-6 text-amber-600" />
             </div>
-          </div>
-          <div className="mt-3 h-1 bg-amber-100 rounded-full overflow-hidden">
-            <div 
-              className="h-full bg-gradient-to-r from-amber-500 to-amber-600 rounded-full"
-              style={{ width: `${stats.averageCompletionRate}%` }}
-            ></div>
           </div>
         </div>
       </div>
 
-      {/* Search and Filter Section */}
-      <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-4 mb-4">
-        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-          <div className="flex-1 max-w-2xl">
-            <div className="relative">
-              <Search className="absolute left-4 top-1/2 transform -translate-y-1/2 w-5 h-5 text-slate-500" />
-              <input
-                type="text"
-                placeholder="Search staff, product, week, SKU, category, or phone..."
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                className="w-full pl-12 pr-4 py-3 border-2 border-slate-300 rounded-xl focus:border-blue-500 focus:ring-2 focus:ring-blue-200 text-sm placeholder-slate-600 text-slate-800"
-              />
-            </div>
+      {/* Search and Filter Section - Mobile Optimized */}
+      <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-3 md:p-4 mb-4">
+        <div className="flex flex-col gap-3">
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-slate-400" />
+            <input
+              type="text"
+              placeholder="Search staff, product, SKU..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="w-full pl-10 pr-4 py-2.5 border-2 border-slate-300 rounded-xl focus:border-blue-500 text-sm"
+            />
           </div>
 
-          <div className="flex flex-wrap items-center gap-3">
+          <div className="flex flex-wrap items-center gap-2">
             <div className="flex items-center gap-2">
               <Filter className="w-4 h-4 text-slate-600" />
               <select
                 value={activeFilter}
                 onChange={(e) => setActiveFilter(e.target.value as any)}
-                className="px-3 py-2 border-2 border-slate-300 rounded-xl bg-white text-sm focus:border-blue-500 focus:ring-2 focus:ring-blue-200 text-slate-800"
+                className="px-3 py-1.5 border-2 border-slate-300 rounded-xl bg-white text-sm"
               >
-                <option value="all">All Status</option>
+                <option value="all">All</option>
                 <option value="active">Active</option>
                 <option value="pending">Pending</option>
                 <option value="overdue">Overdue</option>
@@ -1844,45 +1929,16 @@ export default function StaffInventoryManagementPage() {
               </select>
             </div>
 
-            <div className="flex items-center gap-2">
-              <select
-                value={sortBy}
-                onChange={(e) => setSortBy(e.target.value as any)}
-                className="px-3 py-2 border-2 border-slate-300 rounded-xl bg-white text-sm focus:border-blue-500 focus:ring-2 focus:ring-blue-200 text-slate-800"
-              >
-                <option value="week">Sort by Week</option>
-                <option value="staff">Sort by Staff</option>
-                <option value="totalValue">Sort by Value</option>
-                <option value="priority">Sort by Priority</option>
-              </select>
-            </div>
-
-            <div className="flex bg-slate-100 rounded-xl p-1">
-              <button
-                onClick={() => setViewMode('weeks')}
-                className={`p-2 rounded-lg ${viewMode === 'weeks' ? 'bg-white shadow-sm' : 'hover:bg-white/50'} text-slate-700`}
-                title="Week View"
-              >
-                <CalendarDays className="w-4 h-4" />
-              </button>
+            <div className="flex gap-1 bg-slate-100 rounded-xl p-1 ml-auto">
               <button
                 onClick={() => setViewMode('list')}
-                className={`p-2 rounded-lg ${viewMode === 'list' ? 'bg-white shadow-sm' : 'hover:bg-white/50'} text-slate-700`}
-                title="List View"
+                className={`p-1.5 rounded-lg ${viewMode === 'list' ? 'bg-white shadow-sm' : 'hover:bg-white/50'}`}
               >
                 <List className="w-4 h-4" />
               </button>
               <button
                 onClick={() => setViewMode('cards')}
-                className={`p-2 rounded-lg ${viewMode === 'cards' ? 'bg-white shadow-sm' : 'hover:bg-white/50'} text-slate-700`}
-                title="Cards View"
-              >
-                <Users className="w-4 h-4" />
-              </button>
-              <button
-                onClick={() => setViewMode('grid')}
-                className={`p-2 rounded-lg ${viewMode === 'grid' ? 'bg-white shadow-sm' : 'hover:bg-white/50'} text-slate-700`}
-                title="Grid View"
+                className={`p-1.5 rounded-lg ${viewMode === 'cards' ? 'bg-white shadow-sm' : 'hover:bg-white/50'}`}
               >
                 <Grid className="w-4 h-4" />
               </button>
@@ -1893,32 +1949,26 @@ export default function StaffInventoryManagementPage() {
 
       {/* Alerts */}
       {error && (
-        <div className="mb-4 bg-gradient-to-r from-red-50 to-red-50/50 border-l-4 border-red-500 text-red-800 p-4 rounded-xl shadow-sm flex items-start gap-3">
+        <div className="mb-4 bg-gradient-to-r from-red-50 to-red-50/50 border-l-4 border-red-500 text-red-800 p-4 rounded-xl flex items-start gap-3">
           <AlertCircle className="w-5 h-5 flex-shrink-0 mt-0.5 text-red-600" />
-          <div className="flex-1">
-            <div className="font-medium">Error</div>
-            <div className="text-sm">{error}</div>
-          </div>
-          <button onClick={() => setError(null)} className="text-red-800 hover:text-red-900">
+          <div className="flex-1 text-sm">{error}</div>
+          <button onClick={() => setError(null)} className="text-red-800">
             <X size={16} />
           </button>
         </div>
       )}
 
       {success && (
-        <div className="mb-4 bg-gradient-to-r from-emerald-50 to-emerald-50/50 border-l-4 border-emerald-500 text-emerald-800 p-4 rounded-xl shadow-sm flex items-start gap-3">
+        <div className="mb-4 bg-gradient-to-r from-emerald-50 to-emerald-50/50 border-l-4 border-emerald-500 text-emerald-800 p-4 rounded-xl flex items-start gap-3">
           <CheckCircle className="w-5 h-5 flex-shrink-0 mt-0.5 text-emerald-600" />
-          <div className="flex-1">
-            <div className="font-medium">Success</div>
-            <div className="text-sm">{success}</div>
-          </div>
-          <button onClick={() => setSuccess(null)} className="text-emerald-800 hover:text-emerald-900">
+          <div className="flex-1 text-sm">{success}</div>
+          <button onClick={() => setSuccess(null)} className="text-emerald-800">
             <X size={16} />
           </button>
         </div>
       )}
 
-      {/* Main Content - Loading State */}
+      {/* Main Content */}
       {loading ? (
         <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-12 text-center">
           <div className="inline-flex items-center justify-center">
@@ -1927,152 +1977,144 @@ export default function StaffInventoryManagementPage() {
               <div className="absolute top-0 left-0 w-12 h-12 rounded-full border-4 border-blue-600 border-t-transparent animate-spin"></div>
             </div>
           </div>
-          <p className="mt-4 text-slate-700 font-medium">Loading weekly inventory assignments...</p>
-          <p className="text-sm text-slate-600">Fetching data from server</p>
+          <p className="mt-4 text-slate-700 font-medium">Loading inventory assignments...</p>
         </div>
       ) : filteredAssignments.length === 0 ? (
         <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-12 text-center">
           <div className="w-20 h-20 mx-auto mb-6 rounded-full bg-gradient-to-br from-blue-100 to-blue-50 flex items-center justify-center">
             <CalendarDays className="w-10 h-10 text-blue-400" />
           </div>
-          <h3 className="text-lg font-semibold text-slate-900 mb-2">No weekly inventory assignments found</h3>
+          <h3 className="text-lg font-semibold text-slate-900 mb-2">No assignments found</h3>
           <p className="text-slate-700 mb-6 max-w-md mx-auto">
-            {searchTerm 
-              ? "No results match your search. Try different keywords or clear filters."
-              : "Get started by assigning products to your staff members for the current week."
-            }
+            {searchTerm ? "No results match your search." : "Get started by assigning products to your staff."}
           </p>
           {!searchTerm && (
             <button
               onClick={() => setShowAssignModal(true)}
-              className="inline-flex items-center gap-2 bg-gradient-to-r from-blue-600 to-blue-700 text-white px-5 py-2.5 rounded-xl hover:from-blue-700 hover:to-blue-800 transition-all shadow-lg hover:shadow-xl font-medium"
+              className="inline-flex items-center gap-2 bg-gradient-to-r from-blue-600 to-blue-700 text-white px-5 py-2.5 rounded-xl font-medium"
             >
               <Plus className="w-5 h-5" />
-              Start Assigning Products
+              Start Assigning
             </button>
           )}
         </div>
       ) : (
-        <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-4">
-          <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead className="bg-gradient-to-r from-slate-50 to-slate-100/50">
-                <tr>
-                  <th className="px-6 py-4 text-left text-xs font-semibold text-slate-800 uppercase tracking-wider">
-                    Staff
-                  </th>
-                  <th className="px-6 py-4 text-left text-xs font-semibold text-slate-800 uppercase tracking-wider">
-                    Week
-                  </th>
-                  <th className="px-6 py-4 text-left text-xs font-semibold text-slate-800 uppercase tracking-wider">
-                    Product
-                  </th>
-                  <th className="px-6 py-4 text-left text-xs font-semibold text-slate-800 uppercase tracking-wider">
-                    Quantity
-                  </th>
-                  <th className="px-6 py-4 text-left text-xs font-semibold text-slate-800 uppercase tracking-wider">
-                    Status
-                  </th>
-                  <th className="px-6 py-4 text-left text-xs font-semibold text-slate-800 uppercase tracking-wider">
-                    Actions
-                  </th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {filteredAssignments.map((assignment) => {
-                  const remaining = assignment.quantityGiven - assignment.quantitySold - assignment.quantityReturned;
-                  const weekRange = assignment.weekStartDate && assignment.weekEndDate 
-                    ? formatWeekRange(assignment.weekStartDate, assignment.weekEndDate)
-                    : 'No week';
+        <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-3 md:p-4">
+          {isMobile || viewMode === 'cards' ? (
+            // Mobile Card View
+            <div>
+              {filteredAssignments.map((assignment) => (
+                <AssignmentCard key={assignment.id} assignment={assignment} />
+              ))}
+            </div>
+          ) : (
+            // Desktop Table View
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead className="bg-gradient-to-r from-slate-50 to-slate-100/50">
+                  <tr>
+                    <th className="px-4 py-3 text-left text-xs font-semibold text-slate-800">Staff</th>
+                    <th className="px-4 py-3 text-left text-xs font-semibold text-slate-800">Week</th>
+                    <th className="px-4 py-3 text-left text-xs font-semibold text-slate-800">Product</th>
+                    <th className="px-4 py-3 text-left text-xs font-semibold text-slate-800">Quantity</th>
+                    <th className="px-4 py-3 text-left text-xs font-semibold text-slate-800">Status</th>
+                    <th className="px-4 py-3 text-left text-xs font-semibold text-slate-800">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {filteredAssignments.map((assignment) => {
+                    const remaining = assignment.quantityGiven - assignment.quantitySold - assignment.quantityReturned;
+                    const weekRange = assignment.weekStartDate && assignment.weekEndDate 
+                      ? formatWeekRange(assignment.weekStartDate, assignment.weekEndDate)
+                      : 'No week';
 
-                  return (
-                    <tr key={assignment.id} className="hover:bg-slate-50/50 transition-colors">
-                      <td className="px-6 py-4">
-                        <div className="flex items-center gap-3">
-                          <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-blue-100 to-blue-50 flex items-center justify-center">
-                            <User className="w-5 h-5 text-blue-600" />
+                    return (
+                      <tr key={assignment.id} className="hover:bg-slate-50/50">
+                        <td className="px-4 py-3">
+                          <div className="flex items-center gap-2">
+                            <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-blue-100 to-blue-50 flex items-center justify-center">
+                              <User className="w-4 h-4 text-blue-600" />
+                            </div>
+                            <div>
+                              <div className="font-medium text-slate-900 text-sm">{assignment.staff?.name}</div>
+                              {assignment.staff?.phone && (
+                                <div className="text-xs text-slate-600">{assignment.staff.phone}</div>
+                              )}
+                            </div>
                           </div>
-                          <div>
-                            <div className="font-medium text-slate-900">{assignment.staff?.name}</div>
-                            {assignment.staff?.phone && (
-                              <div className="text-sm text-slate-700">{assignment.staff.phone}</div>
+                        </td>
+                        <td className="px-4 py-3 text-sm text-slate-700">{weekRange}</td>
+                        <td className="px-4 py-3">
+                          <div className="font-medium text-slate-900 text-sm">{assignment.product?.name}</div>
+                          {assignment.product?.sku && (
+                            <div className="text-xs text-slate-600 font-mono">{assignment.product.sku}</div>
+                          )}
+                        </td>
+                        <td className="px-4 py-3">
+                          <div className="flex items-center gap-3">
+                            <div className="text-center">
+                              <div className="text-xs text-slate-600">Given</div>
+                              <div className="font-bold text-slate-900">{assignment.quantityGiven}</div>
+                            </div>
+                            <div className="text-center">
+                              <div className="text-xs text-slate-600">Sold</div>
+                              <div className="font-bold text-emerald-700">{assignment.quantitySold}</div>
+                            </div>
+                            <div className="text-center">
+                              <div className="text-xs text-slate-600">Left</div>
+                              <div className="font-bold text-blue-700">{remaining}</div>
+                            </div>
+                          </div>
+                        </td>
+                        <td className="px-4 py-3">
+                          <div className="flex flex-col gap-1">
+                            <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${getStatusColor(assignment.status)}`}>
+                              {assignment.status}
+                            </span>
+                            {assignment.priority && (
+                              <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${getPriorityColor(assignment.priority)}`}>
+                                {assignment.priority}
+                              </span>
                             )}
                           </div>
-                        </div>
-                      </td>
-                      <td className="px-6 py-4">
-                        <div className="text-sm font-medium text-slate-900">{weekRange}</div>
-                      </td>
-                      <td className="px-6 py-4">
-                        <div className="font-medium text-slate-900">{assignment.product?.name}</div>
-                        {assignment.product?.sku && (
-                          <div className="text-xs text-slate-600 font-mono">{assignment.product.sku}</div>
-                        )}
-                      </td>
-                      <td className="px-6 py-4">
-                        <div className="flex items-center gap-6">
-                          <div className="text-center">
-                            <div className="text-xs text-slate-700">Given</div>
-                            <div className="font-bold text-slate-900">{assignment.quantityGiven}</div>
-                          </div>
-                          <div className="text-center">
-                            <div className="text-xs text-slate-700">Sold</div>
-                            <div className="font-bold text-emerald-700">{assignment.quantitySold}</div>
-                          </div>
-                          <div className="text-center">
-                            <div className="text-xs text-slate-700">Left</div>
-                            <div className="font-bold text-blue-700">{remaining}</div>
-                          </div>
-                        </div>
-                      </td>
-                      <td className="px-6 py-4">
-                        <div className="flex flex-col gap-2">
-                          <span className={`inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-medium ${getStatusColor(assignment.status)}`}>
-                            {assignment.status}
-                          </span>
-                          {assignment.priority && (
-                            <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium ${getPriorityColor(assignment.priority)}`}>
-                              {assignment.priority}
-                            </span>
-                          )}
-                        </div>
-                      </td>
-                      <td className="px-6 py-4">
-                        <div className="flex items-center gap-2">
-                          {remaining > 0 && assignment.isCurrentWeek && (
+                        </td>
+                        <td className="px-4 py-3">
+                          <div className="flex items-center gap-2">
+                            {remaining > 0 && assignment.isCurrentWeek && (
+                              <button
+                                onClick={() => openReturnModal(assignment.staff)}
+                                className="p-1.5 text-amber-600 hover:bg-amber-50 rounded-lg"
+                                title="Return"
+                              >
+                                <Package className="w-4 h-4" />
+                              </button>
+                            )}
                             <button
-                              onClick={() => openReturnModal(assignment.staff)}
-                              className="p-2 text-amber-600 hover:bg-amber-50 rounded-lg transition-colors"
-                              title="Return"
+                              onClick={() => handleCompleteAssignment(assignment.id)}
+                              className="p-1.5 text-emerald-600 hover:bg-emerald-50 rounded-lg"
+                              title="Complete"
                             >
-                              <Package className="w-4 h-4" />
+                              <CheckSquare className="w-4 h-4" />
                             </button>
-                          )}
-                          <button
-                            onClick={() => handleCompleteAssignment(assignment.id)}
-                            className="p-2 text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors"
-                            title="Complete"
-                          >
-                            <CheckSquare className="w-4 h-4" />
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
       )}
 
       {/* Footer */}
       <div className="mt-8 text-center text-slate-700 text-sm">
-        <p>© {new Date().getFullYear()} Swift Metals POS • Weekly Staff Inventory Management System v2.0</p>
-        <p className="text-xs mt-1">Total weekly assignments: {stats.totalAssignments} • Current week: {formatWeekRange(currentWeek.weekStartDate, currentWeek.weekEndDate)}</p>
+        <p>© {new Date().getFullYear()} Swift Metals POS • Weekly Staff Inventory Management</p>
+        <p className="text-xs mt-1">Total assignments: {stats.totalAssignments} • Current week: {formatWeekRange(currentWeek.weekStartDate, currentWeek.weekEndDate)}</p>
       </div>
 
-      {/* Product Search Modal */}
+      {/* Modals */}
       <ProductSearchModal
         isOpen={showProductSearch}
         onClose={() => setShowProductSearch(false)}
@@ -2083,20 +2125,29 @@ export default function StaffInventoryManagementPage() {
         bulkMode={true}
       />
 
-      {/* SINGLE Assign Inventory Modal */}
+      <QuickRestockModal
+        isOpen={showQuickRestock}
+        onClose={() => {
+          setShowQuickRestock(false);
+          setRestockProduct(null);
+        }}
+        onRestock={handleQuickRestock}
+        product={restockProduct}
+      />
+
+      {/* Assign Inventory Modal with Integrated Restock */}
       {showAssignModal && (
         <div className="fixed inset-0 bg-black/70 flex items-center justify-center p-2 md:p-4 z-50">
-          <div className="bg-white rounded-2xl w-full max-w-5xl shadow-2xl max-h-[90vh] flex flex-col">
-            {/* Header */}
-            <div className="sticky top-0 bg-gradient-to-r from-blue-600 to-purple-600 text-white p-4 md:p-5 rounded-t-2xl">
+          <div className="bg-white rounded-2xl w-full max-w-4xl shadow-2xl max-h-[90vh] flex flex-col">
+            <div className="sticky top-0 bg-gradient-to-r from-blue-600 to-purple-600 text-white p-4 rounded-t-2xl">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-3">
                   <div className="p-2 bg-white/20 rounded-lg">
-                    <CalendarDays className="w-5 h-5 md:w-6 md:h-6" />
+                    <CalendarDays className="w-5 h-5" />
                   </div>
                   <div>
-                    <h2 className="text-xl md:text-2xl font-bold">Assign Products for the Week</h2>
-                    <p className="text-blue-100 text-sm">Select multiple products and assign them in batch</p>
+                    <h2 className="text-lg md:text-xl font-bold">Assign Products for Week</h2>
+                    <p className="text-blue-100 text-sm">Select multiple products - Restock directly from here</p>
                   </div>
                 </div>
                 <button
@@ -2111,43 +2162,38 @@ export default function StaffInventoryManagementPage() {
                       priority: 'MEDIUM'
                     });
                   }}
-                  className="p-2 hover:bg-white/20 rounded-lg transition-colors"
+                  className="p-2 hover:bg-white/20 rounded-lg"
                 >
-                  <X className="w-5 h-5 md:w-6 md:h-6" />
+                  <X className="w-5 h-5" />
                 </button>
               </div>
             </div>
 
-            {/* Content */}
-            <div className="flex-1 overflow-y-auto p-4 md:p-5">
+            <div className="flex-1 overflow-y-auto p-4 space-y-4">
               {/* Staff Selection */}
-              <div className="mb-6">
-                <label className="block text-sm font-semibold text-slate-900 mb-2">
-                  Select Staff Member *
-                </label>
+              <div>
+                <label className="block text-sm font-semibold text-slate-900 mb-2">Select Staff *</label>
                 <select
                   value={form.staffId}
                   onChange={(e) => setForm({ ...form, staffId: e.target.value })}
-                  className="w-full px-4 py-3 border-2 border-slate-300 rounded-xl focus:border-blue-500 focus:ring-2 focus:ring-blue-200 text-sm text-slate-800"
+                  className="w-full px-4 py-3 border-2 border-slate-300 rounded-xl focus:border-blue-500 text-sm"
                   disabled={submitting}
                 >
-                  <option value="">Choose staff member...</option>
+                  <option value="">Choose staff...</option>
                   {staffList.map((staff) => (
                     <option key={staff.id} value={staff.id}>
-                      {staff.name} {staff.phone && `(${staff.phone})`} {staff.role && `- ${staff.role}`}
+                      {staff.name} {staff.phone && `(${staff.phone})`}
                     </option>
                   ))}
                 </select>
               </div>
 
               {/* Week Selection */}
-              <div className="mb-6">
-                <label className="block text-sm font-semibold text-slate-900 mb-2">
-                  Week Dates *
-                </label>
-                <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-semibold text-slate-900 mb-2">Week Dates *</label>
+                <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <div className="text-xs text-slate-700 mb-1">Week Start (Monday)</div>
+                    <div className="text-xs text-slate-600 mb-1">Start (Monday)</div>
                     <input
                       type="date"
                       value={form.weekStartDate}
@@ -2161,193 +2207,177 @@ export default function StaffInventoryManagementPage() {
                           weekEndDate: endDate.toISOString().split('T')[0]
                         });
                       }}
-                      className="w-full px-4 py-3 border-2 border-slate-300 rounded-xl focus:border-blue-500 focus:ring-2 focus:ring-blue-200 text-sm text-slate-800"
+                      className="w-full px-3 py-2 border-2 border-slate-300 rounded-xl text-sm"
                       disabled={submitting}
                     />
                   </div>
                   <div>
-                    <div className="text-xs text-slate-700 mb-1">Week End (Sunday)</div>
+                    <div className="text-xs text-slate-600 mb-1">End (Sunday)</div>
                     <input
                       type="date"
                       value={form.weekEndDate}
                       onChange={(e) => setForm({ ...form, weekEndDate: e.target.value })}
                       min={form.weekStartDate}
-                      className="w-full px-4 py-3 border-2 border-slate-300 rounded-xl focus:border-blue-500 focus:ring-2 focus:ring-blue-200 text-sm text-slate-800"
+                      className="w-full px-3 py-2 border-2 border-slate-300 rounded-xl text-sm"
                       disabled={submitting}
                     />
                   </div>
                 </div>
-                <div className="mt-2 text-xs text-slate-700">
-                  Week: {form.weekStartDate} to {form.weekEndDate}
-                </div>
               </div>
 
-              {/* Product Search Section */}
-              <div className="mb-6">
-                <label className="block text-sm font-semibold text-slate-900 mb-2">
-                  Add Products (Select Multiple)
-                </label>
-                <div className="flex gap-3">
-                  <button
-                    type="button"
-                    onClick={() => setShowProductSearch(true)}
-                    disabled={submitting}
-                    className="flex-1 px-4 py-3 bg-gradient-to-r from-blue-600 to-blue-700 text-white rounded-xl hover:from-blue-700 hover:to-blue-800 transition-all shadow-sm text-sm font-medium disabled:opacity-50 flex items-center justify-center gap-2"
-                  >
-                    <Search className="w-4 h-4" />
-                    Browse & Select Multiple Products
-                  </button>
-                </div>
-                <p className="text-xs text-slate-600 mt-2">
-                  Select multiple products at once. All selected products will be added with quantity 1 by default.
-                </p>
+              {/* Product Selection */}
+              <div>
+                <label className="block text-sm font-semibold text-slate-900 mb-2">Add Products</label>
+                <button
+                  type="button"
+                  onClick={() => setShowProductSearch(true)}
+                  disabled={submitting}
+                  className="w-full px-4 py-3 bg-gradient-to-r from-blue-600 to-blue-700 text-white rounded-xl text-sm font-medium disabled:opacity-50 flex items-center justify-center gap-2"
+                >
+                  <Search className="w-4 h-4" />
+                  Browse & Select Products
+                </button>
+                <p className="text-xs text-slate-600 mt-2">💡 Select multiple products at once. Need more stock? Click the restock button on any product card.</p>
               </div>
 
-              {/* Selected Products with Batch Controls */}
+              {/* Selected Products */}
               {form.items.length > 0 && (
-                <div className="mb-6">
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
+                <div>
+                  <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
                     <div>
-                      <label className="block text-sm font-semibold text-slate-900">
-                        Selected Products ({form.items.length})
+                      <label className="text-sm font-semibold text-slate-900">
+                        Selected ({form.items.length})
                       </label>
-                      <p className="text-xs text-slate-700">
-                        Total items: {form.items.reduce((sum, item) => sum + parseInt(item.quantity), 0)} • 
-                        Total value: KES {form.items.reduce((sum, item) => sum + ((item.product?.price || 0) * parseInt(item.quantity)), 0).toLocaleString()}
+                      <p className="text-xs text-slate-600">
+                        Total items: {form.items.reduce((sum, item) => sum + parseInt(item.quantity), 0)}
                       </p>
                     </div>
-                    
-                    <div className="flex flex-wrap gap-2">
+                    <div className="flex gap-2">
                       <button
                         type="button"
                         onClick={setAllQuantitiesToOne}
-                        className="px-3 py-1.5 bg-blue-100 text-blue-800 rounded-lg hover:bg-blue-200 text-sm font-medium flex items-center gap-1"
+                        className="px-2 py-1 bg-blue-100 text-blue-800 rounded-lg text-xs"
                       >
-                        <Check className="w-3 h-3" />
-                        Set All to 1
+                        Set 1
                       </button>
                       <button
                         type="button"
                         onClick={setAllQuantitiesToMax}
-                        className="px-3 py-1.5 bg-emerald-100 text-emerald-800 rounded-lg hover:bg-emerald-200 text-sm font-medium flex items-center gap-1"
+                        className="px-2 py-1 bg-emerald-100 text-emerald-800 rounded-lg text-xs"
                       >
-                        <Maximize2 className="w-3 h-3" />
-                        Set All to Max
+                        Set Max
                       </button>
                       <button
                         type="button"
                         onClick={clearAllItems}
-                        className="px-3 py-1.5 bg-red-100 text-red-800 rounded-lg hover:bg-red-200 text-sm font-medium flex items-center gap-1"
+                        className="px-2 py-1 bg-red-100 text-red-800 rounded-lg text-xs"
                       >
-                        <Trash2 className="w-3 h-3" />
-                        Clear All
+                        Clear
                       </button>
                     </div>
                   </div>
                   
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                    {form.items.map((item, index) => (
-                      <ProductSelectionCard
-                        key={index}
-                        product={item.product!}
-                        onRemove={() => removeItemFromForm(index)}
-                        quantity={parseInt(item.quantity)}
-                        onQuantityChange={(qty) => updateItemQuantity(index, qty)}
-                        availableStock={getRemainingStockAfterAssignments(parseInt(item.productId), form.weekStartDate)}
-                        onSetMax={() => {
-                          const maxStock = getRemainingStockAfterAssignments(parseInt(item.productId), form.weekStartDate);
-                          updateItemQuantity(index, Math.min(maxStock, 10));
-                        }}
-                        onSetMin={() => updateItemQuantity(index, 1)}
-                      />
-                    ))}
+                  <div className="grid grid-cols-1 gap-3 max-h-60 overflow-y-auto">
+                    {form.items.map((item, index) => {
+                      const product = item.product!;
+                      const availableStock = getRemainingStockAfterAssignments(parseInt(item.productId), form.weekStartDate);
+                      
+                      return (
+                        <ProductSelectionCard
+                          key={index}
+                          product={product}
+                          onRemove={() => removeItemFromForm(index)}
+                          quantity={parseInt(item.quantity)}
+                          onQuantityChange={(qty) => updateItemQuantity(index, qty)}
+                          availableStock={availableStock}
+                          onSetMax={() => {
+                            const maxStock = getRemainingStockAfterAssignments(parseInt(item.productId), form.weekStartDate);
+                            updateItemQuantity(index, Math.min(maxStock, 10));
+                          }}
+                          onSetMin={() => updateItemQuantity(index, 1)}
+                          onRestock={() => {
+                            setRestockProduct(product);
+                            setShowQuickRestock(true);
+                          }}
+                        />
+                      );
+                    })}
                   </div>
                 </div>
               )}
 
               {/* Empty State */}
               {form.items.length === 0 && (
-                <div className="mb-6 bg-gradient-to-r from-slate-50 to-blue-50/50 rounded-xl p-6 text-center border border-slate-200">
+                <div className="bg-gradient-to-r from-slate-50 to-blue-50/50 rounded-xl p-6 text-center border border-slate-200">
                   <Package className="w-12 h-12 text-slate-300 mx-auto mb-3" />
                   <h4 className="font-medium text-slate-700 mb-2">No products selected</h4>
                   <p className="text-sm text-slate-600 mb-4">
-                    Click "Browse & Select Multiple Products" to add products in bulk.
+                    Click "Browse & Select Products" to add products in bulk.
                   </p>
                   <button
                     type="button"
                     onClick={() => setShowProductSearch(true)}
-                    className="px-4 py-2 bg-gradient-to-r from-blue-600 to-blue-700 text-white rounded-lg hover:from-blue-700 hover:to-blue-800 text-sm font-medium"
+                    className="px-4 py-2 bg-gradient-to-r from-blue-600 to-blue-700 text-white rounded-lg text-sm font-medium"
                   >
                     <Search className="w-4 h-4 inline mr-2" />
-                    Select Multiple Products
+                    Select Products
                   </button>
                 </div>
               )}
 
               {/* Priority */}
-              <div className="mb-6">
-                <label className="block text-sm font-semibold text-slate-900 mb-2">
-                  Priority Level
-                </label>
+              <div>
+                <label className="block text-sm font-semibold text-slate-900 mb-2">Priority Level</label>
                 <div className="grid grid-cols-4 gap-2">
                   {['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'].map(priority => (
                     <button
                       key={priority}
                       type="button"
                       onClick={() => setForm({ ...form, priority: priority as any })}
-                      className={`px-4 py-3 rounded-xl border-2 transition-all text-slate-800 ${
+                      className={`px-3 py-2 rounded-xl text-sm font-medium transition-all ${
                         form.priority === priority 
-                        ? getPriorityColor(priority) + ' border-blue-500 scale-[1.02]' 
-                        : 'border-slate-200 hover:border-slate-300'
+                        ? getPriorityColor(priority) + ' border-blue-500' 
+                        : 'border-2 border-slate-200'
                       }`}
-                      disabled={submitting}
                     >
-                      <div className="text-sm font-medium">{priority}</div>
+                      {priority}
                     </button>
                   ))}
                 </div>
               </div>
 
               {/* Notes */}
-              <div className="mb-6">
-                <label className="block text-sm font-semibold text-slate-900 mb-2">
-                  Notes (Optional)
-                </label>
+              <div>
+                <label className="block text-sm font-semibold text-slate-900 mb-2">Notes (Optional)</label>
                 <textarea
                   value={form.notes}
                   onChange={(e) => setForm({ ...form, notes: e.target.value })}
-                  placeholder="Add any special instructions, guidelines, or notes for this weekly assignment..."
-                  rows={3}
-                  className="w-full px-4 py-3 border-2 border-slate-300 rounded-xl focus:border-blue-500 focus:ring-2 focus:ring-blue-200 text-sm text-slate-800"
+                  placeholder="Add any special instructions or notes for this assignment..."
+                  rows={2}
+                  className="w-full px-4 py-3 border-2 border-slate-300 rounded-xl focus:border-blue-500 text-sm"
                   disabled={submitting}
                 />
               </div>
 
               {/* Summary */}
               {form.items.length > 0 && (
-                <div className="mb-6 bg-gradient-to-r from-slate-50 to-blue-50/50 rounded-xl p-4">
-                  <h4 className="font-semibold text-slate-900 mb-3">Assignment Summary</h4>
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                    <div className="text-center">
-                      <div className="text-xs text-slate-700">Total Products</div>
-                      <div className="text-xl font-bold text-slate-900">{form.items.length}</div>
+                <div className="bg-gradient-to-r from-slate-50 to-blue-50/50 rounded-xl p-3">
+                  <h4 className="font-semibold text-slate-900 mb-2 text-sm">Summary</h4>
+                  <div className="grid grid-cols-2 gap-3 text-center">
+                    <div>
+                      <div className="text-xs text-slate-600">Products</div>
+                      <div className="text-lg font-bold text-slate-900">{form.items.length}</div>
                     </div>
-                    <div className="text-center">
-                      <div className="text-xs text-slate-700">Total Items</div>
-                      <div className="text-xl font-bold text-slate-900">
+                    <div>
+                      <div className="text-xs text-slate-600">Total Items</div>
+                      <div className="text-lg font-bold text-slate-900">
                         {form.items.reduce((sum, item) => sum + parseInt(item.quantity), 0)}
                       </div>
                     </div>
-                    <div className="text-center">
-                      <div className="text-xs text-slate-700">Total Value</div>
-                      <div className="text-xl font-bold text-green-700">
+                    <div className="col-span-2">
+                      <div className="text-xs text-slate-600">Total Value</div>
+                      <div className="text-lg font-bold text-green-700">
                         KES {form.items.reduce((sum, item) => sum + ((item.product?.price || 0) * parseInt(item.quantity)), 0).toLocaleString()}
-                      </div>
-                    </div>
-                    <div className="text-center">
-                      <div className="text-xs text-slate-700">Week</div>
-                      <div className="text-xl font-bold text-blue-700">
-                        {new Date(form.weekStartDate).toLocaleDateString('en-KE', { day: '2-digit', month: 'short' })}
                       </div>
                     </div>
                   </div>
@@ -2355,9 +2385,8 @@ export default function StaffInventoryManagementPage() {
               )}
             </div>
 
-            {/* Footer Actions */}
-            <div className="sticky bottom-0 border-t border-slate-200 p-4 md:p-5 bg-white rounded-b-2xl">
-              <div className="flex flex-col sm:flex-row gap-3">
+            <div className="sticky bottom-0 border-t border-slate-200 p-4 bg-white rounded-b-2xl">
+              <div className="flex gap-3">
                 <button
                   onClick={() => {
                     setShowAssignModal(false);
@@ -2370,27 +2399,24 @@ export default function StaffInventoryManagementPage() {
                       priority: 'MEDIUM'
                     });
                   }}
-                  type="button"
-                  disabled={submitting}
-                  className="flex-1 px-4 py-3 border-2 border-slate-300 text-slate-800 rounded-xl hover:bg-slate-50 font-medium text-sm disabled:opacity-50"
+                  className="flex-1 px-4 py-3 border-2 border-slate-300 rounded-xl font-medium text-sm"
                 >
                   Cancel
                 </button>
                 <button
                   onClick={handleAssignInventory}
-                  type="button"
                   disabled={submitting || !form.staffId || form.items.length === 0}
-                  className="flex-1 px-4 py-3 bg-gradient-to-r from-blue-600 to-purple-600 text-white rounded-xl hover:from-blue-700 hover:to-purple-700 font-medium text-sm disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 shadow-lg"
+                  className="flex-1 px-4 py-3 bg-gradient-to-r from-blue-600 to-purple-600 text-white rounded-xl font-medium text-sm disabled:opacity-50 flex items-center justify-center gap-2"
                 >
                   {submitting ? (
                     <>
-                      <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
-                      Assigning {form.items.length} Product{form.items.length !== 1 ? 's' : ''}...
+                      <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
+                      Assigning...
                     </>
                   ) : (
                     <>
-                      <CalendarDays className="w-5 h-5" />
-                      Assign {form.items.length} Product{form.items.length !== 1 ? 's' : ''} for the Week
+                      <CalendarDays className="w-4 h-4" />
+                      Assign {form.items.length} Product{form.items.length !== 1 ? 's' : ''}
                     </>
                   )}
                 </button>
@@ -2400,20 +2426,19 @@ export default function StaffInventoryManagementPage() {
         </div>
       )}
 
-      {/* Return Inventory Modal */}
+      {/* Return Modal */}
       {showReturnModal && selectedStaff && (
         <div className="fixed inset-0 bg-black/70 flex items-center justify-center p-2 md:p-4 z-50">
-          <div className="bg-white rounded-2xl w-full max-w-lg shadow-2xl max-h-[90vh] flex flex-col">
-            {/* Header */}
-            <div className="sticky top-0 bg-gradient-to-r from-amber-500 to-orange-600 text-white p-4 md:p-5 rounded-t-2xl">
+          <div className="bg-white rounded-2xl w-full max-w-md shadow-2xl max-h-[90vh] flex flex-col">
+            <div className="sticky top-0 bg-gradient-to-r from-amber-500 to-orange-600 text-white p-4 rounded-t-2xl">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-3">
                   <div className="p-2 bg-white/20 rounded-lg">
-                    <Package className="w-5 h-5 md:w-6 md:h-6" />
+                    <Package className="w-5 h-5" />
                   </div>
                   <div>
-                    <h2 className="text-xl md:text-2xl font-bold">Return Inventory</h2>
-                    <p className="text-amber-100 text-sm">Return items from {selectedStaff.name} (Current Week)</p>
+                    <h2 className="text-lg font-bold">Return Inventory</h2>
+                    <p className="text-amber-100 text-sm">Return from {selectedStaff.name}</p>
                   </div>
                 </div>
                 <button
@@ -2422,155 +2447,81 @@ export default function StaffInventoryManagementPage() {
                     setSelectedStaff(null);
                     setReturnForm({ items: [], notes: "" });
                   }}
-                  className="p-2 hover:bg-white/20 rounded-lg transition-colors"
+                  className="p-2 hover:bg-white/20 rounded-lg"
                 >
-                  <X className="w-5 h-5 md:w-6 md:h-6" />
+                  <X className="w-5 h-5" />
                 </button>
               </div>
             </div>
 
-            {/* Content */}
-            <div className="flex-1 overflow-y-auto p-4 md:p-5">
-              {/* Items to Return */}
-              <div className="mb-6">
-                <label className="block text-sm font-semibold text-slate-900 mb-3">
-                  Select items to return from {selectedStaff.name} (Current Week)
-                </label>
-                
-                <div className="space-y-3">
-                  {returnForm.items.map((item, index) => {
-                    const weekRange = item.weekStartDate && item.weekEndDate 
-                      ? formatWeekRange(item.weekStartDate, item.weekEndDate)
-                      : 'Current Week';
-                    
-                    return (
-                      <div key={item.assignmentId} className="border-2 border-slate-200 rounded-xl p-4 bg-slate-50/50">
-                        <div className="flex justify-between items-start mb-3">
-                          <div>
-                            <div className="font-medium text-slate-900">{item.productName}</div>
-                            <div className="text-xs text-slate-700">{weekRange}</div>
-                          </div>
-                          <div className="text-sm font-semibold text-slate-800">
-                            Max: {item.maxReturnable}
-                          </div>
-                        </div>
-                        
-                        <div className="flex items-center gap-3">
-                          <div className="flex-1">
-                            <div className="text-xs text-slate-700 mb-1">Quantity to Return</div>
-                            <input
-                              type="range"
-                              min="0"
-                              max={item.maxReturnable}
-                              value={parseInt(item.quantityReturned) || 0}
-                              onChange={(e) => {
-                                const newItems = [...returnForm.items];
-                                newItems[index].quantityReturned = e.target.value;
-                                setReturnForm({ ...returnForm, items: newItems });
-                              }}
-                              className="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:h-5 [&::-webkit-slider-thumb]:w-5 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-amber-500"
-                              disabled={submitting}
-                            />
-                          </div>
-                          <div className="w-20">
-                            <input
-                              type="number"
-                              min="0"
-                              max={item.maxReturnable}
-                              value={item.quantityReturned}
-                              onChange={(e) => {
-                                const newItems = [...returnForm.items];
-                                newItems[index].quantityReturned = e.target.value;
-                                setReturnForm({ ...returnForm, items: newItems });
-                              }}
-                              className="w-full px-3 py-2 border-2 border-slate-300 rounded-lg focus:border-amber-500 focus:ring-2 focus:ring-amber-200 text-sm text-center text-slate-800"
-                              disabled={submitting}
-                            />
-                          </div>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              const newItems = [...returnForm.items];
-                              newItems[index].quantityReturned = item.maxReturnable.toString();
-                              setReturnForm({ ...returnForm, items: newItems });
-                            }}
-                            className="px-3 py-2 bg-amber-100 text-amber-800 rounded-lg hover:bg-amber-200 text-sm font-medium"
-                            disabled={submitting}
-                          >
-                            Max
-                          </button>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-
-              {/* Total Return */}
-              {returnForm.items.length > 0 && (
-                <div className="mb-6 bg-gradient-to-r from-amber-50 to-orange-50/50 rounded-xl p-4">
-                  <div className="flex items-center justify-between">
+            <div className="flex-1 overflow-y-auto p-4 space-y-3">
+              {returnForm.items.map((item, index) => (
+                <div key={item.assignmentId} className="border-2 border-slate-200 rounded-xl p-3">
+                  <div className="flex justify-between items-start mb-2">
                     <div>
-                      <div className="text-sm font-semibold text-slate-900">Total Items to Return</div>
-                      <div className="text-xs text-slate-700">
-                        {returnForm.items.filter(item => parseInt(item.quantityReturned) > 0).length} items selected
-                      </div>
+                      <div className="font-medium text-slate-900 text-sm">{item.productName}</div>
+                      <div className="text-xs text-slate-600">Max: {item.maxReturnable}</div>
                     </div>
-                    <div className="text-2xl font-bold text-amber-700">
-                      {returnForm.items.reduce((sum, item) => sum + parseInt(item.quantityReturned), 0)}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const newItems = [...returnForm.items];
+                        newItems[index].quantityReturned = item.maxReturnable.toString();
+                        setReturnForm({ ...returnForm, items: newItems });
+                      }}
+                      className="px-2 py-1 bg-amber-100 text-amber-800 rounded-lg text-xs"
+                    >
+                      Max
+                    </button>
+                  </div>
+                  <input
+                    type="number"
+                    min="0"
+                    max={item.maxReturnable}
+                    value={item.quantityReturned}
+                    onChange={(e) => {
+                      const newItems = [...returnForm.items];
+                      newItems[index].quantityReturned = e.target.value;
+                      setReturnForm({ ...returnForm, items: newItems });
+                    }}
+                    className="w-full px-3 py-2 border-2 border-slate-300 rounded-lg text-center text-sm"
+                  />
+                </div>
+              ))}
+
+              <div className="bg-gradient-to-r from-amber-50 to-orange-50/50 rounded-xl p-3">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <div className="text-sm font-semibold text-slate-900">Total to Return</div>
+                    <div className="text-xs text-slate-600">
+                      {returnForm.items.filter(i => parseInt(i.quantityReturned) > 0).length} items
                     </div>
                   </div>
+                  <div className="text-2xl font-bold text-amber-700">
+                    {returnForm.items.reduce((sum, i) => sum + parseInt(i.quantityReturned), 0)}
+                  </div>
                 </div>
-              )}
-
-              {/* Notes */}
-              <div className="mb-6">
-                <label className="block text-sm font-semibold text-slate-900 mb-2">
-                  Return Notes (Optional)
-                </label>
-                <textarea
-                  value={returnForm.notes}
-                  onChange={(e) => setReturnForm({ ...returnForm, notes: e.target.value })}
-                  placeholder="Add notes about why items are being returned..."
-                  rows={2}
-                  className="w-full px-4 py-3 border-2 border-slate-300 rounded-xl focus:border-amber-500 focus:ring-2 focus:ring-amber-200 text-sm text-slate-800"
-                  disabled={submitting}
-                />
               </div>
             </div>
 
-            {/* Footer Actions */}
-            <div className="sticky bottom-0 border-t border-slate-200 p-4 md:p-5 bg-white rounded-b-2xl">
-              <div className="flex flex-col sm:flex-row gap-3">
+            <div className="sticky bottom-0 border-t border-slate-200 p-4 bg-white rounded-b-2xl">
+              <div className="flex gap-3">
                 <button
                   onClick={() => {
                     setShowReturnModal(false);
                     setSelectedStaff(null);
                     setReturnForm({ items: [], notes: "" });
                   }}
-                  type="button"
-                  disabled={submitting}
-                  className="flex-1 px-4 py-3 border-2 border-slate-300 text-slate-800 rounded-xl hover:bg-slate-50 font-medium text-sm disabled:opacity-50"
+                  className="flex-1 px-4 py-3 border-2 border-slate-300 rounded-xl font-medium text-sm"
                 >
                   Cancel
                 </button>
                 <button
                   onClick={handleReturnInventory}
-                  type="button"
-                  disabled={submitting || returnForm.items.every(item => parseInt(item.quantityReturned) === 0)}
-                  className="flex-1 px-4 py-3 bg-gradient-to-r from-amber-500 to-orange-600 text-white rounded-xl hover:from-amber-600 hover:to-orange-700 font-medium text-sm disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 shadow-lg"
+                  disabled={submitting || returnForm.items.every(i => parseInt(i.quantityReturned) === 0)}
+                  className="flex-1 px-4 py-3 bg-gradient-to-r from-amber-500 to-orange-600 text-white rounded-xl font-medium text-sm disabled:opacity-50"
                 >
-                  {submitting ? (
-                    <>
-                      <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
-                      Processing...
-                    </>
-                  ) : (
-                    <>
-                      <Package className="w-5 h-5" />
-                      Return Selected Items
-                    </>
-                  )}
+                  {submitting ? "Processing..." : "Return Items"}
                 </button>
               </div>
             </div>
