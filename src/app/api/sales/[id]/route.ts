@@ -212,6 +212,7 @@ export async function GET(
 ) {
   try {
     const { id } = await params;
+    const includeAudit = req.nextUrl.searchParams.get('includeAudit') === 'true';
 
     const sale = await prisma.sale.findUnique({
       where: { id: Number(id) },
@@ -219,10 +220,6 @@ export async function GET(
         customer: true,
         saleitem: { include: { product: true } },
         payment: true,
-        saleauditlog: {
-          orderBy: { changedAt: 'desc' },
-          take: 50 // Limit audit logs to last 50 entries
-        }
       },
     });
 
@@ -230,7 +227,20 @@ export async function GET(
       return NextResponse.json({ error: "Sale not found" }, { status: 404 });
     }
 
-    return NextResponse.json(sale);
+    // Fetch audit logs separately if requested
+    let auditLogs = null;
+    if (includeAudit) {
+      auditLogs = await prisma.saleauditlog.findMany({
+        where: { saleId: Number(id) },
+        orderBy: { changedAt: 'desc' },
+        take: 50,
+      });
+    }
+
+    return NextResponse.json({
+      ...sale,
+      auditLogs: auditLogs || undefined
+    });
   } catch (error: any) {
     console.error("❌ GET Sale Error:", error);
     return NextResponse.json(
@@ -590,21 +600,20 @@ export async function DELETE(
     const deletingUserEmail = deletedByEmail;
 
     // Create audit log before deletion
-   // Create audit log before deletion
-await createAuditLog(
-  Number(id),
-  "DELETE",
-  deletingUser,
-  deletingUserEmail,
-  ipAddress || req.headers.get('x-forwarded-for') || undefined,
-  userAgent || req.headers.get('user-agent') || undefined,
-  undefined,
-  undefined,
-  undefined,
-  `Sale deleted. Reason: ${deletionReason}. Restocked: ${restockItems}`, // Changed from restockedItems to restockItems
-  { saleData: sale, restockedItems: restockItems, deletionReason }, // Also fix here
-  `Sale deleted with reason: ${deletionReason}`
-);
+    await createAuditLog(
+      Number(id),
+      "DELETE",
+      deletingUser,
+      deletingUserEmail,
+      ipAddress || req.headers.get('x-forwarded-for') || undefined,
+      userAgent || req.headers.get('user-agent') || undefined,
+      undefined,
+      undefined,
+      undefined,
+      `Sale deleted. Reason: ${deletionReason}. Restocked: ${restockItems}`,
+      { saleData: sale, restockedItems: restockItems, deletionReason },
+      `Sale deleted with reason: ${deletionReason}`
+    );
 
     // Create deleted sale record in archive
     await createDeletedSaleRecord(
