@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useState, useMemo, useRef } from "react";
-import { Search, Package, Edit2, Trash2, Plus, X, DollarSign, TrendingUp, Minus } from "lucide-react";
+import { Search, Package, Edit2, Trash2, Plus, X, DollarSign, TrendingUp, Minus, AlertTriangle, Trash2 as TrashIcon, Loader, Eye, CheckCircle } from "lucide-react";
+import { auth } from "@/lib/firebase";
 
 interface Stock {
   quantity: number;
@@ -44,7 +45,6 @@ export default function ProductsPage() {
   const [stockOperation, setStockOperation] = useState({
     mode: 'add' as 'add' | 'remove',
     quantity: "",
-    // Removed manual totalCost input
     paymentSource: "cash",
     creditorName: "",
     creditorPhone: "",
@@ -59,8 +59,35 @@ export default function ProductsPage() {
   const [deleting, setDeleting] = useState<number | null>(null);
   const [creditors, setCreditors] = useState<any[]>([]);
   const [loadingCreditors, setLoadingCreditors] = useState(false);
+  
+  // ========== SECRET RESET BUTTON STATE ==========
+  const [showSecretReset, setShowSecretReset] = useState(false);
+  const [clickCount, setClickCount] = useState(0);
+  const [clickTimer, setClickTimer] = useState<NodeJS.Timeout | null>(null);
+  const [resetLoading, setResetLoading] = useState(false);
+  const [resetConfirmText, setResetConfirmText] = useState("");
+  const [resetReason, setResetReason] = useState("");
+  const [resetError, setResetError] = useState<string | null>(null);
+  const [resetSuccess, setResetSuccess] = useState<string | null>(null);
+  const [previewData, setPreviewData] = useState<any>(null);
+  const [showPreview, setShowPreview] = useState(false);
+  const [currentUser, setCurrentUser] = useState<any>(null);
 
   const formRef = useRef<HTMLDivElement>(null);
+
+  // Get current user
+  useEffect(() => {
+    const unsubscribe = auth.onAuthStateChanged((user) => {
+      if (user) {
+        setCurrentUser({
+          email: user.email,
+          name: user.displayName || user.email?.split('@')[0] || 'User',
+          uid: user.uid
+        });
+      }
+    });
+    return () => unsubscribe();
+  }, []);
 
   // Fetch products and creditors on mount
   useEffect(() => {
@@ -77,6 +104,116 @@ export default function ProductsPage() {
       });
     }
   }, [showForm]);
+
+  // ========== SECRET TRIPLE-CLICK HANDLER ==========
+  const handleSecretTripleClick = () => {
+    setClickCount(prev => prev + 1);
+    
+    // Reset timer after 500ms of no clicks
+    if (clickTimer) clearTimeout(clickTimer);
+    
+    const timer = setTimeout(() => {
+      setClickCount(0);
+    }, 500);
+    setClickTimer(timer);
+    
+    // If triple-click detected (3 clicks in 500ms)
+    if (clickCount + 1 === 3) {
+      setShowSecretReset(true);
+      setClickCount(0);
+      // Auto-hide after 15 seconds
+      setTimeout(() => {
+        setShowSecretReset(false);
+        setResetConfirmText("");
+        setResetReason("");
+        setResetError(null);
+        setResetSuccess(null);
+      }, 15000);
+    }
+  };
+
+  // ========== INVENTORY RESET FUNCTIONS ==========
+  const fetchInventoryPreview = async () => {
+    setResetLoading(true);
+    setResetError(null);
+    
+    try {
+      const response = await fetch('/api/inventory/reset?preview=true');
+      const data = await response.json();
+      
+      if (response.ok) {
+        setPreviewData(data);
+        setShowPreview(true);
+      } else {
+        throw new Error(data.error || 'Failed to fetch preview');
+      }
+    } catch (err: any) {
+      setResetError(err.message || 'Failed to fetch inventory preview');
+    } finally {
+      setResetLoading(false);
+    }
+  };
+
+  const handleInventoryReset = async () => {
+    if (resetConfirmText !== 'CONFIRM_DELETE_ALL_INVENTORY') {
+      setResetError('Please type CONFIRM_DELETE_ALL_INVENTORY to confirm');
+      return;
+    }
+
+    if (!resetReason.trim()) {
+      setResetError('Please provide a reason for resetting inventory');
+      return;
+    }
+
+    if (!currentUser) {
+      setResetError('Please log in to reset inventory');
+      return;
+    }
+
+    setResetLoading(true);
+    setResetError(null);
+    setResetSuccess(null);
+
+    try {
+      const ipResponse = await fetch('https://api.ipify.org?format=json');
+      const ipData = await ipResponse.json();
+      
+      const response = await fetch('/api/inventory/reset', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          confirm: resetConfirmText,
+          preserveSalesItems: true,
+          performedBy: currentUser.name,
+          performedByEmail: currentUser.email,
+          ipAddress: ipData.ip,
+          reason: resetReason
+        })
+      });
+
+      const data = await response.json();
+
+      if (response.ok) {
+        setResetSuccess(`Inventory reset completed! Deleted ${data.results.products} products, ${data.results.stock} stock records.`);
+        // Refresh products
+        await fetchProducts();
+        // Close after 2 seconds
+        setTimeout(() => {
+          setShowSecretReset(false);
+          setResetConfirmText("");
+          setResetReason("");
+          setResetSuccess(null);
+          setShowPreview(false);
+        }, 2000);
+      } else {
+        throw new Error(data.error || 'Failed to reset inventory');
+      }
+    } catch (err: any) {
+      setResetError(err.message || 'Failed to reset inventory');
+    } finally {
+      setResetLoading(false);
+    }
+  };
 
   const fetchCreditors = async () => {
     setLoadingCreditors(true);
@@ -198,9 +335,7 @@ export default function ProductsPage() {
         setProducts((prev) => [savedProduct, ...prev]);
       }
 
-      // Reset form and close
       resetFormAndClose();
-      
       alert(editingId ? "✅ Product updated successfully!" : "✅ Product added successfully!");
     } catch (error) {
       console.error("Error saving product:", error);
@@ -235,7 +370,6 @@ export default function ProductsPage() {
 
     try {
       if (stockOperation.mode === 'add') {
-        // Calculate total cost automatically
         const totalCost = calculateTotalCost;
 
         if (totalCost <= 0) {
@@ -263,18 +397,9 @@ export default function ProductsPage() {
             quantity,
             totalCost,
             paymentSource: stockOperation.paymentSource,
-            creditorName:
-              stockOperation.paymentSource === "credit"
-                ? stockOperation.creditorName
-                : undefined,
-            creditorPhone:
-              stockOperation.paymentSource === "credit"
-                ? stockOperation.creditorPhone
-                : undefined,
-            creditorEmail:
-              stockOperation.paymentSource === "credit" && stockOperation.creditorEmail
-                ? stockOperation.creditorEmail
-                : undefined,
+            creditorName: stockOperation.paymentSource === "credit" ? stockOperation.creditorName : undefined,
+            creditorPhone: stockOperation.paymentSource === "credit" ? stockOperation.creditorPhone : undefined,
+            creditorEmail: stockOperation.paymentSource === "credit" && stockOperation.creditorEmail ? stockOperation.creditorEmail : undefined,
           }),
         });
 
@@ -291,33 +416,19 @@ export default function ProductsPage() {
         };
 
         setProducts((prev) =>
-          prev.map((p) =>
-            p.id === editingId ? normalizedProduct : p
-          )
+          prev.map((p) => p.id === editingId ? normalizedProduct : p)
         );
 
         if (stockOperation.paymentSource === "credit") {
           await fetchCreditors();
         }
 
-        const successMessage = 
-          stockOperation.paymentSource === "cash"
-            ? `✅ Stock Added Successfully!\n\n` +
-              `Previous Stock: ${stockSummary.previousQuantity} units\n` +
-              `Added: ${stockSummary.restockedQuantity} units\n` +
-              `New Total: ${stockSummary.newTotalQuantity} units\n\n` +
-              `Cash deducted: KSh ${totalCost.toFixed(2)}\n` +
-              `New Weighted Cost Price: KSh ${stockSummary.newWeightedCostPrice.toFixed(2)}/unit`
-            : `✅ Stock Added Successfully!\n\n` +
-              `Previous Stock: ${stockSummary.previousQuantity} units\n` +
-              `Added: ${stockSummary.restockedQuantity} units\n` +
-              `New Total: ${stockSummary.newTotalQuantity} units\n\n` +
-              `Added to ${stockOperation.creditorName}'s balance: KSh ${totalCost.toFixed(2)}\n` +
-              `New Weighted Cost Price: KSh ${stockSummary.newWeightedCostPrice.toFixed(2)}/unit`;
+        const successMessage = stockOperation.paymentSource === "cash"
+          ? `✅ Stock Added Successfully!\n\nPrevious Stock: ${stockSummary.previousQuantity} units\nAdded: ${stockSummary.restockedQuantity} units\nNew Total: ${stockSummary.newTotalQuantity} units\n\nCash deducted: KSh ${totalCost.toFixed(2)}\nNew Weighted Cost Price: KSh ${stockSummary.newWeightedCostPrice.toFixed(2)}/unit`
+          : `✅ Stock Added Successfully!\n\nPrevious Stock: ${stockSummary.previousQuantity} units\nAdded: ${stockSummary.restockedQuantity} units\nNew Total: ${stockSummary.newTotalQuantity} units\n\nAdded to ${stockOperation.creditorName}'s balance: KSh ${totalCost.toFixed(2)}\nNew Weighted Cost Price: KSh ${stockSummary.newWeightedCostPrice.toFixed(2)}/unit`;
 
         alert(successMessage);
       } else {
-        // Handle removing stock
         const res = await fetch("/api/restock", {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
@@ -333,25 +444,20 @@ export default function ProductsPage() {
           return alert(data.error || "Failed to remove stock");
         }
 
-        const { product: updatedProduct, removalSummary } = await res.json();
+        const { product: updatedProduct } = await res.json();
         const normalizedProduct = {
           ...updatedProduct,
           stockQuantity: updatedProduct.stock?.reduce((sum: number, s: Stock) => sum + s.quantity, 0) || 0,
         };
 
         setProducts((prev) =>
-          prev.map((p) =>
-            p.id === editingId ? normalizedProduct : p
-          )
+          prev.map((p) => p.id === editingId ? normalizedProduct : p)
         );
 
         alert(`✅ Successfully removed ${quantity} units from ${currentProduct?.name}\nReason: ${stockOperation.reason || "Stock adjustment"}`);
       }
 
-      // Reset stock operation form and close the main form
       resetFormAndClose();
-      
-      // Refresh the product data
       await fetchProducts();
     } catch (error) {
       console.error(`Error ${stockOperation.mode === 'add' ? 'adding' : 'removing'} stock:`, error);
@@ -361,7 +467,6 @@ export default function ProductsPage() {
     }
   };
 
-  // Reset form and close
   const resetFormAndClose = () => {
     setForm({
       name: "",
@@ -384,7 +489,6 @@ export default function ProductsPage() {
     setShowForm(false);
   };
 
-  // Populate form for editing and scroll to it
   const handleEdit = (product: Product) => {
     setForm({
       name: product.name,
@@ -407,7 +511,6 @@ export default function ProductsPage() {
     setShowForm(true);
   };
 
-  // Delete product
   const handleDelete = async (id: number) => {
     if (!confirm("Are you sure you want to delete this product?")) return;
 
@@ -435,13 +538,10 @@ export default function ProductsPage() {
     }
   };
 
-  // Import contact from phone
   const importContact = async () => {
     try {
       if (!("contacts" in navigator && "ContactsManager" in window)) {
-        alert(
-          "Contact picker is not supported on this device/browser. Please enter the details manually."
-        );
+        alert("Contact picker is not supported on this device/browser. Please enter the details manually.");
         return;
       }
 
@@ -478,12 +578,20 @@ export default function ProductsPage() {
   const currentStock = currentProduct?.stockQuantity || 0;
   const productionCost = currentProduct?.productionCost || 0;
 
+  const formatNumber = (num: number) => {
+    return new Intl.NumberFormat().format(num);
+  };
+
   return (
     <div className="min-h-screen bg-gray-50 p-6">
       <div className="max-w-7xl mx-auto">
-        {/* Header */}
-        <div className="flex justify-between items-center mb-6">
-          <h1 className="text-3xl font-bold text-black flex items-center gap-2">
+        {/* Header with SECRET TRIPLE-CLICK AREA */}
+        <div 
+          className="flex justify-between items-center mb-6 cursor-pointer"
+          onClick={handleSecretTripleClick}
+          title="Products Management"
+        >
+          <h1 className="text-3xl font-bold text-black flex items-center gap-2 select-none">
             <Package className="w-8 h-8" />
             Products Management
           </h1>
@@ -500,6 +608,160 @@ export default function ProductsPage() {
             {showForm ? "Cancel" : "Add Product"}
           </button>
         </div>
+
+        {/* ========== SECRET INVENTORY RESET BUTTON ========== */}
+        {/* 
+          🔐 SECRET ACCESS: Triple-click on the "Products Management" header above!
+          The button will appear here in the top-right corner.
+        */}
+        {showSecretReset && (
+          <div className="fixed top-20 right-6 z-50">
+            <div className="bg-white rounded-lg shadow-2xl border-2 border-red-500 p-4 w-96 animate-in slide-in-from-top duration-300">
+              <div className="flex justify-between items-start mb-3">
+                <div className="flex items-center gap-2">
+                  <div className="bg-red-100 p-1 rounded-full">
+                    <AlertTriangle className="text-red-600" size={20} />
+                  </div>
+                  <h3 className="font-bold text-red-600">⚠️ EMERGENCY: Reset All Inventory</h3>
+                </div>
+                <button
+                  onClick={() => {
+                    setShowSecretReset(false);
+                    setResetConfirmText("");
+                    setResetReason("");
+                    setResetError(null);
+                    setResetSuccess(null);
+                    setShowPreview(false);
+                  }}
+                  className="text-gray-500 hover:text-gray-700"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              {resetSuccess ? (
+                <div className="bg-green-50 border border-green-200 rounded-lg p-3 mb-3">
+                  <div className="flex items-center gap-2">
+                    <CheckCircle className="text-green-600" size={16} />
+                    <p className="text-sm text-green-700">{resetSuccess}</p>
+                  </div>
+                </div>
+              ) : (
+                <>
+                  <p className="text-sm text-gray-600 mb-3">
+                    This will permanently delete ALL products, stock records, and inventory data. Sales and customer data will be preserved.
+                  </p>
+
+                  {/* Preview Button */}
+                  <button
+                    onClick={fetchInventoryPreview}
+                    disabled={resetLoading}
+                    className="w-full mb-3 flex items-center justify-center gap-2 px-3 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition text-sm"
+                  >
+                    <Eye size={16} />
+                    Preview what will be deleted
+                  </button>
+
+                  {/* Preview Modal */}
+                  {showPreview && previewData && (
+                    <div className="mb-3 p-3 bg-gray-50 rounded-lg border max-h-60 overflow-y-auto">
+                      <div className="flex justify-between items-center mb-2">
+                        <h4 className="font-semibold text-sm">Data to be deleted:</h4>
+                        <button onClick={() => setShowPreview(false)} className="text-gray-400 hover:text-gray-600">
+                          <X size={14} />
+                        </button>
+                      </div>
+                      <div className="space-y-1 text-xs">
+                        <div className="flex justify-between">
+                          <span>Products:</span>
+                          <span className="font-bold text-red-600">{formatNumber(previewData.counts.products)}</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span>Stock Records:</span>
+                          <span className="font-bold text-red-600">{formatNumber(previewData.counts.stock)}</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span>Restock History:</span>
+                          <span className="font-bold text-red-600">{formatNumber(previewData.counts.restock)}</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span>Catalog Products:</span>
+                          <span className="font-bold text-red-600">{formatNumber(previewData.counts.catalogproducts)}</span>
+                        </div>
+                        {previewData.sampleProducts && previewData.sampleProducts.length > 0 && (
+                          <div className="mt-2 pt-2 border-t">
+                            <p className="font-semibold mb-1">Sample products:</p>
+                            {previewData.sampleProducts.slice(0, 3).map((p: any) => (
+                              <div key={p.id} className="text-gray-600 text-xs">• {p.name}</div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Reason Input */}
+                  <div className="mb-3">
+                    <label className="block text-xs font-medium text-gray-700 mb-1">
+                      Reason for reset *
+                    </label>
+                    <textarea
+                      value={resetReason}
+                      onChange={(e) => setResetReason(e.target.value)}
+                      placeholder="e.g., Clearing old inventory, System cleanup, New season products..."
+                      rows={2}
+                      className="w-full p-2 border border-gray-300 rounded-lg text-xs focus:ring-2 focus:ring-red-500 focus:border-red-500"
+                    />
+                  </div>
+
+                  {/* Confirmation Input */}
+                  <div className="mb-3">
+                    <label className="block text-xs font-medium text-gray-700 mb-1">
+                      Type <span className="font-mono text-red-600">CONFIRM_DELETE_ALL_INVENTORY</span> to confirm
+                    </label>
+                    <input
+                      type="text"
+                      value={resetConfirmText}
+                      onChange={(e) => setResetConfirmText(e.target.value)}
+                      placeholder="Type CONFIRM_DELETE_ALL_INVENTORY"
+                      className="w-full p-2 border border-gray-300 rounded-lg text-xs font-mono focus:ring-2 focus:ring-red-500 focus:border-red-500"
+                    />
+                  </div>
+
+                  {/* Error Display */}
+                  {resetError && (
+                    <div className="mb-3 bg-red-50 border border-red-200 rounded-lg p-2">
+                      <p className="text-xs text-red-700">{resetError}</p>
+                    </div>
+                  )}
+
+                  {/* Reset Button */}
+                  <button
+                    onClick={handleInventoryReset}
+                    disabled={resetLoading || !resetConfirmText || !resetReason.trim()}
+                    className="w-full bg-red-600 text-white px-4 py-2 rounded-lg hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed transition flex items-center justify-center gap-2 text-sm font-medium"
+                  >
+                    {resetLoading ? (
+                      <>
+                        <Loader className="animate-spin" size={16} />
+                        Resetting...
+                      </>
+                    ) : (
+                      <>
+                        <TrashIcon size={16} />
+                        Permanently Delete All Inventory
+                      </>
+                    )}
+                  </button>
+
+                  <p className="text-xs text-gray-500 mt-3 text-center">
+                    This action cannot be undone. All inventory data will be permanently deleted.
+                  </p>
+                </>
+              )}
+            </div>
+          </div>
+        )}
 
         {/* Search and Filter */}
         <div className="bg-white rounded-lg shadow-sm p-4 mb-6">
@@ -532,7 +794,7 @@ export default function ProductsPage() {
           </div>
         </div>
 
-        {/* Add/Edit Form - with ref for scrolling */}
+        {/* Add/Edit Form */}
         {showForm && (
           <div ref={formRef} className="bg-white rounded-lg shadow-sm p-6 mb-6">
             <h2 className="text-xl font-semibold mb-4 text-black">
@@ -556,9 +818,7 @@ export default function ProductsPage() {
                 placeholder="Description"
                 className="border border-gray-300 p-3 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent md:col-span-2 text-black"
                 value={form.description}
-                onChange={(e) =>
-                  setForm({ ...form, description: e.target.value })
-                }
+                onChange={(e) => setForm({ ...form, description: e.target.value })}
               />
               <input
                 placeholder="Production Cost *"
@@ -569,7 +829,6 @@ export default function ProductsPage() {
                 value={form.productionCost}
                 onChange={(e) => {
                   setForm({ ...form, productionCost: e.target.value });
-                  // When production cost changes, update the form but keep the rest
                   if (editingId) {
                     const currentProduct = products.find(p => p.id === editingId);
                     if (currentProduct) {
@@ -594,7 +853,6 @@ export default function ProductsPage() {
                 onChange={(e) => setForm({ ...form, price: e.target.value })}
               />
               
-              {/* Initial Stock for new products */}
               {!editingId && (
                 <div className="md:col-span-2">
                   <label className="block text-sm font-medium text-gray-700 mb-2">
@@ -611,13 +869,11 @@ export default function ProductsPage() {
                 </div>
               )}
 
-              {/* Stock Management for existing products */}
               {editingId && (
                 <div className="md:col-span-2">
                   <div className="border-t pt-4 mt-4">
                     <h3 className="text-lg font-semibold mb-4 text-black">Stock Management</h3>
                     
-                    {/* Current Stock Display */}
                     <div className="mb-4 p-4 bg-gray-50 rounded-lg">
                       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                         <div>
@@ -643,7 +899,6 @@ export default function ProductsPage() {
                       </div>
                     </div>
 
-                    {/* Stock Operation Toggle */}
                     <div className="flex gap-2 mb-4">
                       <button
                         type="button"
@@ -671,7 +926,6 @@ export default function ProductsPage() {
                       </button>
                     </div>
 
-                    {/* Stock Operation Form */}
                     <div className="space-y-4">
                       <div>
                         <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -683,16 +937,13 @@ export default function ProductsPage() {
                           max={stockOperation.mode === 'remove' ? currentStock : undefined}
                           placeholder={`Enter quantity ${stockOperation.mode === 'remove' ? `(max: ${currentStock})` : ''}`}
                           value={stockOperation.quantity}
-                          onChange={(e) =>
-                            setStockOperation({ ...stockOperation, quantity: e.target.value })
-                          }
+                          onChange={(e) => setStockOperation({ ...stockOperation, quantity: e.target.value })}
                           className="w-full border border-gray-300 p-3 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-black"
                         />
                       </div>
 
                       {stockOperation.mode === 'add' && (
                         <>
-                          {/* Total Cost Display (Automatically Calculated) */}
                           <div className="p-4 bg-blue-50 rounded-lg border border-blue-200">
                             <div className="flex justify-between items-center">
                               <div>
@@ -710,11 +961,6 @@ export default function ProductsPage() {
                                 </p>
                               </div>
                             </div>
-                            {parseInt(stockOperation.quantity) > 0 && productionCost > 0 && (
-                              <p className="text-xs text-green-600 mt-2">
-                                Unit cost: KSh {(calculateTotalCost / parseInt(stockOperation.quantity)).toFixed(2)}
-                              </p>
-                            )}
                           </div>
 
                           <div>
@@ -723,28 +969,19 @@ export default function ProductsPage() {
                             </label>
                             <select
                               value={stockOperation.paymentSource}
-                              onChange={(e) =>
-                                setStockOperation({
-                                  ...stockOperation,
-                                  paymentSource: e.target.value,
-                                  creditorName: "",
-                                  creditorPhone: "",
-                                  creditorEmail: "",
-                                })
-                              }
+                              onChange={(e) => setStockOperation({
+                                ...stockOperation,
+                                paymentSource: e.target.value,
+                                creditorName: "",
+                                creditorPhone: "",
+                                creditorEmail: "",
+                              })}
                               className="w-full border border-gray-300 p-3 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-black"
                             >
                               <option value="cash">Cash (Deduct from balance)</option>
                               <option value="credit">Credit / Account</option>
                               <option value="other">Other</option>
                             </select>
-
-                            {stockOperation.paymentSource === "cash" && (
-                              <p className="text-xs text-orange-600 mt-2 flex items-center gap-1">
-                                <span>⚠️</span>
-                                <span>KSh {calculateTotalCost.toFixed(2)} will be deducted from your cash balance</span>
-                              </p>
-                            )}
 
                             {stockOperation.paymentSource === "credit" && (
                               <div className="mt-4 space-y-4 p-4 bg-blue-50 rounded-lg">
@@ -803,12 +1040,7 @@ export default function ProductsPage() {
                                     type="text"
                                     placeholder="Enter creditor name"
                                     value={stockOperation.creditorName}
-                                    onChange={(e) =>
-                                      setStockOperation({
-                                        ...stockOperation,
-                                        creditorName: e.target.value,
-                                      })
-                                    }
+                                    onChange={(e) => setStockOperation({ ...stockOperation, creditorName: e.target.value })}
                                     className="w-full border border-gray-300 p-3 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-black"
                                     required
                                   />
@@ -822,12 +1054,7 @@ export default function ProductsPage() {
                                     type="tel"
                                     placeholder="Enter phone number"
                                     value={stockOperation.creditorPhone}
-                                    onChange={(e) =>
-                                      setStockOperation({
-                                        ...stockOperation,
-                                        creditorPhone: e.target.value,
-                                      })
-                                    }
+                                    onChange={(e) => setStockOperation({ ...stockOperation, creditorPhone: e.target.value })}
                                     className="w-full border border-gray-300 p-3 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-black"
                                     required
                                   />
@@ -841,19 +1068,10 @@ export default function ProductsPage() {
                                     type="email"
                                     placeholder="Enter email address"
                                     value={stockOperation.creditorEmail}
-                                    onChange={(e) =>
-                                      setStockOperation({
-                                        ...stockOperation,
-                                        creditorEmail: e.target.value,
-                                      })
-                                    }
+                                    onChange={(e) => setStockOperation({ ...stockOperation, creditorEmail: e.target.value })}
                                     className="w-full border border-gray-300 p-3 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-black"
                                   />
                                 </div>
-
-                                <p className="text-xs text-gray-600 mt-2">
-                                  💡 KSh {calculateTotalCost.toFixed(2)} will be added to this creditor's balance
-                                </p>
                               </div>
                             )}
                           </div>
@@ -868,21 +1086,16 @@ export default function ProductsPage() {
                           <textarea
                             placeholder="Enter reason (e.g., damaged, expired, sold, etc.)"
                             value={stockOperation.reason}
-                            onChange={(e) =>
-                              setStockOperation({ ...stockOperation, reason: e.target.value })
-                            }
+                            onChange={(e) => setStockOperation({ ...stockOperation, reason: e.target.value })}
                             className="w-full border border-gray-300 p-3 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-black"
                             rows={2}
                           />
                         </div>
                       )}
 
-                      {/* Stock Preview */}
                       {stockOperation.quantity && (
                         <div className={`p-3 rounded-lg border ${
-                          stockOperation.mode === 'add' 
-                            ? 'bg-green-50 border-green-200' 
-                            : 'bg-red-50 border-red-200'
+                          stockOperation.mode === 'add' ? 'bg-green-50 border-green-200' : 'bg-red-50 border-red-200'
                         }`}>
                           <div className="grid grid-cols-3 gap-4 text-sm">
                             <div>
@@ -915,18 +1128,9 @@ export default function ProductsPage() {
                               <p className="text-xs text-gray-500">units</p>
                             </div>
                           </div>
-                          {stockOperation.mode === 'add' && calculateTotalCost > 0 && (
-                            <div className="mt-3 pt-3 border-t border-green-200">
-                              <p className="text-gray-600 font-medium">Total Cost:</p>
-                              <p className="text-xl font-bold text-green-700">
-                                KSh {calculateTotalCost.toFixed(2)}
-                              </p>
-                            </div>
-                          )}
                         </div>
                       )}
 
-                      {/* Stock Operation Button */}
                       <button
                         type="button"
                         onClick={handleStockOperation}
@@ -952,19 +1156,12 @@ export default function ProductsPage() {
                 </div>
               )}
 
-              {/* Submit Button */}
               <button
                 onClick={handleSubmit}
                 disabled={submitting}
                 className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-lg font-medium transition disabled:bg-blue-400 disabled:cursor-not-allowed"
               >
-                {submitting
-                  ? editingId
-                    ? "Updating..."
-                    : "Adding..."
-                  : editingId
-                  ? "Update Product"
-                  : "Add Product"}
+                {submitting ? (editingId ? "Updating..." : "Adding...") : (editingId ? "Update Product" : "Add Product")}
               </button>
             </div>
           </div>
@@ -989,17 +1186,12 @@ export default function ProductsPage() {
               const avgCostPrice = p.stock?.[0]?.costPrice;
 
               return (
-                <div
-                  key={p.id}
-                  className="bg-white rounded-lg shadow-sm p-5 hover:shadow-md transition"
-                >
+                <div key={p.id} className="bg-white rounded-lg shadow-sm p-5 hover:shadow-md transition">
                   <div className="flex justify-between items-start">
                     <div className="flex-1">
                       <div className="flex items-start justify-between mb-2">
                         <div>
-                          <h2 className="text-xl font-semibold text-black">
-                            {p.name}
-                          </h2>
+                          <h2 className="text-xl font-semibold text-black">{p.name}</h2>
                           {p.category && (
                             <span className="inline-block bg-blue-100 text-blue-800 text-xs px-2 py-1 rounded mt-1">
                               {p.category}
@@ -1007,47 +1199,32 @@ export default function ProductsPage() {
                           )}
                         </div>
                       </div>
-                      {p.description && (
-                        <p className="text-gray-600 mb-3">{p.description}</p>
-                      )}
+                      {p.description && <p className="text-gray-600 mb-3">{p.description}</p>}
                       <div className="grid grid-cols-2 md:grid-cols-5 gap-3 text-sm">
                         <div>
                           <span className="text-gray-500">Production Cost:</span>
-                          <p className="font-semibold text-black">
-                            KSh {p.productionCost?.toFixed(2) || "N/A"}
-                          </p>
+                          <p className="font-semibold text-black">KSh {p.productionCost?.toFixed(2) || "N/A"}</p>
                         </div>
                         {avgCostPrice && (
                           <div>
                             <span className="text-gray-500">Avg. Cost Price:</span>
-                            <p className="font-semibold text-purple-600">
-                              KSh {avgCostPrice.toFixed(2)}
-                            </p>
+                            <p className="font-semibold text-purple-600">KSh {avgCostPrice.toFixed(2)}</p>
                           </div>
                         )}
                         <div>
                           <span className="text-gray-500">Selling Price:</span>
-                          <p className="font-semibold text-black">
-                            KSh {p.price.toFixed(2)}
-                          </p>
+                          <p className="font-semibold text-black">KSh {p.price.toFixed(2)}</p>
                         </div>
                         {profit !== null && (
                           <div>
                             <span className="text-gray-500">Profit/Unit:</span>
-                            <p className="font-semibold text-green-600">
-                              KSh {profit.toFixed(2)} ({profitMargin}%)
-                            </p>
+                            <p className="font-semibold text-green-600">KSh {profit.toFixed(2)} ({profitMargin}%)</p>
                           </div>
                         )}
                         <div>
                           <span className="text-gray-500">Stock:</span>
-                          <p
-                            className={`font-semibold ${
-                              isLowStock ? "text-red-600" : "text-black"
-                            }`}
-                          >
-                            {p.stockQuantity} units
-                            {isLowStock && " ⚠️"}
+                          <p className={`font-semibold ${isLowStock ? "text-red-600" : "text-black"}`}>
+                            {p.stockQuantity} units {isLowStock && "⚠️"}
                           </p>
                         </div>
                       </div>

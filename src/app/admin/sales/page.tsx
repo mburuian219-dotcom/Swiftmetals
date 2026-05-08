@@ -1,6 +1,6 @@
 "use client";
 import React, { useEffect, useState, useCallback, useMemo } from "react";
-import { Download, MessageSquare, Send, Clock, CreditCard, AlertTriangle, CheckCircle, Plus, X, Edit, Trash2, Calculator, Save, Menu, ChevronDown, ChevronUp, Filter, Calendar, Search, XCircle, User, DollarSign, Banknote, Smartphone, Landmark, CreditCard as CardIcon, Archive, RotateCcw, Info, History } from "lucide-react";
+import { Download, MessageSquare, Send, Clock, CreditCard, AlertTriangle, CheckCircle, Plus, X, Edit, Trash2, Calculator, Save, Menu, ChevronDown, ChevronUp, Filter, Calendar, Search, XCircle, User, DollarSign, Banknote, Smartphone, Landmark, CreditCard as CardIcon, Archive, RotateCcw, Info, History, FileSpreadsheet } from "lucide-react";
 import { auth } from "@/lib/firebase";
 import { onAuthStateChanged } from "firebase/auth";
 
@@ -237,6 +237,18 @@ export default function EnhancedSalesPage() {
   // Debug state
   const [debugInfo, setDebugInfo] = useState<string>("");
 
+  // ==================== ACCOUNTING REPORT STATE ====================
+  const [showAccountingModal, setShowAccountingModal] = useState(false);
+  const [accountingReportType, setAccountingReportType] = useState<"daily" | "outstanding" | "customer" | "weekly" | "monthly" | "payment-activity">("daily");
+  const [accountingDate, setAccountingDate] = useState(new Date().toISOString().split('T')[0]);
+  const [accountingStartDate, setAccountingStartDate] = useState(new Date(new Date().setDate(new Date().getDate() - 30)).toISOString().split('T')[0]);
+  const [accountingEndDate, setAccountingEndDate] = useState(new Date().toISOString().split('T')[0]);
+  const [accountingCustomerId, setAccountingCustomerId] = useState("");
+  const [accountingCustomerSearch, setAccountingCustomerSearch] = useState("");
+  const [accountingShowCustomerDropdown, setAccountingShowCustomerDropdown] = useState(false);
+  const [downloadingReport, setDownloadingReport] = useState(false);
+  const [accountingPeriod, setAccountingPeriod] = useState<"daily" | "weekly" | "monthly">("daily");
+
   // ==================== HELPER FUNCTIONS ====================
 
   const formatPhoneNumber = (phone: string) => {
@@ -440,6 +452,93 @@ Swiftmetals`;
       return data.ip;
     } catch {
       return 'unknown';
+    }
+  };
+
+  // ==================== ACCOUNTING REPORT FUNCTIONS ====================
+
+  const downloadAccountingReport = async (type: "daily" | "outstanding" | "customer" | "weekly" | "monthly" | "payment-activity") => {
+    setDownloadingReport(true);
+    setError(null);
+    
+    try {
+      let url = "";
+      let filename = "";
+      
+      switch (type) {
+        case "daily":
+          url = `/api/paymentReports?type=daily&date=${accountingDate}`;
+          filename = `daily-payments-${accountingDate}.csv`;
+          break;
+        case "weekly":
+          url = `/api/paymentReports?type=weekly&date=${accountingDate}`;
+          filename = `weekly-report-${accountingDate}.csv`;
+          break;
+        case "monthly":
+          url = `/api/paymentReports?type=monthly&date=${accountingDate}`;
+          filename = `monthly-report-${accountingDate}.csv`;
+          break;
+        case "outstanding":
+          url = `/api/paymentReports?type=outstanding&asOf=${accountingDate}`;
+          filename = `outstanding-debts-${accountingDate}.csv`;
+          break;
+        case "customer":
+          if (!accountingCustomerId) {
+            setError("Please select a customer");
+            setDownloadingReport(false);
+            return;
+          }
+          url = `/api/paymentReports?type=customer&customerId=${accountingCustomerId}&startDate=${accountingStartDate}&endDate=${accountingEndDate}`;
+          const customer = customers.find(c => c.id === Number(accountingCustomerId));
+          filename = `${customer?.name || 'customer'}-payment-history-${accountingStartDate}-to-${accountingEndDate}.csv`;
+          break;
+        case "payment-activity":
+          url = `/api/paymentReports?type=payment-activity&period=${accountingPeriod}&startDate=${accountingStartDate}&endDate=${accountingEndDate}`;
+          filename = `payment-activity-${accountingPeriod}-${accountingStartDate}.csv`;
+          break;
+      }
+      
+      const response = await fetch(url, {
+        headers: {
+          'Accept': 'text/csv'
+        }
+      });
+      
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || "Failed to download report");
+      }
+      
+      const blob = await response.blob();
+      const link = document.createElement('a');
+      const objectUrl = URL.createObjectURL(blob);
+      
+      link.href = objectUrl;
+      link.setAttribute('download', filename);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(objectUrl);
+      
+      let successMessage = '';
+      switch (type) {
+        case 'daily': successMessage = 'Daily report'; break;
+        case 'weekly': successMessage = 'Weekly report'; break;
+        case 'monthly': successMessage = 'Monthly report'; break;
+        case 'outstanding': successMessage = 'Outstanding debts report'; break;
+        case 'customer': successMessage = 'Customer history'; break;
+        case 'payment-activity': successMessage = 'Payment activity report'; break;
+      }
+      
+      setSuccess(`${successMessage} downloaded successfully!`);
+      setTimeout(() => setSuccess(null), 3000);
+      setShowAccountingModal(false);
+      
+    } catch (err: any) {
+      console.error("Error downloading report:", err);
+      setError(err.message || "Failed to download report");
+    } finally {
+      setDownloadingReport(false);
     }
   };
 
@@ -1458,6 +1557,15 @@ Swiftmetals`;
     );
   }, [products, newSaleProductSearch]);
 
+  const accountingFilteredCustomers = useMemo(() => {
+    if (!accountingCustomerSearch.trim()) return customers;
+    const searchLower = accountingCustomerSearch.toLowerCase();
+    return customers.filter(c => 
+      c.name.toLowerCase().includes(searchLower) ||
+      (c.phone && c.phone.includes(searchLower))
+    );
+  }, [customers, accountingCustomerSearch]);
+
   const isFilterActive = useMemo(() => {
     return customerFilter.trim() !== "" || dateFilter !== "today" || productNameFilter.trim() !== "";
   }, [customerFilter, dateFilter, productNameFilter]);
@@ -1607,6 +1715,16 @@ Swiftmetals`;
               <Plus size={16} />
               <span className="hidden xs:inline">Create Sale</span>
             </button>
+            
+            {/* ACCOUNTING REPORTS BUTTON */}
+            <button
+              onClick={() => setShowAccountingModal(true)}
+              className="bg-purple-600 text-white px-3 py-2 rounded-lg hover:bg-purple-700 flex items-center gap-1.5 text-sm shadow"
+            >
+              <FileSpreadsheet size={16} />
+              <span className="hidden xs:inline">Reports</span>
+            </button>
+            
             <button
               onClick={() => {
                 const csvData = sales.map(sale => ({
@@ -2295,6 +2413,7 @@ Swiftmetals`;
             </div>
 
             <div className="p-3 space-y-4">
+              {/* Sale Date */}
               <div className="bg-blue-50 p-3 rounded-lg border border-blue-200">
                 <label className="block text-sm font-semibold text-blue-800 mb-2">
                   Sale Date {new Date(newSaleDate).toDateString() !== new Date().toDateString() && 
@@ -2315,6 +2434,7 @@ Swiftmetals`;
                 </p>
               </div>
 
+              {/* Customer Selection */}
               <div>
                 <h3 className="text-sm font-semibold mb-2 text-black">Select Customer</h3>
                 <div className="relative new-sale-customer-dropdown">
@@ -2357,6 +2477,7 @@ Swiftmetals`;
                 )}
               </div>
 
+              {/* Sale Items */}
               <div>
                 <h3 className="text-sm font-semibold mb-2 text-black flex items-center gap-1">
                   <Calculator size={16} />
@@ -2503,6 +2624,7 @@ Swiftmetals`;
                 </div>
               </div>
 
+              {/* Payments */}
               <div>
                 <h3 className="text-sm font-semibold mb-2 text-black">Payments</h3>
                 
@@ -3419,6 +3541,336 @@ Swiftmetals`;
                   ))}
                 </div>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ==================== ACCOUNTING REPORTS MODAL ==================== */}
+      {showAccountingModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-3 z-[60]">
+          <div className="bg-white rounded-lg max-w-md w-full max-h-[90vh] overflow-y-auto">
+            <div className="p-3 border-b sticky top-0 bg-white">
+              <div className="flex justify-between items-center">
+                <h3 className="text-lg font-bold text-black flex items-center gap-2">
+                  <FileSpreadsheet size={20} />
+                  Accounting Reports
+                </h3>
+                <button
+                  onClick={() => {
+                    setShowAccountingModal(false);
+                    setAccountingCustomerSearch("");
+                    setAccountingCustomerId("");
+                  }}
+                  className="text-gray-500 hover:text-gray-700"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+            </div>
+            
+            <div className="p-3 space-y-4">
+              {/* Report Type Selection */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Select Report Type
+                </label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    onClick={() => setAccountingReportType("daily")}
+                    className={`px-3 py-2 text-sm rounded-lg transition ${
+                      accountingReportType === "daily"
+                        ? "bg-blue-600 text-white"
+                        : "bg-gray-100 text-gray-700 hover:bg-gray-200"
+                    }`}
+                  >
+                    Daily Report
+                  </button>
+                  <button
+                    onClick={() => setAccountingReportType("weekly")}
+                    className={`px-3 py-2 text-sm rounded-lg transition ${
+                      accountingReportType === "weekly"
+                        ? "bg-blue-600 text-white"
+                        : "bg-gray-100 text-gray-700 hover:bg-gray-200"
+                    }`}
+                  >
+                    Weekly Report
+                  </button>
+                  <button
+                    onClick={() => setAccountingReportType("monthly")}
+                    className={`px-3 py-2 text-sm rounded-lg transition ${
+                      accountingReportType === "monthly"
+                        ? "bg-blue-600 text-white"
+                        : "bg-gray-100 text-gray-700 hover:bg-gray-200"
+                    }`}
+                  >
+                    Monthly Report
+                  </button>
+                  <button
+                    onClick={() => setAccountingReportType("outstanding")}
+                    className={`px-3 py-2 text-sm rounded-lg transition ${
+                      accountingReportType === "outstanding"
+                        ? "bg-blue-600 text-white"
+                        : "bg-gray-100 text-gray-700 hover:bg-gray-200"
+                    }`}
+                  >
+                    Outstanding Debts
+                  </button>
+                  <button
+                    onClick={() => setAccountingReportType("customer")}
+                    className={`px-3 py-2 text-sm rounded-lg transition ${
+                      accountingReportType === "customer"
+                        ? "bg-blue-600 text-white"
+                        : "bg-gray-100 text-gray-700 hover:bg-gray-200"
+                    }`}
+                  >
+                    Customer History
+                  </button>
+                  <button
+                    onClick={() => setAccountingReportType("payment-activity")}
+                    className={`px-3 py-2 text-sm rounded-lg transition ${
+                      accountingReportType === "payment-activity"
+                        ? "bg-blue-600 text-white"
+                        : "bg-gray-100 text-gray-700 hover:bg-gray-200"
+                    }`}
+                  >
+                    Payment Activity
+                  </button>
+                </div>
+              </div>
+              
+              {/* Daily/Weekly/Monthly Report Fields */}
+              {(accountingReportType === "daily" || accountingReportType === "weekly" || accountingReportType === "monthly") && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Select Date
+                  </label>
+                  <input
+                    type="date"
+                    value={accountingDate}
+                    onChange={(e) => setAccountingDate(e.target.value)}
+                    className="w-full p-2 border border-gray-300 rounded-lg text-black text-sm"
+                  />
+                  <p className="text-xs text-gray-500 mt-1">
+                    {accountingReportType === "daily" && "Shows all payments received and new credit sales for this day"}
+                    {accountingReportType === "weekly" && "Shows weekly breakdown of payments and credit sales"}
+                    {accountingReportType === "monthly" && "Shows monthly summary with top customers"}
+                  </p>
+                </div>
+              )}
+              
+              {/* Outstanding Debts Fields */}
+              {accountingReportType === "outstanding" && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    As of Date
+                  </label>
+                  <input
+                    type="date"
+                    value={accountingDate}
+                    onChange={(e) => setAccountingDate(e.target.value)}
+                    className="w-full p-2 border border-gray-300 rounded-lg text-black text-sm"
+                  />
+                  <p className="text-xs text-gray-500 mt-1">
+                    Shows all unpaid and partially paid sales up to this date
+                  </p>
+                </div>
+              )}
+              
+              {/* Payment Activity Fields */}
+              {accountingReportType === "payment-activity" && (
+                <>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Period
+                    </label>
+                    <div className="grid grid-cols-3 gap-2">
+                      <button
+                        onClick={() => setAccountingPeriod("daily")}
+                        className={`px-3 py-2 text-sm rounded-lg transition ${
+                          accountingPeriod === "daily"
+                            ? "bg-blue-600 text-white"
+                            : "bg-gray-100 text-gray-700 hover:bg-gray-200"
+                        }`}
+                      >
+                        Daily
+                      </button>
+                      <button
+                        onClick={() => setAccountingPeriod("weekly")}
+                        className={`px-3 py-2 text-sm rounded-lg transition ${
+                          accountingPeriod === "weekly"
+                            ? "bg-blue-600 text-white"
+                            : "bg-gray-100 text-gray-700 hover:bg-gray-200"
+                        }`}
+                      >
+                        Weekly
+                      </button>
+                      <button
+                        onClick={() => setAccountingPeriod("monthly")}
+                        className={`px-3 py-2 text-sm rounded-lg transition ${
+                          accountingPeriod === "monthly"
+                            ? "bg-blue-600 text-white"
+                            : "bg-gray-100 text-gray-700 hover:bg-gray-200"
+                        }`}
+                      >
+                        Monthly
+                      </button>
+                    </div>
+                  </div>
+                  
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        Start Date
+                      </label>
+                      <input
+                        type="date"
+                        value={accountingStartDate}
+                        onChange={(e) => setAccountingStartDate(e.target.value)}
+                        className="w-full p-2 border border-gray-300 rounded-lg text-black text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        End Date
+                      </label>
+                      <input
+                        type="date"
+                        value={accountingEndDate}
+                        onChange={(e) => setAccountingEndDate(e.target.value)}
+                        className="w-full p-2 border border-gray-300 rounded-lg text-black text-sm"
+                      />
+                    </div>
+                  </div>
+                  <p className="text-xs text-gray-500">
+                    Shows sales that were updated by payments in this period
+                  </p>
+                </>
+              )}
+              
+              {/* Customer History Fields */}
+              {accountingReportType === "customer" && (
+                <>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Select Customer
+                    </label>
+                    <div className="relative">
+                      <input
+                        type="text"
+                        placeholder="Search customer..."
+                        value={accountingCustomerSearch}
+                        onChange={(e) => {
+                          setAccountingCustomerSearch(e.target.value);
+                          setAccountingShowCustomerDropdown(true);
+                        }}
+                        onFocus={() => setAccountingShowCustomerDropdown(true)}
+                        className="w-full p-2 border border-gray-300 rounded-lg text-black text-sm"
+                      />
+                      {accountingShowCustomerDropdown && accountingFilteredCustomers.length > 0 && (
+                        <div className="absolute z-20 w-full mt-1 bg-white border border-gray-300 rounded-lg shadow-lg max-h-40 overflow-y-auto">
+                          {accountingFilteredCustomers.map(customer => (
+                            <div
+                              key={customer.id}
+                              onClick={() => {
+                                setAccountingCustomerId(customer.id.toString());
+                                setAccountingCustomerSearch(customer.name);
+                                setAccountingShowCustomerDropdown(false);
+                              }}
+                              className="p-2 hover:bg-blue-50 cursor-pointer border-b last:border-b-0 text-sm"
+                            >
+                              <div className="font-medium text-black truncate">{customer.name}</div>
+                              {customer.phone && (
+                                <div className="text-xs text-gray-500">{customer.phone}</div>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                    {accountingCustomerId && (
+                      <div className="mt-1 text-xs text-green-600">
+                        Selected: {customers.find(c => c.id === Number(accountingCustomerId))?.name}
+                      </div>
+                    )}
+                  </div>
+                  
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        Start Date
+                      </label>
+                      <input
+                        type="date"
+                        value={accountingStartDate}
+                        onChange={(e) => setAccountingStartDate(e.target.value)}
+                        className="w-full p-2 border border-gray-300 rounded-lg text-black text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        End Date
+                      </label>
+                      <input
+                        type="date"
+                        value={accountingEndDate}
+                        onChange={(e) => setAccountingEndDate(e.target.value)}
+                        className="w-full p-2 border border-gray-300 rounded-lg text-black text-sm"
+                      />
+                    </div>
+                  </div>
+                  <p className="text-xs text-gray-500">
+                    Shows complete payment history with running balance
+                  </p>
+                </>
+              )}
+              
+              {/* Info Box */}
+              <div className="bg-blue-50 p-3 rounded-lg border border-blue-200">
+                <div className="flex items-start gap-2">
+                  <Info size={16} className="text-blue-600 flex-shrink-0 mt-0.5" />
+                  <div className="text-xs text-blue-800">
+                    <p className="font-semibold mb-1">What's included in each report:</p>
+                    <ul className="space-y-1 list-disc list-inside">
+                      <li><strong>Daily/Weekly/Monthly:</strong> Payment summaries with trends</li>
+                      <li><strong>Outstanding Debts:</strong> All unpaid/partial sales with aging</li>
+                      <li><strong>Customer History:</strong> Complete transaction history with running balance</li>
+                      <li><strong>Payment Activity:</strong> Sales updated by payments in period</li>
+                    </ul>
+                  </div>
+                </div>
+              </div>
+              
+              {/* Action Buttons */}
+              <div className="flex gap-2 pt-2">
+                <button
+                  onClick={() => {
+                    setShowAccountingModal(false);
+                    setAccountingCustomerSearch("");
+                    setAccountingCustomerId("");
+                  }}
+                  className="flex-1 bg-gray-500 text-white px-3 py-2 rounded-lg hover:bg-gray-600 text-sm"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => downloadAccountingReport(accountingReportType)}
+                  disabled={downloadingReport || (accountingReportType === "customer" && !accountingCustomerId)}
+                  className="flex-1 bg-purple-600 text-white px-3 py-2 rounded-lg hover:bg-purple-700 disabled:opacity-50 text-sm flex items-center justify-center gap-2"
+                >
+                  {downloadingReport ? (
+                    <>
+                      <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
+                      Downloading...
+                    </>
+                  ) : (
+                    <>
+                      <Download size={16} />
+                      Download CSV
+                    </>
+                  )}
+                </button>
+              </div>
             </div>
           </div>
         </div>
