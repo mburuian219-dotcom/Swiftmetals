@@ -56,6 +56,9 @@ interface Sale {
   id: number;
   saleitems: SaleItem[];
   amount: number;
+  totalAmount?: number; // Added for calculated fields
+  amountPaid?: number; // Added for calculated fields
+  balance?: number; // Added for calculated fields
   date: string;
   status: "PAID" | "PARTIAL" | "UNPAID";
   dueDate?: string | null;
@@ -70,6 +73,9 @@ interface Sale {
   updatedAt?: string;
   isDeleted?: boolean;
   deletedAt?: string;
+  paymentHistory?: Payment[]; // Added for payment history
+  hasProducts?: boolean; // Added to indicate if products exist
+  warning?: string; // Added for warning messages
 }
 
 interface NewSaleItem {
@@ -345,11 +351,13 @@ export default function EnhancedSalesPage() {
       value: "payment", 
       label: "Payment Reminder",
       getTemplate: (sale: Sale) => {
-        const itemsList = sale.saleitems?.map(item => 
-          `${item.product.name} (${item.quantity} units)`
-        ).join(', ') || 'Various items';
+        const itemsList = sale.saleitems && sale.saleitems.length > 0
+          ? sale.saleitems.map(item => 
+              `${item.product.name} (${item.quantity} units)`
+            ).join(', ') 
+          : 'Debt record (no product details)';
         
-        const outstandingBalance = sale.remainingAmount > 0.01 ? sale.remainingAmount : sale.amount;
+        const outstandingBalance = sale.remainingAmount || sale.balance || sale.amount;
         const receiptLink = typeof window !== 'undefined' ? 
           `${window.location.origin}/api/receipt/${sale.id}` : 
           `/api/receipt/${sale.id}`;
@@ -396,11 +404,15 @@ Swiftmetals`;
     }
   ];
 
+  // Updated calculateSaleStatus to handle missing products
   const calculateSaleStatus = useCallback((sale: any): Sale => {
-    const totalPayments = sale.payments?.reduce((sum: number, p: Payment) => 
+    // Get total paid from payments array
+    const totalPaid = sale.payments?.reduce((sum: number, p: Payment) => 
       sum + Number(p.amount || 0), 0) || 0;
     
-    const remainingAmount = Math.max(0, Number(sale.amount) - totalPayments);
+    // Use sale.amount as the source of truth (never recalculate from products)
+    const totalAmount = Number(sale.amount) || 0;
+    const remainingAmount = Math.max(0, totalAmount - totalPaid);
     
     const hasPendingChecks = sale.payments?.some((p: Payment) => {
       if (p.method !== "CHECK") return false;
@@ -413,13 +425,31 @@ Swiftmetals`;
       status = "PARTIAL";
     } else if (remainingAmount <= 0.01) {
       status = "PAID";
-    } else if (totalPayments > 0) {
+    } else if (totalPaid > 0) {
       status = "PARTIAL";
     } else {
       status = "UNPAID";
     }
 
-    return { ...sale, remainingAmount, status, payments: sale.payments || [] };
+    // Check if products exist
+    const hasProducts = sale.saleitems && sale.saleitems.length > 0;
+    
+    // Add warning for debt records without products
+    const warning = (!hasProducts && totalAmount > 0) 
+      ? "This is a debt record with no product details. Financial data is preserved."
+      : undefined;
+
+    return { 
+      ...sale, 
+      totalAmount,
+      amountPaid: totalPaid,
+      balance: remainingAmount,
+      remainingAmount, 
+      status, 
+      payments: sale.payments || [],
+      hasProducts,
+      warning
+    };
   }, []);
 
   const getUserDisplayName = (email: string | null | undefined): { name: string, email: string } => {
@@ -702,100 +732,145 @@ Swiftmetals`;
     }
   };
 
-  const handleUpdateSale = async () => {
-    if (!editingSale) return;
+  // UPDATED: Handle update sale with payment-only focus
+  // Replace the handleUpdateSale function with this corrected version:
 
-    if (!currentUser) {
-      setError("Please log in to update a sale");
-      return;
-    }
+const handleUpdateSale = async () => {
+  if (!editingSale) return;
 
-    setLoading(true);
-    setError(null);
-    setSuccess("Updating sale, please wait...");
+  if (!currentUser) {
+    setError("Please log in to update a sale");
+    return;
+  }
+
+  setLoading(true);
+  setError(null);
+  setSuccess("Updating sale, please wait...");
+  
+  try {
+    const ipAddress = await getClientIP();
+    const userAgent = navigator.userAgent;
     
-    try {
-      const ipAddress = await getClientIP();
-      const userAgent = navigator.userAgent;
+    // Calculate new payments (only payments that are being added)
+    const existingPaymentIds = (editingSale.payments || []).map(p => p.id);
+    const newPaymentsList = editPayments.filter(p => !p.id);
+    
+    // IMPORTANT: For debt records, we ONLY send payment updates
+    const updateData: any = {
+      updatedBy: currentUser,
+      updatedByEmail: currentUserEmail,
+      ipAddress,
+      userAgent,
+    };
+    
+    // Only add payment if there are new payments
+    if (newPaymentsList.length > 0) {
+      // For debt records, we need to use the addPayment format
+      // The API expects a single payment to add, not an array
+      const firstNewPayment = newPaymentsList[0];
       
-      const newTotalAmount = editSaleItems.reduce((total, item) => 
-        total + (item.quantity * item.price), 0);
-
-      const updateData = {
-        saleItems: editSaleItems.map(item => ({
+      updateData.addPayment = {
+        amount: Number(firstNewPayment.amount),
+        method: firstNewPayment.method,
+        note: firstNewPayment.referenceId ? `Ref: ${firstNewPayment.referenceId}` : null,
+        referenceId: firstNewPayment.referenceId || null,
+        checkDate: firstNewPayment.checkDepositDate || null,
+        bankName: firstNewPayment.bankName || null,
+        checkNumber: firstNewPayment.checkNumber || null,
+      };
+      
+      console.log("Sending payment:", updateData.addPayment);
+    }
+    
+    // Only update due date if changed
+    if (editingSale.dueDate !== undefined) {
+      updateData.dueDate = editingSale.dueDate || null;
+    }
+    
+    // Only update sale items if the sale has products AND items were changed
+    if (editingSale.hasProducts && editSaleItems.length > 0) {
+      // Check if items actually changed
+      const itemsChanged = JSON.stringify(editSaleItems) !== JSON.stringify(
+        editingSale.saleitems.map(item => ({
+          productId: item.product.id,
+          quantity: item.quantity,
+          price: item.price,
+          productName: item.product.name
+        }))
+      );
+      
+      if (itemsChanged) {
+        updateData.saleItems = editSaleItems.map(item => ({
           productId: item.productId,
           quantity: item.quantity,
           price: item.price,
-        })),
-        payments: editPayments.filter(p => p.id).map(p => ({
-          id: p.id,
-          amount: Number(p.amount),
-          method: p.method,
-          referenceId: p.referenceId?.trim() || null,
-          checkDepositDate: p.checkDepositDate || null,
-        })),
-        newPayments: editPayments.filter(p => !p.id).map(p => ({
-          amount: Number(p.amount),
-          method: p.method,
-          referenceId: p.referenceId?.trim() || null,
-          checkDepositDate: p.checkDepositDate || null,
-          dueDate: p.dueDate || null,
-          date: new Date().toISOString(),
-          status: p.method === "CHECK" ? "PENDING" : "COMPLETED",
-        })),
-        amount: newTotalAmount,
-        dueDate: editingSale.dueDate || null,
-        updatedBy: currentUser,
-        updatedByEmail: currentUserEmail,
-        ipAddress,
-        userAgent,
-      };
-
-      const response = await fetch(`/api/sales/${editingSale.id}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(updateData),
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || "Failed to update sale");
+        }));
+        updateData.replaceItems = true;
+        updateData.updateTotalAmount = true;
       }
-
-      const updatedSale = await response.json();
-      const processedSale = calculateSaleStatus(updatedSale);
-
-      setSales(prevSales => 
-        prevSales.map(s => s.id === processedSale.id ? processedSale : s)
-      );
-
-      setEditingSale(null);
-      setEditSaleItems([]);
-      setEditPayments([]);
-      setCurrentPayment({
-        amount: "",
-        method: "CASH",
-        referenceId: "",
-        checkDepositDate: "",
-        dueDate: ""
-      });
-      
-      setSuccess("Sale updated successfully!");
-      setTimeout(() => setSuccess(null), 3000);
-
-      const salesRes = await fetch("/api/sales");
-      if (salesRes.ok) {
-        const refreshedSales = await salesRes.json();
-        const processedSales = refreshedSales.map(calculateSaleStatus);
-        setSales(processedSales);
-      }
-    } catch (err: any) {
-      setError(err.message || "Failed to update sale");
-      console.error("Error updating sale:", err);
-    } finally {
-      setLoading(false);
     }
-  };
+    
+    // If no changes, show message and return
+    if (Object.keys(updateData).length <= 4) { // only has updatedBy, updatedByEmail, ipAddress, userAgent
+      setError("No changes to save");
+      setLoading(false);
+      return;
+    }
+    
+    console.log("Sending update data:", updateData);
+    
+    const response = await fetch(`/api/sales/${editingSale.id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(updateData),
+    });
+
+    const responseData = await response.json();
+    console.log("Response from API:", responseData);
+
+    if (!response.ok) {
+      throw new Error(responseData.error || "Failed to update sale");
+    }
+
+    // Refresh the sale data to get updated amounts
+    const refreshedSale = await fetch(`/api/sales/${editingSale.id}`).then(res => res.json());
+    const processedSale = calculateSaleStatus(refreshedSale);
+
+    setSales(prevSales => 
+      prevSales.map(s => s.id === processedSale.id ? processedSale : s)
+    );
+
+    setEditingSale(null);
+    setEditSaleItems([]);
+    setEditPayments([]);
+    setCurrentPayment({
+      amount: "",
+      method: "CASH",
+      referenceId: "",
+      checkDepositDate: "",
+      dueDate: ""
+    });
+    
+    setSuccess(newPaymentsList.length > 0 
+      ? `Payment of Ksh ${newPaymentsList[0].amount} added successfully! Remaining balance: Ksh ${formatCurrency(processedSale.balance || processedSale.remainingAmount)}`
+      : "Sale updated successfully!"
+    );
+    setTimeout(() => setSuccess(null), 3000);
+
+    // Refresh all sales data
+    const salesRes = await fetch("/api/sales");
+    if (salesRes.ok) {
+      const refreshedSales = await salesRes.json();
+      const processedSales = refreshedSales.map(calculateSaleStatus);
+      setSales(processedSales);
+    }
+  } catch (err: any) {
+    console.error("Error updating sale:", err);
+    setError(err.message || "Failed to update sale");
+  } finally {
+    setLoading(false);
+  }
+};
 
   const handleCreateSale = async () => {
     if (!newSaleCustomerId) {
@@ -968,8 +1043,11 @@ Swiftmetals`;
     setStockError(null);
   };
 
+  // UPDATED: Handle edit sale to work with or without products
   const handleEditSale = (sale: Sale) => {
     setEditingSale(sale);
+    
+    // Always set payments regardless of products
     setEditPayments(sale.payments.map(p => ({
       id: p.id,
       amount: p.amount.toString(),
@@ -977,13 +1055,20 @@ Swiftmetals`;
       referenceId: p.referenceId || "",
       checkDepositDate: p.checkDepositDate || ""
     })));
-    setEditSaleItems(sale.saleitems.map(item => ({
-      productId: item.product.id,
-      quantity: item.quantity,
-      price: item.price,
-      productName: item.product.name,
-      originalPrice: item.product.price
-    })));
+    
+    // Only set sale items if they exist
+    if (sale.saleitems && sale.saleitems.length > 0) {
+      setEditSaleItems(sale.saleitems.map(item => ({
+        productId: item.product.id,
+        quantity: item.quantity,
+        price: item.price,
+        productName: item.product.name,
+        originalPrice: item.product.price
+      })));
+    } else {
+      // For debt records without products, keep items array empty
+      setEditSaleItems([]);
+    }
   };
 
   const handleAddItemToNewSale = () => {
@@ -1127,6 +1212,7 @@ Swiftmetals`;
     }
   };
 
+  // UPDATED: Add payment to edit sale (works for both regular and debt sales)
   const addEditPayment = () => {
     if (currentPayment.method === "CREDIT") {
       if (!currentPayment.dueDate) {
@@ -1148,9 +1234,10 @@ Swiftmetals`;
         return;
       }
 
-      const currentTotal = editSaleItems.reduce((sum, item) => sum + (item.quantity * item.price), 0);
-      const currentPayments = editPayments.reduce((sum, p) => sum + Number(p.amount), 0);
-      const remainingAmount = currentTotal - currentPayments;
+      // Calculate remaining balance using sale.amount (not from items)
+      const totalAmount = editingSale?.amount || 0;
+      const currentPaymentsTotal = editPayments.reduce((sum, p) => sum + Number(p.amount), 0);
+      const remainingAmount = totalAmount - currentPaymentsTotal;
 
       if (amount > remainingAmount) {
         setError(`Payment amount cannot exceed remaining balance of Ksh ${remainingAmount.toFixed(2)}`);
@@ -1292,11 +1379,11 @@ Swiftmetals`;
         setCustomers(validCustomers);
         setProducts(validProducts);
 
-        console.log("Total sales loaded:", processedSales.length);
-        const salesWithUpdatedAt = processedSales.filter(s => s.updatedAt);
-        console.log("Sales with updatedAt:", salesWithUpdatedAt.length);
+        // Count sales without products for debugging
+        const salesWithoutProducts = processedSales.filter(s => !s.hasProducts);
+        console.log(`Total sales loaded: ${processedSales.length}, Sales without products: ${salesWithoutProducts.length}`);
 
-        setDebugInfo(`Total sales: ${processedSales.length}, With updatedAt: ${salesWithUpdatedAt.length}`);
+        setDebugInfo(`Total sales: ${processedSales.length}, Without products: ${salesWithoutProducts.length}`);
 
         if (validCustomers.length === 0) {
           console.warn("⚠️ No customers found");
@@ -1400,7 +1487,7 @@ Swiftmetals`;
     const todayPaid = todaySales.filter(s => s.status === "PAID").reduce((acc, s) => acc + Number(s.amount), 0);
     const todayPartial = todaySales.filter(s => s.status === "PARTIAL").reduce((acc, s) => acc + Number(s.amount), 0);
     const todayUnpaid = todaySales.filter(s => s.status === "UNPAID").reduce((acc, s) => acc + Number(s.amount), 0);
-    const todayOutstanding = todaySales.reduce((acc, s) => acc + Number(s.remainingAmount), 0);
+    const todayOutstanding = todaySales.reduce((acc, s) => acc + Number(s.balance || s.remainingAmount), 0);
     
     let todayCash = 0, todayMpesa = 0, todayBank = 0, todayCheck = 0, todayCard = 0, todayCredit = 0;
     
@@ -1423,7 +1510,7 @@ Swiftmetals`;
       paidSales: sales.filter(s => s.status === "PAID").reduce((acc, s) => acc + Number(s.amount), 0),
       partialSales: sales.filter(s => s.status === "PARTIAL").reduce((acc, s) => acc + Number(s.amount), 0),
       unpaidSales: sales.filter(s => s.status === "UNPAID").reduce((acc, s) => acc + Number(s.amount), 0),
-      totalOutstanding: sales.reduce((acc, s) => acc + Number(s.remainingAmount), 0),
+      totalOutstanding: sales.reduce((acc, s) => acc + Number(s.balance || s.remainingAmount), 0),
       paidCount: sales.filter(s => s.status === "PAID").length,
       partialCount: sales.filter(s => s.status === "PARTIAL").length,
       unpaidCount: sales.filter(s => s.status === "UNPAID").length,
@@ -1437,6 +1524,7 @@ Swiftmetals`;
       todayPartialCount: todaySales.filter(s => s.status === "PARTIAL").length,
       todayUnpaidCount: todaySales.filter(s => s.status === "UNPAID").length,
       todayCash, todayMpesa, todayBank, todayCheck, todayCard, todayCredit,
+      salesWithoutProducts: sales.filter(s => !s.hasProducts).length,
     };
   }, [sales, isRecentlyUpdated, isSaleModified]);
 
@@ -1465,7 +1553,9 @@ Swiftmetals`;
     if (productNameFilter.trim()) {
       const searchProduct = productNameFilter.toLowerCase().trim();
       filtered = filtered.filter(sale => {
-        return sale.saleitems?.some(item => 
+        // Only filter by products if the sale has them
+        if (!sale.saleitems || sale.saleitems.length === 0) return false;
+        return sale.saleitems.some(item => 
           item.product.name.toLowerCase().includes(searchProduct)
         );
       });
@@ -1602,6 +1692,19 @@ Swiftmetals`;
 
   return (
     <div className="p-2 sm:p-4 bg-gray-50 min-h-screen">
+      {/* Warning banner for sales without products */}
+      {stats.salesWithoutProducts > 0 && (
+        <div className="mb-3 bg-yellow-50 border-l-4 border-yellow-400 p-3 rounded">
+          <div className="flex items-start gap-2">
+            <AlertTriangle className="text-yellow-600 flex-shrink-0 mt-0.5" size={16} />
+            <div className="text-sm text-yellow-800">
+              <span className="font-semibold">Note:</span> {stats.salesWithoutProducts} debt record(s) without product details. 
+              These sales can still be updated with payments.
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Restock Confirmation Modal */}
       {showRestockConfirm && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-3 z-[60]">
@@ -1732,13 +1835,13 @@ Swiftmetals`;
                   'Date': new Date(sale.date).toLocaleDateString(),
                   'Customer': sale.customer?.name || '-',
                   'Customer Phone': sale.customer?.phone || '-',
-                  'Products': sale.saleitems?.map(item => `${item.product.name} (x${item.quantity})`).join('; ') || '-',
+                  'Products': sale.saleitems?.map(item => `${item.product.name} (x${item.quantity})`).join('; ') || 'Debt record (no products)',
                   'Total Amount': sale.amount.toFixed(2),
+                  'Amount Paid': (sale.amount - (sale.balance || sale.remainingAmount)).toFixed(2),
+                  'Remaining': (sale.balance || sale.remainingAmount).toFixed(2),
                   'Status': sale.status,
-                  'Amount Paid': (sale.amount - sale.remainingAmount).toFixed(2),
-                  'Remaining Amount': sale.remainingAmount.toFixed(2),
+                  'Has Products': sale.hasProducts ? 'Yes' : 'No',
                   'Due Date': sale.dueDate ? new Date(sale.dueDate).toLocaleDateString() : '-',
-                  'Payment Methods': sale.payments?.map(p => p.method).join('; ') || '-',
                   'Created By': sale.createdBy || '-',
                   'Updated By': sale.updatedBy || '-',
                   'Last Updated': sale.updatedAt ? new Date(sale.updatedAt).toLocaleDateString() : '-'
@@ -2174,6 +2277,16 @@ Swiftmetals`;
           <div className="space-y-2">
             {sortedFilteredSales.map((sale) => (
               <div key={sale.id} className="bg-white border rounded-lg p-3 shadow-sm">
+                {/* Warning for sales without products */}
+                {!sale.hasProducts && sale.warning && (
+                  <div className="mb-2 p-2 bg-yellow-50 border-l-4 border-yellow-400 rounded text-xs text-yellow-800">
+                    <div className="flex items-start gap-1">
+                      <AlertTriangle size={12} className="flex-shrink-0 mt-0.5" />
+                      <span>{sale.warning}</span>
+                    </div>
+                  </div>
+                )}
+
                 <div className="flex justify-between items-start mb-2">
                   <div>
                     <h3 className="font-semibold text-black text-sm truncate max-w-[150px]">
@@ -2198,6 +2311,12 @@ Swiftmetals`;
                       </span>
                     )}
                     
+                    {!sale.hasProducts && (
+                      <span className="px-1.5 py-0.5 rounded-full text-xs bg-gray-100 text-gray-600 border border-gray-200">
+                        Debt Only
+                      </span>
+                    )}
+                    
                     <button
                       onClick={() => setExpandedSaleId(expandedSaleId === sale.id ? null : sale.id)}
                       className="text-gray-500 hover:text-gray-700"
@@ -2214,7 +2333,7 @@ Swiftmetals`;
                   </div>
                   <div>
                     <span className="text-gray-600">Remaining:</span>
-                    <span className="font-semibold text-red-600 ml-1">Ksh {formatCurrency(sale.remainingAmount)}</span>
+                    <span className="font-semibold text-red-600 ml-1">Ksh {formatCurrency(sale.balance || sale.remainingAmount)}</span>
                   </div>
                   <div>
                     <span className="text-gray-600">Date:</span>
@@ -2268,17 +2387,23 @@ Swiftmetals`;
 
                 {expandedSaleId === sale.id && (
                   <div className="mt-2 pt-2 border-t border-gray-200 space-y-2">
-                    {sale.saleitems && sale.saleitems.length > 0 && (
+                    {sale.saleitems && sale.saleitems.length > 0 ? (
                       <div className="text-xs">
                         <div className="font-medium text-gray-700 mb-1">Products:</div>
                         <div className="space-y-1">
                           {sale.saleitems.map((item, idx) => (
                             <div key={idx} className="text-black flex justify-between">
                               <span className="truncate max-w-[120px]">{item.product.name}</span>
-                              <span>×{item.quantity}</span>
+                              <span>×{item.quantity} @ Ksh {formatCurrency(item.price)}</span>
                             </div>
                           ))}
                         </div>
+                      </div>
+                    ) : (
+                      <div className="text-xs bg-gray-50 p-2 rounded text-center text-gray-500">
+                        No product details available for this debt record.
+                        <br />
+                        Financial data is preserved separately.
                       </div>
                     )}
 
@@ -2775,13 +2900,15 @@ Swiftmetals`;
         </div>
       )}
 
-      {/* Edit Sale Modal */}
+      {/* Edit Sale Modal - UPDATED for payment-only updates */}
       {editingSale && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-start justify-center p-2 z-50 overflow-y-auto">
           <div className="bg-white rounded-lg w-full max-w-md max-h-[90vh] overflow-y-auto mt-2">
             <div className="p-3 border-b sticky top-0 bg-white z-10">
               <div className="flex justify-between items-center">
-                <h2 className="text-lg font-bold text-black">Edit Sale #{editingSale.id}</h2>
+                <h2 className="text-lg font-bold text-black">
+                  {editingSale.hasProducts ? `Edit Sale #${editingSale.id}` : `Update Payment - Sale #${editingSale.id}`}
+                </h2>
                 <button
                   onClick={() => setEditingSale(null)}
                   className="text-gray-500 hover:text-gray-700"
@@ -2803,6 +2930,14 @@ Swiftmetals`;
                     <span className="text-gray-600">Date:</span>
                     <div className="text-black">{formatDate(editingSale.date)}</div>
                   </div>
+                  <div>
+                    <span className="text-gray-600">Total Amount:</span>
+                    <div className="font-semibold text-emerald-600">Ksh {formatCurrency(editingSale.amount)}</div>
+                  </div>
+                  <div>
+                    <span className="text-gray-600">Remaining:</span>
+                    <div className="font-semibold text-red-600">Ksh {formatCurrency(editingSale.balance || editingSale.remainingAmount)}</div>
+                  </div>
                   <div className="col-span-2">
                     <span className="text-gray-600">Status:</span>
                     <span className={`ml-2 px-2 py-1 rounded text-xs font-bold ${
@@ -2814,154 +2949,169 @@ Swiftmetals`;
                     </span>
                   </div>
                 </div>
+
+                {!editingSale.hasProducts && (
+                  <div className="mt-2 p-2 bg-yellow-50 border-l-4 border-yellow-400 rounded text-xs text-yellow-800">
+                    <div className="flex items-start gap-1">
+                      <AlertTriangle size={12} className="flex-shrink-0 mt-0.5" />
+                      <span>This is a debt record with no product details. You can only update payments.</span>
+                    </div>
+                  </div>
+                )}
               </div>
 
-              <div>
-                <h3 className="text-sm font-semibold mb-2 text-black flex items-center gap-1">
-                  <Calculator size={16} />
-                  Edit Sale Items
-                </h3>
-                
-                <div className="space-y-2 mb-3 p-2 bg-gray-50 rounded-lg">
-                  <h4 className="font-medium text-black text-xs">Add New Item</h4>
-                  <div className="space-y-2">
-                    <div className="relative product-dropdown-container">
-                      <input
-                        type="text"
-                        placeholder="Search product..."
-                        value={productSearch}
-                        onChange={(e) => {
-                          setProductSearch(e.target.value);
-                          setShowProductDropdown(true);
-                        }}
-                        onFocus={() => setShowProductDropdown(true)}
-                        className="w-full p-1.5 border border-gray-300 rounded text-black text-sm"
-                      />
-                      {showProductDropdown && filteredProducts.length > 0 && (
-                        <div className="absolute z-20 w-full mt-1 bg-white border border-gray-300 rounded-lg shadow-lg max-h-40 overflow-y-auto">
-                          {filteredProducts.map(product => (
-                            <div
-                              key={product.id}
-                              onClick={() => {
-                                setCurrentEditItem({
-                                  ...currentEditItem,
-                                  productId: product.id,
-                                  price: product.price || 0,
-                                  productName: product.name
-                                });
-                                setProductSearch(product.name);
-                                setShowProductDropdown(false);
-                              }}
-                              className="p-2 hover:bg-blue-50 cursor-pointer border-b last:border-b-0 text-sm"
-                            >
-                              <div className="font-medium text-black truncate">{product.name}</div>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                    
-                    <div className="grid grid-cols-2 gap-2">
-                      <div>
+              {/* Only show product editing for sales that have products */}
+              {editingSale.hasProducts && (
+                <div>
+                  <h3 className="text-sm font-semibold mb-2 text-black flex items-center gap-1">
+                    <Calculator size={16} />
+                    Edit Sale Items
+                  </h3>
+                  
+                  <div className="space-y-2 mb-3 p-2 bg-gray-50 rounded-lg">
+                    <h4 className="font-medium text-black text-xs">Add New Item</h4>
+                    <div className="space-y-2">
+                      <div className="relative product-dropdown-container">
                         <input
-                          type="number"
-                          min="1"
-                          value={currentEditItem.quantity}
-                          onChange={(e) => setCurrentEditItem({...currentEditItem, quantity: parseInt(e.target.value) || 1})}
-                          placeholder="Qty"
-                          className="w-full p-1.5 border rounded text-black text-sm"
+                          type="text"
+                          placeholder="Search product..."
+                          value={productSearch}
+                          onChange={(e) => {
+                            setProductSearch(e.target.value);
+                            setShowProductDropdown(true);
+                          }}
+                          onFocus={() => setShowProductDropdown(true)}
+                          className="w-full p-1.5 border border-gray-300 rounded text-black text-sm"
                         />
+                        {showProductDropdown && filteredProducts.length > 0 && (
+                          <div className="absolute z-20 w-full mt-1 bg-white border border-gray-300 rounded-lg shadow-lg max-h-40 overflow-y-auto">
+                            {filteredProducts.map(product => (
+                              <div
+                                key={product.id}
+                                onClick={() => {
+                                  setCurrentEditItem({
+                                    ...currentEditItem,
+                                    productId: product.id,
+                                    price: product.price || 0,
+                                    productName: product.name
+                                  });
+                                  setProductSearch(product.name);
+                                  setShowProductDropdown(false);
+                                }}
+                                className="p-2 hover:bg-blue-50 cursor-pointer border-b last:border-b-0 text-sm"
+                              >
+                                <div className="font-medium text-black truncate">{product.name}</div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
                       </div>
                       
-                      <div>
-                        <input
-                          type="number"
-                          min="0"
-                          step="0.01"
-                          value={currentEditItem.price}
-                          onChange={(e) => setCurrentEditItem({...currentEditItem, price: parseFloat(e.target.value) || 0})}
-                          placeholder="Price"
-                          className="w-full p-1.5 border rounded text-black text-sm"
-                        />
-                      </div>
-                    </div>
-                    
-                    <button
-                      onClick={handleAddItemToEditSale}
-                      disabled={!currentEditItem.productId || currentEditItem.quantity <= 0 || currentEditItem.price <= 0}
-                      className="w-full bg-blue-500 text-white px-3 py-1.5 rounded hover:bg-blue-600 disabled:opacity-50 text-sm flex items-center justify-center gap-1"
-                    >
-                      <Plus size={14} />
-                      Add Item
-                    </button>
-                  </div>
-                </div>
-
-                <div className="space-y-2 max-h-40 overflow-y-auto">
-                  {editSaleItems.map((item, index) => (
-                    <div key={index} className="bg-gray-50 p-2 rounded border text-sm">
-                      <div className="flex justify-between items-center mb-1">
-                        <div className="font-medium text-black truncate">{item.productName}</div>
-                        <button
-                          onClick={() => {
-                            if (editSaleItems.length === 1) {
-                              setError("Cannot delete the only item");
-                              return;
-                            }
-                            setEditSaleItems(editSaleItems.filter((_, i) => i !== index));
-                          }}
-                          className="text-red-500 hover:text-red-700"
-                        >
-                          <X size={14} />
-                        </button>
-                      </div>
                       <div className="grid grid-cols-2 gap-2">
-                        <input
-                          type="number"
-                          min="1"
-                          value={item.quantity}
-                          onChange={(e) => {
-                            const newItems = [...editSaleItems];
-                            newItems[index].quantity = parseInt(e.target.value) || 1;
-                            setEditSaleItems(newItems);
-                          }}
-                          className="w-full p-1 border rounded text-black text-xs"
-                        />
-                        <input
-                          type="number"
-                          min="0"
-                          step="0.01"
-                          value={item.price}
-                          onChange={(e) => {
-                            const newItems = [...editSaleItems];
-                            newItems[index].price = parseFloat(e.target.value) || 0;
-                            setEditSaleItems(newItems);
-                          }}
-                          className="w-full p-1 border rounded text-black text-xs"
-                        />
+                        <div>
+                          <input
+                            type="number"
+                            min="1"
+                            value={currentEditItem.quantity}
+                            onChange={(e) => setCurrentEditItem({...currentEditItem, quantity: parseInt(e.target.value) || 1})}
+                            placeholder="Qty"
+                            className="w-full p-1.5 border rounded text-black text-sm"
+                          />
+                        </div>
+                        
+                        <div>
+                          <input
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            value={currentEditItem.price}
+                            onChange={(e) => setCurrentEditItem({...currentEditItem, price: parseFloat(e.target.value) || 0})}
+                            placeholder="Price"
+                            className="w-full p-1.5 border rounded text-black text-sm"
+                          />
+                        </div>
                       </div>
-                      <div className="text-xs text-green-600 mt-1">
-                        Subtotal: Ksh {formatCurrency(item.quantity * item.price)}
+                      
+                      <button
+                        onClick={handleAddItemToEditSale}
+                        disabled={!currentEditItem.productId || currentEditItem.quantity <= 0 || currentEditItem.price <= 0}
+                        className="w-full bg-blue-500 text-white px-3 py-1.5 rounded hover:bg-blue-600 disabled:opacity-50 text-sm flex items-center justify-center gap-1"
+                      >
+                        <Plus size={14} />
+                        Add Item
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="space-y-2 max-h-40 overflow-y-auto">
+                    {editSaleItems.map((item, index) => (
+                      <div key={index} className="bg-gray-50 p-2 rounded border text-sm">
+                        <div className="flex justify-between items-center mb-1">
+                          <div className="font-medium text-black truncate">{item.productName}</div>
+                          <button
+                            onClick={() => {
+                              if (editSaleItems.length === 1) {
+                                setError("Cannot delete the only item");
+                                return;
+                              }
+                              setEditSaleItems(editSaleItems.filter((_, i) => i !== index));
+                            }}
+                            className="text-red-500 hover:text-red-700"
+                          >
+                            <X size={14} />
+                          </button>
+                        </div>
+                        <div className="grid grid-cols-2 gap-2">
+                          <input
+                            type="number"
+                            min="1"
+                            value={item.quantity}
+                            onChange={(e) => {
+                              const newItems = [...editSaleItems];
+                              newItems[index].quantity = parseInt(e.target.value) || 1;
+                              setEditSaleItems(newItems);
+                            }}
+                            className="w-full p-1 border rounded text-black text-xs"
+                          />
+                          <input
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            value={item.price}
+                            onChange={(e) => {
+                              const newItems = [...editSaleItems];
+                              newItems[index].price = parseFloat(e.target.value) || 0;
+                              setEditSaleItems(newItems);
+                            }}
+                            className="w-full p-1 border rounded text-black text-xs"
+                          />
+                        </div>
+                        <div className="text-xs text-green-600 mt-1">
+                          Subtotal: Ksh {formatCurrency(item.quantity * item.price)}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {editSaleItems.length > 0 && (
+                    <div className="bg-blue-50 p-2 rounded-lg border border-blue-200 mt-2">
+                      <div className="flex justify-between items-center">
+                        <span className="font-semibold text-black text-sm">New Total:</span>
+                        <span className="font-bold text-blue-600">
+                          Ksh {formatCurrency(editSaleItems.reduce((sum, item) => sum + (item.quantity * item.price), 0))}
+                        </span>
                       </div>
                     </div>
-                  ))}
+                  )}
                 </div>
+              )}
 
-                <div className="bg-blue-50 p-2 rounded-lg border border-blue-200 mt-2">
-                  <div className="flex justify-between items-center">
-                    <span className="font-semibold text-black text-sm">New Total:</span>
-                    <span className="font-bold text-blue-600">
-                      Ksh {formatCurrency(editSaleItems.reduce((sum, item) => sum + (item.quantity * item.price), 0))}
-                    </span>
-                  </div>
-                </div>
-              </div>
-
+              {/* Payment Section - Always shown */}
               <div>
                 <h3 className="text-sm font-semibold mb-2 text-black">Payments</h3>
                 
                 {editPayments.length > 0 && (
-                  <div className="space-y-1 mb-3">
+                  <div className="space-y-1 mb-3 max-h-40 overflow-y-auto">
                     {editPayments.map((payment, index) => (
                       <div key={index} className="flex justify-between items-center bg-white p-2 rounded border text-sm">
                         <div className="flex items-center gap-1">
@@ -2970,7 +3120,12 @@ Swiftmetals`;
                           }`}>
                             {payment.method}
                           </span>
-                          <span className="font-medium">Ksh {formatCurrency(parseFloat(payment.amount))}</span>
+                          {payment.amount !== "0" && (
+                            <span className="font-medium">Ksh {formatCurrency(parseFloat(payment.amount))}</span>
+                          )}
+                          {payment.dueDate && (
+                            <span className="text-xs text-gray-500">Due: {formatDate(payment.dueDate)}</span>
+                          )}
                         </div>
                         {payment.id !== undefined && (
                           <button
@@ -3051,10 +3206,10 @@ Swiftmetals`;
                   </button>
                 </div>
 
-                <div className="bg-blue-50 p-2 rounded-lg text-sm">
+                <div className="bg-blue-50 p-2 rounded-lg text-sm mt-2">
                   <div className="flex justify-between mb-1">
                     <span>Total Sale:</span>
-                    <span className="font-bold">Ksh {formatCurrency(editSaleItems.reduce((sum, item) => sum + (item.quantity * item.price), 0))}</span>
+                    <span className="font-bold">Ksh {formatCurrency(editingSale.amount)}</span>
                   </div>
                   <div className="flex justify-between mb-1">
                     <span>Total Payments:</span>
@@ -3065,10 +3220,10 @@ Swiftmetals`;
                   <div className="flex justify-between pt-1 border-t">
                     <span>Remaining:</span>
                     <span className={`font-bold ${
-                      Math.max(0, editSaleItems.reduce((sum, item) => sum + (item.quantity * item.price), 0) - editPayments.reduce((sum, p) => sum + Number(p.amount), 0)) > 0 
+                      Math.max(0, editingSale.amount - editPayments.reduce((sum, p) => sum + Number(p.amount), 0)) > 0 
                         ? 'text-red-600' : 'text-green-600'
                     }`}>
-                      Ksh {formatCurrency(Math.max(0, editSaleItems.reduce((sum, item) => sum + (item.quantity * item.price), 0) - editPayments.reduce((sum, p) => sum + Number(p.amount), 0)))}
+                      Ksh {formatCurrency(Math.max(0, editingSale.amount - editPayments.reduce((sum, p) => sum + Number(p.amount), 0)))}
                     </span>
                   </div>
                 </div>
@@ -3090,12 +3245,12 @@ Swiftmetals`;
                   {loading ? (
                     <>
                       <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
-                      Saving...
+                      {editingSale.hasProducts ? "Saving..." : "Adding Payment..."}
                     </>
                   ) : (
                     <>
                       <Save size={16} />
-                      Update
+                      {editingSale.hasProducts ? "Update Sale" : "Add Payment"}
                     </>
                   )}
                 </button>
