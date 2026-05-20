@@ -1,60 +1,20 @@
-// app/api/sales/[id]/route.ts
-
 import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 
-// ================== HELPER FUNCTIONS ==================
-
-// Calculate total paid from payments (only CLEARED payments)
-async function getTotalPaid(saleId: number): Promise<number> {
-  const payments = await prisma.payment.findMany({
-    where: { 
-      saleId: saleId,
-      status: "CLEARED"
-    }
-  });
-  
-  return payments.reduce((sum, p) => sum + p.amount, 0);
+// Helper to normalize email
+function normalizeEmail(email: string): string {
+  if (!email) return '';
+  return email.trim().toLowerCase();
 }
 
-// Calculate balance from totalAmount and amountPaid
-function calculateBalance(totalAmount: number, amountPaid: number): number {
-  return Math.max(0, totalAmount - amountPaid);
+// Check if string is a valid email
+function isValidEmail(str: string): boolean {
+  if (!str) return false;
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  return emailRegex.test(str);
 }
 
-// Update sale status based on balance
-function updateSaleStatus(totalAmount: number, amountPaid: number): string {
-  const balance = calculateBalance(totalAmount, amountPaid);
-  if (balance <= 0) return "PAID";
-  if (amountPaid > 0) return "PARTIAL";
-  return "UNPAID";
-}
-
-// Get payment history formatted for response
-async function getPaymentHistory(saleId: number) {
-  const payments = await prisma.payment.findMany({
-    where: { saleId: saleId },
-    orderBy: { paidAt: 'desc' },
-    select: {
-      id: true,
-      amount: true,
-      method: true,
-      paidAt: true,
-      status: true,
-      referenceId: true,
-      note: true,
-      checkDate: true,
-      checkNumber: true,
-      bankName: true,
-      isVerified: true,
-      verifiedAt: true
-    }
-  });
-  
-  return payments;
-}
-
-// Create audit log entry
+// ================== AUDIT LOG HELPER ==================
 async function createAuditLog(
   saleId: number,
   action: string,
@@ -92,30 +52,27 @@ async function createAuditLog(
   }
 }
 
-// Create deleted sale record for archive
+// ================== SOFT DELETE HELPER ==================
 async function createDeletedSaleRecord(
   sale: any,
   deletedBy: string,
   deletedByEmail: string | undefined,
   deletionReason: string,
   ipAddress: string | undefined,
-  restockItems: boolean,
-  totalPaid: number,
-  balance: number
+  restockedItems: boolean
 ) {
   try {
-    const saleItemsSummary = sale.saleitem && sale.saleitem.length > 0
-      ? sale.saleitem.map((item: any) => 
-          `${item.product?.name || `Product ${item.productId}`} (${item.quantity} units @ ${item.price})`
-        ).join(', ')
-      : 'No products (Debt record only)';
+    // Create summary of sale items
+    const saleItemsSummary = sale.saleitem?.map((item: any) => 
+      `${item.product?.name || `Product ${item.productId}`} (${item.quantity} units @ Ksh ${item.price})`
+    ).join(', ') || 'No items';
     
-    const paymentsSummary = sale.payment && sale.payment.length > 0
-      ? sale.payment.map((p: any) => 
-          `${p.method}: ${p.amount}${p.referenceId ? ` (Ref: ${p.referenceId})` : ''}`
-        ).join(', ')
-      : 'No payments';
+    // Create summary of payments
+    const paymentsSummary = sale.payment?.map((p: any) => 
+      `${p.method}: Ksh ${p.amount}${p.referenceId ? ` (Ref: ${p.referenceId})` : ''}`
+    ).join(', ') || 'No payments';
     
+    // Calculate expiration date (7 days from now)
     const expiresAt = new Date();
     expiresAt.setDate(expiresAt.getDate() + 7);
     
@@ -136,12 +93,12 @@ async function createDeletedSaleRecord(
         ipAddress,
         saleItemsSummary,
         paymentsSummary,
-        restockedItems: restockItems,
+        restockedItems,
         expiresAt
       }
     });
     
-    console.log(`📦 Deleted sale record created: ${deletedSale.id} for original sale ${sale.id}`);
+    console.log(`📦 Deleted sale record created: ${deletedSale.id} for original sale ${sale.id}, expires at ${expiresAt}`);
     return deletedSale;
   } catch (error) {
     console.error("❌ Failed to create deleted sale record:", error);
@@ -149,32 +106,39 @@ async function createDeletedSaleRecord(
   }
 }
 
-// Handle restocking items when a sale is deleted
+// Helper function to handle restocking items
 async function handleRestockItems(sale: any) {
   try {
-    if (!sale.saleitem || sale.saleitem.length === 0) {
-      console.log("No items to restock");
-      return;
-    }
+    const productUpdates: { productId: number, quantity: number }[] = [];
     
     for (const saleItem of sale.saleitem) {
+      const product = saleItem.product;
+      
+      if (product) {
+        productUpdates.push({
+          productId: product.id,
+          quantity: saleItem.quantity
+        });
+      }
+    }
+    
+    for (const update of productUpdates) {
       const existingStock = await prisma.stock.findFirst({
-        where: { productId: saleItem.productId }
+        where: { productId: update.productId }
       });
       
       if (existingStock) {
         await prisma.stock.update({
           where: { id: existingStock.id },
           data: { 
-            quantity: existingStock.quantity + saleItem.quantity,
+            quantity: existingStock.quantity + update.quantity,
             updatedAt: new Date()
           },
         });
         
-        // Update product stock status
-        if (existingStock.quantity + saleItem.quantity > 0) {
+        if (existingStock.quantity + update.quantity > 0) {
           await prisma.product.update({
-            where: { id: saleItem.productId },
+            where: { id: update.productId },
             data: { 
               inStock: true,
               updatedAt: new Date()
@@ -183,33 +147,65 @@ async function handleRestockItems(sale: any) {
         }
       } else {
         const product = await prisma.product.findUnique({
-          where: { id: saleItem.productId }
+          where: { id: update.productId }
         });
         
         if (product) {
           await prisma.stock.create({
             data: {
               name: product.name,
-              quantity: saleItem.quantity,
+              quantity: update.quantity,
               costPrice: product.productionCost || product.price * 0.7,
               sellingPrice: product.price,
-              productId: saleItem.productId,
+              productId: update.productId,
               notes: `Restocked from deleted sale #${sale.id}`,
               createdAt: new Date(),
               updatedAt: new Date()
             },
           });
+          
+          if (update.quantity > 0) {
+            await prisma.product.update({
+              where: { id: update.productId },
+              data: { 
+                inStock: true,
+                updatedAt: new Date()
+              }
+            });
+          }
         }
       }
     }
-    
-    console.log(`✅ Restocked ${sale.saleitem.length} items from deleted sale`);
   } catch (error) {
     console.error("❌ Error during restocking:", error);
   }
 }
 
-// ================== GET /api/sales/[id] ==================
+// Helper to compare objects for audit log
+function getObjectDifferences(oldObj: any, newObj: any): { fieldName: string; oldValue: string; newValue: string; difference: string }[] {
+  const differences: { fieldName: string; oldValue: string; newValue: string; difference: string }[] = [];
+  
+  // Fields to track for sale
+  const fieldsToTrack = ['amount', 'status', 'dueDate', 'paymentMethod'];
+  
+  for (const field of fieldsToTrack) {
+    const oldVal = oldObj[field];
+    const newVal = newObj[field];
+    
+    if (JSON.stringify(oldVal) !== JSON.stringify(newVal)) {
+      differences.push({
+        fieldName: field,
+        oldValue: String(oldVal ?? 'null'),
+        newValue: String(newVal ?? 'null'),
+        difference: `Changed from ${oldVal ?? 'null'} to ${newVal ?? 'null'}`
+      });
+    }
+  }
+  
+  return differences;
+}
+
+// ---------------- GET /api/sales/[id] ----------------
 export async function GET(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -222,16 +218,8 @@ export async function GET(
       where: { id: Number(id) },
       include: {
         customer: true,
-        saleitem: { 
-          include: { 
-            product: true,
-            staffInventory: true
-          } 
-        },
+        saleitem: { include: { product: true } },
         payment: true,
-        paymentschedule: true,
-        invoice: true,
-        smsreminder: true
       },
     });
 
@@ -239,15 +227,7 @@ export async function GET(
       return NextResponse.json({ error: "Sale not found" }, { status: 404 });
     }
 
-    // Calculate financials using stored amount (NOT from sale items)
-    const totalPaid = await getTotalPaid(sale.id);
-    const balance = calculateBalance(sale.amount, totalPaid);
-    const calculatedStatus = updateSaleStatus(sale.amount, totalPaid);
-    
-    // Get payment history
-    const paymentHistory = await getPaymentHistory(sale.id);
-
-    // Fetch audit logs if requested
+    // Fetch audit logs separately if requested
     let auditLogs = null;
     if (includeAudit) {
       auditLogs = await prisma.saleauditlog.findMany({
@@ -257,52 +237,10 @@ export async function GET(
       });
     }
 
-    // Build response object explicitly to avoid type issues
-    const responseData = {
-      // Sale fields
-      id: sale.id,
-      customerId: sale.customerId,
-      amount: sale.amount,
-      date: sale.date,
-      createdAt: sale.createdAt,
-      updatedAt: sale.updatedAt,
-      dueDate: sale.dueDate,
-      status: sale.status,
-      checkDepositDate: sale.checkDepositDate,
-      isCheckDeposited: sale.isCheckDeposited,
-      lastReminderDate: sale.lastReminderDate,
-      paymentMethod: sale.paymentMethod,
-      remindersSent: sale.remindersSent,
-      isDeleted: sale.isDeleted,
-      deletedAt: sale.deletedAt,
-      deletedBy: sale.deletedBy,
-      deletionReason: sale.deletionReason,
-      updatedBy: sale.updatedBy,
-      createdBy: sale.createdBy,
-      createdById: sale.createdById,
-      // Relations
-      customer: sale.customer,
-      saleitem: sale.saleitem,
-      payment: sale.payment,
-      paymentschedule: sale.paymentschedule,
-      invoice: sale.invoice,
-      smsreminder: sale.smsreminder,
-      // Calculated fields
-      totalAmount: sale.amount,
-      amountPaid: totalPaid,
-      balance: balance,
-      calculatedStatus: calculatedStatus,
-      paymentHistory: paymentHistory,
-      hasProducts: sale.saleitem && sale.saleitem.length > 0,
-      productCount: sale.saleitem?.length || 0,
-      auditLogs: auditLogs || undefined,
-      warning: (!sale.saleitem || sale.saleitem.length === 0) && sale.amount > 0 
-        ? "This is a debt record with no product details. Financial data is preserved."
-        : null
-    };
-    
-    return NextResponse.json(responseData);
-    
+    return NextResponse.json({
+      ...sale,
+      auditLogs: auditLogs || undefined
+    });
   } catch (error: any) {
     console.error("❌ GET Sale Error:", error);
     return NextResponse.json(
@@ -312,7 +250,7 @@ export async function GET(
   }
 }
 
-// ================== PUT /api/sales/[id] ==================
+// ---------------- PUT /api/sales/[id] ----------------
 export async function PUT(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -321,289 +259,288 @@ export async function PUT(
     const { id } = await params;
     const body = await req.json();
     
-    // Extract audit info
+    // Extract audit info from request
     const changedBy = body.updatedBy || body.changedBy || "SYSTEM";
     const changedByEmail = body.updatedByEmail || body.changedByEmail;
     const ipAddress = body.ipAddress || req.headers.get('x-forwarded-for') || req.headers.get('x-real-ip') || undefined;
     const userAgent = body.userAgent || req.headers.get('user-agent') || undefined;
 
-    // Get existing sale with all relations
-    const existingSale = await prisma.sale.findUnique({
+    // Get original sale before update for audit comparison
+    const originalSale = await prisma.sale.findUnique({
       where: { id: Number(id) },
       include: {
-        customer: true,
         payment: true,
-        saleitem: { include: { product: true } }
+        saleitem: { include: { product: true } },
       },
     });
 
-    if (!existingSale) {
+    if (!originalSale) {
       return NextResponse.json({ error: "Sale not found" }, { status: 404 });
     }
 
-    // Get current total paid
-    const currentTotalPaid = await getTotalPaid(existingSale.id);
-    const currentBalance = calculateBalance(existingSale.amount, currentTotalPaid);
-    
-    // Handle different update scenarios
-    let newPaymentAmount = 0;
-    let paymentRecord = null;
-    let updatedTotalPaid = currentTotalPaid;
-    
-    // SCENARIO 1: Add a new payment
-    if (body.addPayment) {
-      const { amount, method, note, referenceId, checkDate, bankName, checkNumber } = body.addPayment;
-      
-      if (!amount || amount <= 0) {
-        return NextResponse.json({ error: "Invalid payment amount" }, { status: 400 });
-      }
-      
-      // Validate payment doesn't exceed balance
-      if (amount > currentBalance) {
-        return NextResponse.json({ 
-          error: `Payment amount (${amount}) exceeds remaining balance (${currentBalance})`,
-          remainingBalance: currentBalance
-        }, { status: 400 });
-      }
-      
-      // Create the payment record
-      paymentRecord = await prisma.payment.create({
-        data: {
-          saleId: existingSale.id,
-          amount: Number(amount),
-          method: method || "CASH",
-          note: note || null,
-          referenceId: referenceId || null,
-          checkDate: checkDate ? new Date(checkDate) : null,
-          checkNumber: checkNumber || null,
-          bankName: bankName || null,
-          status: method === "CHECK" && !checkDate ? "PENDING" : "CLEARED",
-          paidAt: new Date(),
-        },
+    // Create a snapshot of the original state
+    const originalSnapshot = {
+      amount: originalSale.amount,
+      status: originalSale.status,
+      dueDate: originalSale.dueDate,
+      paymentMethod: originalSale.paymentMethod,
+      saleItems: originalSale.saleitem.map(item => ({
+        productId: item.productId,
+        productName: item.product?.name,
+        quantity: item.quantity,
+        price: item.price,
+        total: item.total
+      })),
+      payments: originalSale.payment.map(p => ({
+        id: p.id,
+        amount: p.amount,
+        method: p.method,
+        referenceId: p.referenceId,
+        status: p.status
+      }))
+    };
+
+    // ------------------ Comprehensive Sale Items Update ------------------
+    if (body.saleItems && Array.isArray(body.saleItems)) {
+      const currentSaleItems = await prisma.saleitem.findMany({
+        where: { saleId: Number(id) }
       });
-      
-      newPaymentAmount = Number(amount);
-      updatedTotalPaid = currentTotalPaid + newPaymentAmount;
-      
-      // Create audit log for payment
-      await createAuditLog(
-        existingSale.id,
-        "PAYMENT_ADDED",
-        changedBy,
-        changedByEmail,
-        ipAddress,
-        userAgent,
-        "payment",
-        String(currentTotalPaid),
-        String(updatedTotalPaid),
-        `Added payment of ${newPaymentAmount}. New total paid: ${updatedTotalPaid}`,
-        {
-          before: { 
-            amountPaid: currentTotalPaid, 
-            balance: currentBalance,
-            status: existingSale.status
-          },
-          after: { 
-            amountPaid: updatedTotalPaid, 
-            balance: calculateBalance(existingSale.amount, updatedTotalPaid),
-            status: updateSaleStatus(existingSale.amount, updatedTotalPaid)
-          },
-          payment: paymentRecord
-        },
-        `Payment of ${newPaymentAmount} added via ${method || "CASH"}`
+
+      const incomingItemIds = body.saleItems
+        .map((item: any) => item.id)
+        .filter((id: any) => id !== undefined);
+
+      const itemsToDelete = currentSaleItems.filter(
+        (currentItem) => !incomingItemIds.includes(currentItem.id)
       );
+
+      if (itemsToDelete.length > 0) {
+        await prisma.saleitem.deleteMany({
+          where: {
+            id: { in: itemsToDelete.map(item => item.id) }
+          }
+        });
+      }
+
+      for (const item of body.saleItems) {
+        if (!item.productId || item.quantity === undefined || item.price === undefined) {
+          console.warn("Skipping invalid sale item:", item);
+          continue;
+        }
+
+        const product = await prisma.product.findUnique({
+          where: { id: item.productId }
+        });
+
+        if (!product) {
+          console.warn(`Product with ID ${item.productId} not found, skipping item`);
+          continue;
+        }
+
+        const itemTotal = item.quantity * item.price;
+
+        if (item.id) {
+          await prisma.saleitem.update({
+            where: { id: item.id },
+            data: {
+              productId: item.productId,
+              quantity: item.quantity,
+              price: item.price,
+              total: itemTotal,
+            },
+          });
+        } else {
+          await prisma.saleitem.create({
+            data: {
+              saleId: Number(id),
+              productId: item.productId,
+              quantity: item.quantity,
+              price: item.price,
+              total: itemTotal,
+            },
+          });
+        }
+      }
     }
+
+    // ------------------ Update existing payments ------------------
+    const paymentChanges: any[] = [];
     
-    // SCENARIO 2: Update sale details (but NEVER recalculate amount from products)
-    let saleUpdateData: any = {};
-    let hasSaleUpdates = false;
-    
-    // Update due date
-    if (body.dueDate !== undefined) {
-      saleUpdateData.dueDate = body.dueDate ? new Date(body.dueDate) : null;
-      hasSaleUpdates = true;
+    if (body.payments && Array.isArray(body.payments)) {
+      for (const p of body.payments) {
+        if (!p.id) continue;
+        
+        const originalPayment = originalSale.payment.find(op => op.id === p.id);
+        
+        await prisma.payment.update({
+          where: { id: p.id },
+          data: {
+            amount: Number(p.amount),
+            method: p.method,
+            referenceId: p.referenceId || null,
+            checkDate: p.checkDepositDate ? new Date(p.checkDepositDate) : null,
+            status: p.method === "CHECK" && !p.checkDepositDate ? "PENDING" : "CLEARED",
+          },
+        });
+        
+        // Track payment changes for audit
+        if (originalPayment && originalPayment.amount !== Number(p.amount)) {
+          paymentChanges.push({
+            fieldName: `payment_${p.id}_amount`,
+            oldValue: String(originalPayment.amount),
+            newValue: String(p.amount),
+            difference: `Payment amount changed from ${originalPayment.amount} to ${p.amount}`
+          });
+        }
+      }
     }
-    
-    // Update payment method
-    if (body.paymentMethod !== undefined) {
-      saleUpdateData.paymentMethod = body.paymentMethod;
-      hasSaleUpdates = true;
+
+    // ------------------ Add new payments ------------------
+    let newPaymentsCount = 0;
+    if (body.newPayments && Array.isArray(body.newPayments)) {
+      for (const np of body.newPayments) {
+        if (!np.amount || !np.method) {
+          console.warn("Skipping invalid payment:", np);
+          continue;
+        }
+
+        await prisma.payment.create({
+          data: {
+            saleId: Number(id),
+            amount: Number(np.amount),
+            method: np.method,
+            referenceId: np.referenceId || null,
+            checkDate: np.checkDepositDate ? new Date(np.checkDepositDate) : null,
+            status: np.method === "CHECK" && !np.checkDepositDate ? "PENDING" : "CLEARED",
+            paidAt: new Date(),
+          },
+        });
+        newPaymentsCount++;
+      }
     }
+
+    // ------------------ Recalculate totals & status ------------------
+    const updatedSaleItems = await prisma.saleitem.findMany({
+      where: { saleId: Number(id) },
+      include: { product: true }
+    });
+
+    const recalculatedAmount = updatedSaleItems.reduce(
+      (total, item) => total + (item.quantity * item.price), 
+      0
+    );
+
+    const allPayments = await prisma.payment.findMany({ 
+      where: { saleId: Number(id) } 
+    });
     
-    // Update notes (if you have this field)
-    if (body.notes !== undefined) {
-      saleUpdateData.notes = body.notes;
-      hasSaleUpdates = true;
-    }
-    
-    // Update check deposit date
-    if (body.checkDepositDate !== undefined) {
-      saleUpdateData.checkDepositDate = body.checkDepositDate ? new Date(body.checkDepositDate) : null;
-      hasSaleUpdates = true;
-    }
-    
-    // Update isCheckDeposited flag
-    if (body.isCheckDeposited !== undefined) {
-      saleUpdateData.isCheckDeposited = body.isCheckDeposited;
-      hasSaleUpdates = true;
-    }
-    
-    // IMPORTANT: NEVER update the amount field from products
-    // The amount field is the source of truth for totalAmount
-    
-    // Update sale record if needed
-    if (hasSaleUpdates) {
-      saleUpdateData.updatedBy = changedBy;
-      saleUpdateData.updatedAt = new Date();
+    const totalPaid = allPayments
+      .filter(p => p.status === "CLEARED")
+      .reduce((sum, p) => sum + p.amount, 0);
       
-      await prisma.sale.update({
-        where: { id: existingSale.id },
-        data: saleUpdateData,
+    const pendingPayments = allPayments.filter(p => p.status === "PENDING");
+    const balance = recalculatedAmount - totalPaid;
+
+    let status: "UNPAID" | "PARTIAL" | "PAID" = "UNPAID";
+    if (balance <= 0 && pendingPayments.length === 0) status = "PAID";
+    else if (totalPaid > 0 || pendingPayments.length > 0) status = "PARTIAL";
+
+    // ------------------ Update sale with recalculated amount ------------------
+    const updatedSale = await prisma.sale.update({
+      where: { id: Number(id) },
+      data: {
+        amount: recalculatedAmount,
+        dueDate: body.dueDate ? new Date(body.dueDate) : originalSale.dueDate,
+        paymentMethod: body.paymentMethod ?? originalSale.paymentMethod,
+        checkDepositDate: body.checkDepositDate ? new Date(body.checkDepositDate) : originalSale.checkDepositDate,
+        status,
+        updatedBy: changedBy,
+      },
+      include: {
+        customer: true,
+        saleitem: { include: { product: true } },
+        payment: true,
+      },
+    });
+
+    // Create snapshot of the new state
+    const newSnapshot = {
+      amount: updatedSale.amount,
+      status: updatedSale.status,
+      dueDate: updatedSale.dueDate,
+      paymentMethod: updatedSale.paymentMethod,
+      saleItems: updatedSale.saleitem.map(item => ({
+        productId: item.productId,
+        productName: item.product?.name,
+        quantity: item.quantity,
+        price: item.price,
+        total: item.total
+      })),
+      payments: updatedSale.payment.map(p => ({
+        id: p.id,
+        amount: p.amount,
+        method: p.method,
+        referenceId: p.referenceId,
+        status: p.status
+      }))
+    };
+
+    // Create audit log for the update
+    const differences = getObjectDifferences(originalSnapshot, newSnapshot);
+    
+    // Add payment changes
+    differences.push(...paymentChanges);
+    
+    if (newPaymentsCount > 0) {
+      differences.push({
+        fieldName: 'new_payments',
+        oldValue: '0',
+        newValue: String(newPaymentsCount),
+        difference: `Added ${newPaymentsCount} new payment(s)`
       });
-      
+    }
+    
+    if (differences.length > 0) {
+      // Log each individual change
+      for (const diff of differences) {
+        await createAuditLog(
+          Number(id),
+          "UPDATE",
+          changedBy,
+          changedByEmail,
+          ipAddress,
+          userAgent,
+          diff.fieldName,
+          diff.oldValue,
+          diff.newValue,
+          diff.difference,
+          { before: originalSnapshot, after: newSnapshot },
+          `Sale updated: ${diff.difference}`
+        );
+      }
+    } else {
+      // Log a generic update if no specific changes were tracked
       await createAuditLog(
-        existingSale.id,
+        Number(id),
         "UPDATE",
         changedBy,
         changedByEmail,
         ipAddress,
         userAgent,
-        "sale_details",
-        JSON.stringify({ 
-          dueDate: existingSale.dueDate, 
-          paymentMethod: existingSale.paymentMethod 
-        }),
-        JSON.stringify({ 
-          dueDate: saleUpdateData.dueDate || existingSale.dueDate, 
-          paymentMethod: saleUpdateData.paymentMethod || existingSale.paymentMethod 
-        }),
-        "Sale details updated",
-        { before: existingSale, after: saleUpdateData },
-        "Updated sale details"
+        undefined,
+        undefined,
+        undefined,
+        "Sale record updated",
+        { before: originalSnapshot, after: newSnapshot },
+        "Sale updated with changes to items or payments"
       );
     }
-    
-    // Update sale status based on new total paid
-    const newBalance = calculateBalance(existingSale.amount, updatedTotalPaid);
-    const newStatus = updateSaleStatus(existingSale.amount, updatedTotalPaid);
-    
-    if (newStatus !== existingSale.status) {
-      await prisma.sale.update({
-        where: { id: existingSale.id },
-        data: { 
-          status: newStatus,
-          updatedBy: changedBy,
-          updatedAt: new Date()
-        },
-      });
-      
-      await createAuditLog(
-        existingSale.id,
-        "STATUS_UPDATE",
-        changedBy,
-        changedByEmail,
-        ipAddress,
-        userAgent,
-        "status",
-        existingSale.status,
-        newStatus,
-        `Status changed from ${existingSale.status} to ${newStatus}`,
-        { before: existingSale.status, after: newStatus, totalPaid: updatedTotalPaid, balance: newBalance },
-        `Status updated due to payment changes`
-      );
-    }
-    
-    // SCENARIO 3: Update sale items (for new sales with products)
-    if (body.saleItems && Array.isArray(body.saleItems) && body.replaceItems === true) {
-      // This is for new/modern sales that have products
-      // WARNING: This should only be used for sales created after the change
-      
-      // Delete existing items
-      await prisma.saleitem.deleteMany({
-        where: { saleId: existingSale.id }
-      });
-      
-      // Create new items
-      let newTotalAmount = 0;
-      for (const item of body.saleItems) {
-        if (!item.productId || !item.quantity || !item.price) continue;
-        
-        const itemTotal = item.quantity * item.price;
-        newTotalAmount += itemTotal;
-        
-        await prisma.saleitem.create({
-          data: {
-            saleId: existingSale.id,
-            productId: item.productId,
-            quantity: item.quantity,
-            price: item.price,
-            total: itemTotal,
-            staffInventoryId: item.staffInventoryId || null
-          }
-        });
-      }
-      
-      // Update the sale amount ONLY if explicitly requested
-      if (body.updateTotalAmount === true) {
-        await prisma.sale.update({
-          where: { id: existingSale.id },
-          data: { 
-            amount: newTotalAmount,
-            updatedBy: changedBy,
-            updatedAt: new Date()
-          },
-        });
-        
-        await createAuditLog(
-          existingSale.id,
-          "ITEMS_UPDATED",
-          changedBy,
-          changedByEmail,
-          ipAddress,
-          userAgent,
-          "sale_items",
-          `Old total: ${existingSale.amount}`,
-          `New total: ${newTotalAmount}`,
-          `Sale items updated, total changed from ${existingSale.amount} to ${newTotalAmount}`,
-          { oldItems: existingSale.saleitem, newItems: body.saleItems },
-          "Updated sale items and recalculated total"
-        );
-      }
-    }
-    
-    // Get final sale data
-    const finalSale = await prisma.sale.findUnique({
-      where: { id: existingSale.id },
-      include: {
-        customer: true,
-        saleitem: { include: { product: true } },
-        payment: true,
-        paymentschedule: true
-      },
+
+    return NextResponse.json({ 
+      ...updatedSale, 
+      remainingAmount: Math.max(0, balance),
+      totalPaid 
     });
-    
-    // Get updated payment history
-    const paymentHistory = await getPaymentHistory(existingSale.id);
-    
-    // Return response
-    return NextResponse.json({
-      ...finalSale,
-      totalAmount: existingSale.amount,
-      amountPaid: updatedTotalPaid,
-      balance: calculateBalance(existingSale.amount, updatedTotalPaid),
-      calculatedStatus: updateSaleStatus(existingSale.amount, updatedTotalPaid),
-      paymentHistory: paymentHistory,
-      paymentAdded: !!paymentRecord,
-      newPayment: paymentRecord,
-      updatedFields: saleUpdateData,
-      message: paymentRecord 
-        ? `Payment of ${newPaymentAmount} added successfully. Remaining balance: ${calculateBalance(existingSale.amount, updatedTotalPaid)}`
-        : "Sale updated successfully",
-      warning: (!finalSale?.saleitem || finalSale.saleitem.length === 0) && existingSale.amount > 0 
-        ? "This is a debt record with no product details. Financial data is preserved."
-        : null
-    });
-    
   } catch (error: any) {
     console.error("❌ Update Sale Error:", error);
     return NextResponse.json(
@@ -613,7 +550,7 @@ export async function PUT(
   }
 }
 
-// ================== DELETE /api/sales/[id] ==================
+// ---------------- DELETE /api/sales/[id] ----------------
 export async function DELETE(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -630,7 +567,7 @@ export async function DELETE(
       userAgent 
     } = body;
 
-    // Get the sale with all relations
+    // First, get the sale with its items to know what products to restock
     const sale = await prisma.sale.findUnique({
       where: { id: Number(id) },
       include: {
@@ -638,15 +575,13 @@ export async function DELETE(
         saleitem: { 
           include: { 
             product: {
-              include: { stock: true }
+              include: {
+                stock: true
+              }
             } 
           } 
         },
         payment: true,
-        invoice: true,
-        paymentschedule: true,
-        smsreminder: true,
-        cashledger: true
       },
     });
 
@@ -662,39 +597,21 @@ export async function DELETE(
     }
 
     const deletingUser = deletedBy || "SYSTEM";
-    
-    // Get financial summary before deletion
-    const totalPaid = await getTotalPaid(sale.id);
-    const balance = calculateBalance(sale.amount, totalPaid);
+    const deletingUserEmail = deletedByEmail;
 
     // Create audit log before deletion
     await createAuditLog(
       Number(id),
       "DELETE",
       deletingUser,
-      deletedByEmail,
+      deletingUserEmail,
       ipAddress || req.headers.get('x-forwarded-for') || undefined,
       userAgent || req.headers.get('user-agent') || undefined,
       undefined,
       undefined,
       undefined,
-      `Sale deleted. Total Amount: ${sale.amount}, Amount Paid: ${totalPaid}, Balance: ${balance}. Reason: ${deletionReason}. Restocked: ${restockItems}`,
-      { 
-        saleData: {
-          id: sale.id,
-          amount: sale.amount,
-          date: sale.date,
-          customer: sale.customer?.name,
-          status: sale.status
-        }, 
-        financials: { 
-          totalAmount: sale.amount, 
-          amountPaid: totalPaid, 
-          balance 
-        }, 
-        deletionReason,
-        restockedItems: restockItems
-      },
+      `Sale deleted. Reason: ${deletionReason}. Restocked: ${restockItems}`,
+      { saleData: sale, restockedItems: restockItems, deletionReason },
       `Sale deleted with reason: ${deletionReason}`
     );
 
@@ -702,172 +619,66 @@ export async function DELETE(
     await createDeletedSaleRecord(
       sale,
       deletingUser,
-      deletedByEmail,
+      deletingUserEmail,
       deletionReason,
       ipAddress || req.headers.get('x-forwarded-for') || undefined,
-      restockItems,
-      totalPaid,
-      balance
+      restockItems
     );
 
-    // Handle restocking if requested (only if products exist)
-    if (restockItems && sale.saleitem && sale.saleitem.length > 0) {
+    // Handle restocking if requested
+    if (restockItems) {
       await handleRestockItems(sale);
     }
 
-    // Delete the sale and all related records in a transaction
-    await prisma.$transaction(async (tx) => {
-      // Delete related records
-      if (sale.saleitem && sale.saleitem.length > 0) {
-        await tx.saleitem.deleteMany({
+    // Use transaction for deletion operations
+    const result = await prisma.$transaction(async (tx) => {
+      // Batch delete related records
+      await Promise.all([
+        tx.saleitem.deleteMany({
           where: { saleId: Number(id) }
-        });
-      }
-      
-      if (sale.payment && sale.payment.length > 0) {
-        await tx.payment.deleteMany({
+        }),
+        tx.payment.deleteMany({
           where: { saleId: Number(id) }
-        });
-      }
-      
-      if (sale.paymentschedule && sale.paymentschedule.length > 0) {
-        await tx.paymentschedule.deleteMany({
+        }),
+        tx.paymentschedule.deleteMany({
           where: { saleId: Number(id) }
-        });
-      }
-      
-      if (sale.smsreminder && sale.smsreminder.length > 0) {
-        await tx.smsreminder.deleteMany({
+        }),
+        tx.smsreminder.deleteMany({
           where: { saleId: Number(id) }
-        });
-      }
-      
-      if (sale.invoice && sale.invoice.length > 0) {
-        await tx.invoice.deleteMany({
+        }),
+        tx.invoice.deleteMany({
           where: { saleId: Number(id) }
-        });
-      }
-      
-      if (sale.cashledger && sale.cashledger.length > 0) {
-        await tx.cashledger.deleteMany({
+        }),
+        tx.cashledger.deleteMany({
           where: { saleId: Number(id) }
-        });
-      }
-      
-      // Delete audit logs
-      await tx.saleauditlog.deleteMany({
-        where: { saleId: Number(id) }
-      });
+        })
+      ]);
 
-      // Finally delete the sale
-      await tx.sale.delete({
+      // Then delete the sale
+      const deletedSale = await tx.sale.delete({
         where: { id: Number(id) },
       });
 
-      return true;
+      return deletedSale;
     }, {
       timeout: 10000,
     });
 
     return NextResponse.json({ 
-      success: true,
       message: `Sale deleted successfully${restockItems ? ' with items restocked' : ''}. Record saved in archive for 7 days.`, 
-      financialSummary: {
-        totalAmount: sale.amount,
-        totalPaid: totalPaid,
-        remainingBalance: balance,
-        restockedItems: restockItems && sale.saleitem ? sale.saleitem.length : 0
-      },
+      sale: result,
+      restockedItems: restockItems ? sale.saleitem.length : 0,
       auditInfo: {
         deletedBy: deletingUser,
-        deletionReason: deletionReason,
+        deletionReason,
         archived: true,
-        expiresIn: "7 days",
-        originalSaleId: sale.id
+        expiresIn: "7 days"
       }
     });
-    
   } catch (error: any) {
     console.error("❌ Delete Sale Error:", error);
     return NextResponse.json(
       { error: error.message || "Failed to delete sale" },
-      { status: 500 }
-    );
-  }
-}
-
-// ================== PATCH /api/sales/[id] (For partial updates) ==================
-export async function PATCH(
-  req: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  try {
-    const { id } = await params;
-    const body = await req.json();
-    
-    const changedBy = body.updatedBy || body.changedBy || "SYSTEM";
-    const changedByEmail = body.updatedByEmail || body.changedByEmail;
-    
-    const existingSale = await prisma.sale.findUnique({
-      where: { id: Number(id) }
-    });
-    
-    if (!existingSale) {
-      return NextResponse.json({ error: "Sale not found" }, { status: 404 });
-    }
-    
-    // For partial updates, only update provided fields
-    const updateData: any = {};
-    
-    if (body.status !== undefined) updateData.status = body.status;
-    if (body.dueDate !== undefined) updateData.dueDate = body.dueDate ? new Date(body.dueDate) : null;
-    if (body.paymentMethod !== undefined) updateData.paymentMethod = body.paymentMethod;
-    if (body.notes !== undefined) updateData.notes = body.notes;
-    if (body.isCheckDeposited !== undefined) updateData.isCheckDeposited = body.isCheckDeposited;
-    if (body.lastReminderDate !== undefined) updateData.lastReminderDate = body.lastReminderDate ? new Date(body.lastReminderDate) : null;
-    if (body.remindersSent !== undefined) updateData.remindersSent = body.remindersSent;
-    
-    // NEVER update amount here
-    
-    if (Object.keys(updateData).length > 0) {
-      updateData.updatedBy = changedBy;
-      updateData.updatedAt = new Date();
-      
-      const updatedSale = await prisma.sale.update({
-        where: { id: Number(id) },
-        data: updateData,
-      });
-      
-      await createAuditLog(
-        Number(id),
-        "PATCH",
-        changedBy,
-        changedByEmail,
-        undefined,
-        undefined,
-        Object.keys(updateData).join(", "),
-        JSON.stringify({ status: existingSale.status, dueDate: existingSale.dueDate }),
-        JSON.stringify(updateData),
-        "Partial update applied",
-        { before: existingSale, after: updatedSale },
-        "Partial update to sale record"
-      );
-      
-      return NextResponse.json({
-        ...updatedSale,
-        message: "Sale partially updated successfully"
-      });
-    }
-    
-    return NextResponse.json({
-      ...existingSale,
-      message: "No updates provided"
-    });
-    
-  } catch (error: any) {
-    console.error("❌ PATCH Sale Error:", error);
-    return NextResponse.json(
-      { error: error.message || "Failed to partially update sale" },
       { status: 500 }
     );
   }

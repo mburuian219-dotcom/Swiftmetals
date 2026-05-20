@@ -1,6 +1,6 @@
 "use client";
 import { useState, useEffect } from "react";
-import { Download, Calendar, TrendingUp, DollarSign, PieChart, BarChart, Filter, X, Eye, EyeOff, Smartphone, ChevronDown, ChevronUp } from "lucide-react";
+import { Download, Calendar, TrendingUp, DollarSign, PieChart, BarChart, Filter, X, Eye, EyeOff, Smartphone, ChevronDown, ChevronUp, Printer, FileText, CreditCard } from "lucide-react";
 
 type SaleItem = {
   id: number;
@@ -16,22 +16,54 @@ type SaleItem = {
   };
 };
 
+type Payment = {
+  id: number;
+  amount: number;
+  method: string;
+  paidAt: string;
+  status: string;
+};
+
 type Sale = {
   id: number;
   date: string;
+  createdAt: string;
   amount: number;
   status: string;
-  saleitem: SaleItem[];
+  dueDate: string | null;
   totalPaid?: number;
+  balance?: number;
+  saleitem: SaleItem[];
+  payment?: Payment[];
   customer?: {
+    id: number;
     name: string;
+    phone?: string;
+    email?: string;
   };
+};
+
+type GroupedSale = {
+  saleId: number;
+  date: string;
+  createdAt: string;
+  customerName: string;
+  customerId: number;
+  totalAmount: number;
+  totalPaid: number;
+  balance: number;
+  status: string;
+  dueDate: string | null;
+  items: SalesIncomeReport[];
+  payments: Payment[];
 };
 
 type SalesIncomeReport = {
   date: string;
+  createdAt: string;
   saleId: number;
   customerName: string;
+  customerId: number;
   productId: number;
   productName: string;
   quantity: number;
@@ -45,19 +77,19 @@ type SalesIncomeReport = {
 };
 
 type PeriodFilter = "all" | "daily" | "weekly" | "monthly" | "yearly" | "custom";
-type ViewMode = "table" | "cards"; // Added card view for mobile
+type ViewMode = "table" | "cards" | "grouped";
 
 export default function SalesIncomeReport() {
   const [sales, setSales] = useState<Sale[]>([]);
-  const [filteredSales, setFilteredSales] = useState<SalesIncomeReport[]>([]);
-  const [allSales, setAllSales] = useState<SalesIncomeReport[]>([]);
+  const [filteredSales, setFilteredSales] = useState<GroupedSale[]>([]);
+  const [allSales, setAllSales] = useState<GroupedSale[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [periodFilter, setPeriodFilter] = useState<PeriodFilter>("all");
   const [showAllData, setShowAllData] = useState(true);
-  const [viewMode, setViewMode] = useState<ViewMode>("table"); // Default to table
-  const [expandedCard, setExpandedCard] = useState<number | null>(null);
-  const [showFilters, setShowFilters] = useState(false); // For mobile filter drawer
+  const [viewMode, setViewMode] = useState<ViewMode>("grouped");
+  const [expandedSale, setExpandedSale] = useState<number | null>(null);
+  const [showFilters, setShowFilters] = useState(false);
   const [dateRange, setDateRange] = useState({
     startDate: "",
     endDate: "",
@@ -68,15 +100,17 @@ export default function SalesIncomeReport() {
     totalGrossProfit: 0,
     averageProfitMargin: 0,
     totalSales: 0,
+    totalPaid: 0,
+    totalBalance: 0,
   });
 
   // Check screen size on mount and resize
   useEffect(() => {
     const checkScreenSize = () => {
       if (window.innerWidth < 768) {
-        setViewMode("cards"); // Default to cards on mobile
+        setViewMode("cards");
       } else {
-        setViewMode("table"); // Default to table on desktop
+        setViewMode("grouped");
       }
     };
     
@@ -113,7 +147,7 @@ export default function SalesIncomeReport() {
       setLoading(true);
       setError(null);
       
-      const response = await fetch("/api/sales");
+      const response = await fetch("/api/sales?includeDeleted=false");
       if (!response.ok) throw new Error("Failed to fetch sales");
       const salesData = await response.json();
       
@@ -135,12 +169,15 @@ export default function SalesIncomeReport() {
             ...item.product,
             productionCost: productCostMap.get(item.productId) || item.product?.productionCost || 0
           }
-        })) || []
+        })) || [],
+        payment: sale.payment || [],
+        totalPaid: sale.payment?.reduce((sum: number, p: any) => 
+          p.status === "COMPLETED" || p.status === "CLEARED" ? sum + p.amount : sum, 0) || 0,
+        balance: sale.amount - (sale.payment?.reduce((sum: number, p: any) => 
+          p.status === "COMPLETED" || p.status === "CLEARED" ? sum + p.amount : sum, 0) || 0)
       }));
       
       setSales(enrichedSales);
-      const allReports = processSalesToReports(enrichedSales);
-      setAllSales(allReports);
       
     } catch (err) {
       setError(err instanceof Error ? err.message : "An error occurred");
@@ -150,10 +187,15 @@ export default function SalesIncomeReport() {
     }
   };
 
-  const processSalesToReports = (salesData: Sale[]): SalesIncomeReport[] => {
-    const reports: SalesIncomeReport[] = [];
+  const processSalesToGroupedReports = (salesData: Sale[]): GroupedSale[] => {
+    const groupedMap = new Map<number, GroupedSale>();
     
     salesData.forEach(sale => {
+      const reports: SalesIncomeReport[] = [];
+      let saleTotalRevenue = 0;
+      let saleTotalCost = 0;
+      let saleGrossProfit = 0;
+      
       sale.saleitem.forEach((item: SaleItem) => {
         const unitProductionCost = item.product?.productionCost || 0;
         const totalProductionCost = unitProductionCost * item.quantity;
@@ -163,10 +205,12 @@ export default function SalesIncomeReport() {
         
         reports.push({
           date: sale.date,
+          createdAt: sale.createdAt || sale.date,
           saleId: sale.id,
-          customerName: sale.customer?.name || "Unknown",
+          customerName: sale.customer?.name || "Walk-in Customer",
+          customerId: sale.customer?.id || 0,
           productId: item.productId,
-          productName: item.product?.name || "Product",
+          productName: item.product?.name || "Unknown Product",
           quantity: item.quantity,
           unitPrice: item.price,
           totalRevenue,
@@ -176,22 +220,38 @@ export default function SalesIncomeReport() {
           profitMargin,
           saleStatus: sale.status,
         });
+        
+        saleTotalRevenue += totalRevenue;
+        saleTotalCost += totalProductionCost;
+        saleGrossProfit += grossProfit;
+      });
+      
+      groupedMap.set(sale.id, {
+        saleId: sale.id,
+        date: sale.date,
+        createdAt: sale.createdAt || sale.date,
+        customerName: sale.customer?.name || "Walk-in Customer",
+        customerId: sale.customer?.id || 0,
+        totalAmount: sale.amount,
+        totalPaid: sale.totalPaid || 0,
+        balance: sale.balance || sale.amount,
+        status: sale.status,
+        dueDate: sale.dueDate || null,
+        items: reports,
+        payments: sale.payment || [],
       });
     });
     
-    return reports;
+    // Sort by date descending (newest first)
+    return Array.from(groupedMap.values()).sort((a, b) => 
+      new Date(b.date).getTime() - new Date(a.date).getTime()
+    );
   };
 
   const applyFilters = () => {
     let filtered = [...sales];
     
-    if (periodFilter === "all" && showAllData) {
-      setFilteredSales(allSales);
-      calculateSummary(allSales);
-      return;
-    }
-    
-    if (dateRange.startDate && dateRange.endDate) {
+    if (!showAllData && dateRange.startDate && dateRange.endDate) {
       const start = new Date(dateRange.startDate);
       const end = new Date(dateRange.endDate);
       end.setHours(23, 59, 59, 999);
@@ -200,69 +260,85 @@ export default function SalesIncomeReport() {
         const saleDate = new Date(sale.date);
         return saleDate >= start && saleDate <= end;
       });
+    } else if (!showAllData) {
+      switch (periodFilter) {
+        case "daily":
+          const today = new Date();
+          filtered = filtered.filter(sale => {
+            const saleDate = new Date(sale.date);
+            return saleDate.toDateString() === today.toDateString();
+          });
+          break;
+          
+        case "weekly":
+          const oneWeekAgo = new Date();
+          oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
+          filtered = filtered.filter(sale => {
+            const saleDate = new Date(sale.date);
+            return saleDate >= oneWeekAgo;
+          });
+          break;
+          
+        case "monthly":
+          const oneMonthAgo = new Date();
+          oneMonthAgo.setMonth(oneMonthAgo.getMonth() - 1);
+          filtered = filtered.filter(sale => {
+            const saleDate = new Date(sale.date);
+            return saleDate >= oneMonthAgo;
+          });
+          break;
+          
+        case "yearly":
+          const oneYearAgo = new Date();
+          oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
+          filtered = filtered.filter(sale => {
+            const saleDate = new Date(sale.date);
+            return saleDate >= oneYearAgo;
+          });
+          break;
+      }
     }
     
-    switch (periodFilter) {
-      case "daily":
-        const today = new Date();
-        filtered = filtered.filter(sale => {
-          const saleDate = new Date(sale.date);
-          return saleDate.toDateString() === today.toDateString();
-        });
-        break;
-        
-      case "weekly":
-        const oneWeekAgo = new Date();
-        oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
-        filtered = filtered.filter(sale => {
-          const saleDate = new Date(sale.date);
-          return saleDate >= oneWeekAgo;
-        });
-        break;
-        
-      case "monthly":
-        const oneMonthAgo = new Date();
-        oneMonthAgo.setMonth(oneMonthAgo.getMonth() - 1);
-        filtered = filtered.filter(sale => {
-          const saleDate = new Date(sale.date);
-          return saleDate >= oneMonthAgo;
-        });
-        break;
-        
-      case "yearly":
-        const oneYearAgo = new Date();
-        oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
-        filtered = filtered.filter(sale => {
-          const saleDate = new Date(sale.date);
-          return saleDate >= oneYearAgo;
-        });
-        break;
-    }
-    
-    const reports = processSalesToReports(filtered);
-    setFilteredSales(reports);
-    calculateSummary(reports);
+    const groupedReports = processSalesToGroupedReports(filtered);
+    setFilteredSales(groupedReports);
+    calculateSummary(groupedReports);
   };
 
-  const calculateSummary = (reports: SalesIncomeReport[]) => {
-    const totalRevenue = reports.reduce((sum, report) => sum + report.totalRevenue, 0);
-    const totalProductionCost = reports.reduce((sum, report) => sum + report.totalProductionCost, 0);
-    const totalGrossProfit = reports.reduce((sum, report) => sum + report.grossProfit, 0);
-    const averageProfitMargin = reports.length > 0 
-      ? reports.reduce((sum, report) => sum + report.profitMargin, 0) / reports.length 
-      : 0;
+  const calculateSummary = (reports: GroupedSale[]) => {
+    let totalRevenue = 0;
+    let totalProductionCost = 0;
+    let totalGrossProfit = 0;
+    let totalPaid = 0;
+    let totalBalance = 0;
+    let totalProfitMarginSum = 0;
+    let itemCount = 0;
+    
+    reports.forEach(sale => {
+      totalRevenue += sale.totalAmount;
+      totalPaid += sale.totalPaid;
+      totalBalance += sale.balance;
+      
+      sale.items.forEach(item => {
+        totalProductionCost += item.totalProductionCost;
+        totalGrossProfit += item.grossProfit;
+        totalProfitMarginSum += item.profitMargin;
+        itemCount++;
+      });
+    });
     
     setSummary({
       totalRevenue,
       totalProductionCost,
       totalGrossProfit,
-      averageProfitMargin,
-      totalSales: new Set(reports.map(r => r.saleId)).size,
+      averageProfitMargin: itemCount > 0 ? totalProfitMarginSum / itemCount : 0,
+      totalSales: reports.length,
+      totalPaid,
+      totalBalance,
     });
   };
 
   const downloadCSV = () => {
-    const dataToDownload = periodFilter === "all" && showAllData ? allSales : filteredSales;
+    const dataToDownload = showAllData ? allSales : filteredSales;
     
     if (dataToDownload.length === 0) {
       alert("No data to download");
@@ -271,42 +347,52 @@ export default function SalesIncomeReport() {
     
     const headers = [
       "Date",
+      "Time",
       "Sale ID",
       "Customer",
-      "Product ID",
       "Product Name",
       "Quantity",
       "Unit Price",
       "Total Revenue",
-      "Unit Production Cost",
-      "Total Production Cost",
+      "Production Cost",
       "Gross Profit",
       "Profit Margin %",
-      "Status"
+      "Sale Status",
+      "Total Sale Amount",
+      "Amount Paid",
+      "Balance"
     ];
     
-    const csvData = dataToDownload.map(report => [
-      formatDate(report.date),
-      report.saleId,
-      `"${report.customerName.replace(/"/g, '""')}"`,
-      report.productId,
-      `"${report.productName.replace(/"/g, '""')}"`,
-      report.quantity,
-      formatCurrency(report.unitPrice, false),
-      formatCurrency(report.totalRevenue, false),
-      formatCurrency(report.unitProductionCost, false),
-      formatCurrency(report.totalProductionCost, false),
-      formatCurrency(report.grossProfit, false),
-      report.profitMargin.toFixed(1),
-      report.saleStatus
-    ]);
+    const csvData: string[][] = [];
+    
+    dataToDownload.forEach(sale => {
+      sale.items.forEach(item => {
+        csvData.push([
+          formatDate(item.date),
+          formatTime(item.createdAt),
+          item.saleId.toString(),
+          `"${item.customerName.replace(/"/g, '""')}"`,
+          `"${item.productName.replace(/"/g, '""')}"`,
+          item.quantity.toString(),
+          formatCurrency(item.unitPrice, false),
+          formatCurrency(item.totalRevenue, false),
+          formatCurrency(item.totalProductionCost, false),
+          formatCurrency(item.grossProfit, false),
+          item.profitMargin.toFixed(1),
+          item.saleStatus,
+          formatCurrency(sale.totalAmount, false),
+          formatCurrency(sale.totalPaid, false),
+          formatCurrency(sale.balance, false)
+        ]);
+      });
+    });
     
     const csvContent = [
       headers.join(","),
       ...csvData.map(row => row.join(","))
     ].join("\n");
     
-    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const blob = new Blob(["\uFEFF" + csvContent], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
@@ -325,16 +411,40 @@ export default function SalesIncomeReport() {
     URL.revokeObjectURL(url);
   };
 
+  const handlePrint = () => {
+    window.print();
+  };
+
   const formatCurrency = (amount: number, includeSymbol: boolean = true) => {
     const formatted = Number(amount || 0).toFixed(2);
-    return includeSymbol ? `KES ${formatted}` : formatted;
+    return includeSymbol ? `KES ${formatted.toLocaleString()}` : formatted.toLocaleString();
   };
 
   const formatDate = (dateString: string) => {
-    return new Date(dateString).toLocaleDateString("en-US", {
+    if (!dateString) return "N/A";
+    return new Date(dateString).toLocaleDateString("en-GB", {
+      day: "2-digit",
+      month: "2-digit",
       year: "numeric",
+    });
+  };
+
+  const formatDateTime = (dateString: string) => {
+    if (!dateString) return "N/A";
+    return new Date(dateString).toLocaleString("en-GB", {
+      day: "2-digit",
       month: "short",
-      day: "numeric",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  };
+
+  const formatTime = (dateString: string) => {
+    if (!dateString) return "N/A";
+    return new Date(dateString).toLocaleTimeString("en-GB", {
+      hour: "2-digit",
+      minute: "2-digit",
     });
   };
 
@@ -345,7 +455,7 @@ export default function SalesIncomeReport() {
     });
     setPeriodFilter("all");
     setShowAllData(true);
-    setShowFilters(false); // Close filter drawer on mobile
+    setShowFilters(false);
   };
 
   const toggleAllData = () => {
@@ -356,10 +466,24 @@ export default function SalesIncomeReport() {
   };
 
   const toggleViewMode = () => {
-    setViewMode(viewMode === "table" ? "cards" : "table");
+    const modes: ViewMode[] = ["grouped", "table", "cards"];
+    const currentIndex = modes.indexOf(viewMode);
+    const nextIndex = (currentIndex + 1) % modes.length;
+    setViewMode(modes[nextIndex]);
   };
 
-  const displayData = periodFilter === "all" && showAllData ? allSales : filteredSales;
+  const getStatusBadge = (status: string) => {
+    const statusConfig: Record<string, { color: string; label: string }> = {
+      "PAID": { color: "bg-green-100 text-green-800", label: "Paid" },
+      "UNPAID": { color: "bg-red-100 text-red-800", label: "Unpaid" },
+      "PARTIAL": { color: "bg-yellow-100 text-yellow-800", label: "Partial" },
+      "CANCELLED": { color: "bg-gray-100 text-gray-800", label: "Cancelled" },
+    };
+    const config = statusConfig[status] || { color: "bg-gray-100 text-gray-800", label: status };
+    return <span className={`px-2 py-1 rounded-full text-xs font-medium ${config.color}`}>{config.label}</span>;
+  };
+
+  const displayData = showAllData ? allSales : filteredSales;
 
   if (loading) {
     return (
@@ -373,53 +497,49 @@ export default function SalesIncomeReport() {
   }
 
   return (
-    <div className="bg-white rounded-xl shadow-lg p-3 sm:p-6 border-2 border-blue-200">
-      {/* Header - Mobile Optimized */}
-      <div className="flex flex-col gap-3 mb-6">
+    <div className="bg-white rounded-xl shadow-lg p-3 sm:p-6 border-2 border-blue-200 print:shadow-none print:border-0">
+      {/* Header */}
+      <div className="flex flex-col gap-3 mb-6 print:mb-4">
         <div className="flex flex-col sm:flex-row items-start justify-between gap-3">
           <div className="flex-1">
             <div className="flex items-center gap-2 mb-1">
-              <div className="bg-blue-100 p-1.5 rounded-lg sm:hidden">
-                <TrendingUp className="w-5 h-5 text-blue-600" />
-              </div>
-              <div className="bg-blue-100 p-1.5 rounded-lg hidden sm:inline-flex">
+              <div className="bg-blue-100 p-1.5 rounded-lg">
                 <TrendingUp className="w-5 h-5 text-blue-600" />
               </div>
               <h3 className="text-lg sm:text-xl font-bold text-gray-800">
                 Sales Income Report
               </h3>
             </div>
-            <p className="text-xs sm:text-sm text-gray-600 pl-9 sm:pl-0">
-              Gross Profit = Total Revenue - Total Production Cost
+            <p className="text-xs sm:text-sm text-gray-600 pl-9">
+              Gross Profit = (Selling Price - Production Cost) × Quantity
             </p>
           </div>
           
-          {/* Mobile Action Buttons */}
+          {/* Action Buttons */}
           <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
             <div className="flex gap-2">
-              {/* View Mode Toggle - Mobile Only */}
               <button
                 onClick={toggleViewMode}
-                className="sm:hidden p-2 bg-gray-100 hover:bg-gray-200 rounded-lg transition flex items-center justify-center"
-                title={viewMode === "table" ? "Switch to Card View" : "Switch to Table View"}
+                className="p-2 bg-gray-100 hover:bg-gray-200 rounded-lg transition flex items-center justify-center print:hidden"
+                title="Toggle View"
               >
-                <Smartphone className="w-4 h-4 text-gray-700" />
+                {viewMode === "grouped" && <FileText className="w-4 h-4 text-gray-700" />}
+                {viewMode === "table" && <PieChart className="w-4 h-4 text-gray-700" />}
+                {viewMode === "cards" && <Smartphone className="w-4 h-4 text-gray-700" />}
               </button>
               
-              {/* Filter Toggle - Mobile Only */}
               <button
                 onClick={() => setShowFilters(!showFilters)}
-                className="sm:hidden p-2 bg-blue-100 hover:bg-blue-200 rounded-lg transition flex items-center justify-center"
+                className="sm:hidden p-2 bg-blue-100 hover:bg-blue-200 rounded-lg transition print:hidden"
               >
                 <Filter className="w-4 h-4 text-blue-600" />
               </button>
             </div>
             
             <div className="flex flex-col sm:flex-row gap-2">
-              {/* Show All Toggle */}
               <button
                 onClick={toggleAllData}
-                className={`px-3 py-2 sm:px-4 sm:py-2.5 rounded-lg font-medium transition flex items-center justify-center gap-2 text-sm ${
+                className={`px-3 py-2 rounded-lg font-medium transition flex items-center justify-center gap-2 text-sm print:hidden ${
                   showAllData 
                     ? "bg-green-500 hover:bg-green-600 text-white" 
                     : "bg-gray-200 hover:bg-gray-300 text-gray-700"
@@ -427,13 +547,13 @@ export default function SalesIncomeReport() {
               >
                 {showAllData ? (
                   <>
-                    <Eye className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+                    <Eye className="w-3.5 h-3.5" />
                     <span className="hidden sm:inline">All Data</span>
                     <span className="sm:hidden">All</span>
                   </>
                 ) : (
                   <>
-                    <EyeOff className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+                    <EyeOff className="w-3.5 h-3.5" />
                     <span className="hidden sm:inline">Filtered</span>
                     <span className="sm:hidden">Filtered</span>
                   </>
@@ -441,41 +561,23 @@ export default function SalesIncomeReport() {
               </button>
               
               <button
+                onClick={handlePrint}
+                className="bg-gray-500 hover:bg-gray-600 text-white font-semibold py-2 px-3 rounded-lg transition flex items-center justify-center gap-2 text-sm print:hidden"
+              >
+                <Printer className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">Print</span>
+              </button>
+              
+              <button
                 onClick={downloadCSV}
                 disabled={displayData.length === 0}
-                className="bg-gradient-to-r from-green-500 to-emerald-500 hover:from-green-600 hover:to-emerald-600 text-white font-semibold py-2 px-3 sm:px-4 rounded-lg transition-all flex items-center justify-center gap-2 shadow-lg hover:shadow-xl text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                className="bg-gradient-to-r from-green-500 to-emerald-500 hover:from-green-600 hover:to-emerald-600 text-white font-semibold py-2 px-3 rounded-lg transition flex items-center justify-center gap-2 shadow-lg text-sm disabled:opacity-50 disabled:cursor-not-allowed print:hidden"
               >
-                <Download className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+                <Download className="w-3.5 h-3.5" />
                 <span className="hidden sm:inline">Download CSV</span>
                 <span className="sm:hidden">Download</span>
               </button>
             </div>
-          </div>
-        </div>
-
-        {/* View Mode Toggle - Desktop Only */}
-        <div className="hidden sm:flex justify-end">
-          <div className="inline-flex rounded-lg border border-gray-300 p-1">
-            <button
-              onClick={() => setViewMode("table")}
-              className={`px-3 py-1.5 rounded-md text-sm font-medium transition ${
-                viewMode === "table" 
-                  ? "bg-blue-600 text-white" 
-                  : "text-gray-700 hover:bg-gray-100"
-              }`}
-            >
-              Table View
-            </button>
-            <button
-              onClick={() => setViewMode("cards")}
-              className={`px-3 py-1.5 rounded-md text-sm font-medium transition ${
-                viewMode === "cards" 
-                  ? "bg-blue-600 text-white" 
-                  : "text-gray-700 hover:bg-gray-100"
-              }`}
-            >
-              Card View
-            </button>
           </div>
         </div>
       </div>
@@ -486,90 +588,64 @@ export default function SalesIncomeReport() {
         </div>
       )}
 
-      {/* Summary Cards - Mobile Stacked */}
-      <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-5 gap-2 sm:gap-4 mb-4 sm:mb-6">
-        <div className="bg-blue-50 rounded-lg p-2 sm:p-4 border border-blue-200">
-          <p className="text-xs sm:text-sm text-gray-600 mb-1">Revenue</p>
-          <p className="text-base sm:text-xl font-bold text-blue-600 truncate">
+      {/* Summary Cards */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-7 gap-2 sm:gap-3 mb-4 sm:mb-6 print:grid-cols-7 print:gap-2">
+        <div className="bg-blue-50 rounded-lg p-2 sm:p-3 border border-blue-200">
+          <p className="text-xs text-gray-600 mb-1">Revenue</p>
+          <p className="text-sm sm:text-base font-bold text-blue-600 truncate">
             {formatCurrency(summary.totalRevenue)}
           </p>
         </div>
         
-        <div className="bg-orange-50 rounded-lg p-2 sm:p-4 border border-orange-200">
-          <p className="text-xs sm:text-sm text-gray-600 mb-1">Prod. Cost</p>
-          <p className="text-base sm:text-xl font-bold text-orange-600 truncate">
+        <div className="bg-orange-50 rounded-lg p-2 sm:p-3 border border-orange-200">
+          <p className="text-xs text-gray-600 mb-1">Prod. Cost</p>
+          <p className="text-sm sm:text-base font-bold text-orange-600 truncate">
             {formatCurrency(summary.totalProductionCost)}
           </p>
         </div>
         
-        <div className="bg-green-50 rounded-lg p-2 sm:p-4 border border-green-200">
-          <p className="text-xs sm:text-sm text-gray-600 mb-1">Gross Profit</p>
-          <p className="text-base sm:text-xl font-bold text-green-600 truncate">
+        <div className="bg-green-50 rounded-lg p-2 sm:p-3 border border-green-200">
+          <p className="text-xs text-gray-600 mb-1">Gross Profit</p>
+          <p className="text-sm sm:text-base font-bold text-green-600 truncate">
             {formatCurrency(summary.totalGrossProfit)}
           </p>
         </div>
         
-        <div className="bg-purple-50 rounded-lg p-2 sm:p-4 border border-purple-200 hidden sm:block lg:block">
-          <p className="text-xs sm:text-sm text-gray-600 mb-1">Avg. Margin</p>
-          <p className="text-base sm:text-xl font-bold text-purple-600">
+        <div className="bg-purple-50 rounded-lg p-2 sm:p-3 border border-purple-200">
+          <p className="text-xs text-gray-600 mb-1">Margin</p>
+          <p className="text-sm sm:text-base font-bold text-purple-600">
             {summary.averageProfitMargin.toFixed(1)}%
           </p>
         </div>
         
-        <div className="bg-amber-50 rounded-lg p-2 sm:p-4 border border-amber-200 hidden sm:block lg:block">
-          <p className="text-xs sm:text-sm text-gray-600 mb-1">Total Sales</p>
-          <p className="text-base sm:text-xl font-bold text-amber-600">
-            {summary.totalSales}
-          </p>
-        </div>
-      </div>
-
-      {/* Mobile Only: Compact Summary Row */}
-      <div className="sm:hidden grid grid-cols-2 gap-2 mb-4">
-        <div className="bg-purple-50 rounded-lg p-2 border border-purple-200">
-          <p className="text-xs text-gray-600 mb-1">Margin</p>
-          <p className="text-sm font-bold text-purple-600">
-            {summary.averageProfitMargin.toFixed(1)}%
-          </p>
-        </div>
-        <div className="bg-amber-50 rounded-lg p-2 border border-amber-200">
+        <div className="bg-amber-50 rounded-lg p-2 sm:p-3 border border-amber-200">
           <p className="text-xs text-gray-600 mb-1">Sales</p>
-          <p className="text-sm font-bold text-amber-600">
+          <p className="text-sm sm:text-base font-bold text-amber-600">
             {summary.totalSales}
           </p>
         </div>
-      </div>
-
-      {/* Data Info Banner */}
-      {showAllData && periodFilter === "all" && (
-        <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 sm:p-4 mb-4 sm:mb-6">
-          <div className="flex items-center gap-2 sm:gap-3">
-            <div className="bg-blue-100 p-1.5 sm:p-2 rounded-full">
-              <Eye className="w-4 h-4 sm:w-5 sm:h-5 text-blue-600" />
-            </div>
-            <div>
-              <p className="font-medium text-blue-800 text-sm sm:text-base">Showing ALL Sales Data</p>
-              <p className="text-xs sm:text-sm text-blue-600">
-                {displayData.length > 0 ? (
-                  <span>{displayData.length} items from {summary.totalSales} sales</span>
-                ) : (
-                  <span>Complete sales history with gross profit</span>
-                )}
-              </p>
-            </div>
-          </div>
+        
+        <div className="bg-indigo-50 rounded-lg p-2 sm:p-3 border border-indigo-200">
+          <p className="text-xs text-gray-600 mb-1">Paid</p>
+          <p className="text-sm sm:text-base font-bold text-indigo-600 truncate">
+            {formatCurrency(summary.totalPaid)}
+          </p>
         </div>
-      )}
+        
+        <div className="bg-red-50 rounded-lg p-2 sm:p-3 border border-red-200">
+          <p className="text-xs text-gray-600 mb-1">Balance</p>
+          <p className="text-sm sm:text-base font-bold text-red-600 truncate">
+            {formatCurrency(summary.totalBalance)}
+          </p>
+        </div>
+      </div>
 
       {/* Mobile Filter Drawer */}
       {showFilters && (
-        <div className="sm:hidden mb-4 bg-gray-50 rounded-lg p-4 border border-gray-200">
+        <div className="sm:hidden mb-4 bg-gray-50 rounded-lg p-4 border border-gray-200 print:hidden">
           <div className="flex items-center justify-between mb-3">
             <h4 className="font-medium text-gray-700">Filters</h4>
-            <button
-              onClick={() => setShowFilters(false)}
-              className="text-gray-500 hover:text-gray-700"
-            >
+            <button onClick={() => setShowFilters(false)} className="text-gray-500">
               <X className="w-5 h-5" />
             </button>
           </div>
@@ -582,17 +658,13 @@ export default function SalesIncomeReport() {
                   key={period}
                   onClick={() => {
                     setPeriodFilter(period);
-                    if (period === "all") {
-                      setShowAllData(true);
-                    }
-                    if (period !== "custom") {
-                      setShowFilters(false);
-                    }
+                    if (period === "all") setShowAllData(true);
+                    if (period !== "custom") setShowFilters(false);
                   }}
                   className={`px-2 py-1.5 rounded text-xs font-medium transition ${
                     periodFilter === period
                       ? "bg-blue-600 text-white"
-                      : "bg-white text-gray-700 border border-gray-300 hover:bg-gray-100"
+                      : "bg-white text-gray-700 border border-gray-300"
                   }`}
                 >
                   {period === "all" ? "All" : period.charAt(0).toUpperCase() + period.slice(1)}
@@ -604,26 +676,21 @@ export default function SalesIncomeReport() {
           {periodFilter === "custom" && (
             <div className="space-y-3">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Start Date
-                </label>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Start Date</label>
                 <input
                   type="date"
                   value={dateRange.startDate}
                   onChange={(e) => setDateRange(prev => ({ ...prev, startDate: e.target.value }))}
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
                 />
               </div>
-              
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  End Date
-                </label>
+                <label className="block text-sm font-medium text-gray-700 mb-1">End Date</label>
                 <input
                   type="date"
                   value={dateRange.endDate}
                   onChange={(e) => setDateRange(prev => ({ ...prev, endDate: e.target.value }))}
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
                 />
               </div>
             </div>
@@ -639,394 +706,314 @@ export default function SalesIncomeReport() {
       )}
 
       {/* Desktop Filters */}
-      {!showAllData || periodFilter !== "all" ? (
-        <div className="hidden sm:block bg-gray-50 rounded-lg p-4 mb-6">
-          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-4">
-            <div className="flex items-center gap-2">
-              <Filter className="w-4 h-4 text-gray-500" />
-              <span className="text-sm font-medium text-gray-700">Filter by Period</span>
-            </div>
-            
-            <div className="flex flex-wrap gap-2">
-              {(["all", "daily", "weekly", "monthly", "yearly", "custom"] as PeriodFilter[]).map((period) => (
-                <button
-                  key={period}
-                  onClick={() => {
-                    setPeriodFilter(period);
-                    if (period === "all") {
-                      setShowAllData(true);
-                    }
-                  }}
-                  className={`px-3 py-1.5 rounded-lg text-sm font-medium transition ${
-                    periodFilter === period
-                      ? "bg-blue-600 text-white"
-                      : "bg-white text-gray-700 border border-gray-300 hover:bg-gray-100"
-                  }`}
-                >
-                  {period.charAt(0).toUpperCase() + period.slice(1)}
-                </button>
-              ))}
-            </div>
+      {!showAllData && (
+        <div className="hidden sm:block bg-gray-50 rounded-lg p-4 mb-6 print:hidden">
+          <div className="flex flex-wrap gap-2 mb-4">
+            {(["all", "daily", "weekly", "monthly", "yearly", "custom"] as PeriodFilter[]).map((period) => (
+              <button
+                key={period}
+                onClick={() => setPeriodFilter(period)}
+                className={`px-3 py-1.5 rounded-lg text-sm font-medium transition ${
+                  periodFilter === period
+                    ? "bg-blue-600 text-white"
+                    : "bg-white text-gray-700 border border-gray-300"
+                }`}
+              >
+                {period.charAt(0).toUpperCase() + period.slice(1)}
+              </button>
+            ))}
           </div>
 
           {periodFilter === "custom" && (
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div className="grid grid-cols-2 gap-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Start Date
-                </label>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Start Date</label>
                 <input
                   type="date"
                   value={dateRange.startDate}
                   onChange={(e) => setDateRange(prev => ({ ...prev, startDate: e.target.value }))}
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2"
                 />
               </div>
-              
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  End Date
-                </label>
+                <label className="block text-sm font-medium text-gray-700 mb-1">End Date</label>
                 <input
                   type="date"
                   value={dateRange.endDate}
                   onChange={(e) => setDateRange(prev => ({ ...prev, endDate: e.target.value }))}
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2"
                 />
               </div>
             </div>
           )}
           
           {(dateRange.startDate || dateRange.endDate) && (
-            <div className="flex justify-between items-center mt-4">
-              <p className="text-sm text-gray-600">
-                Showing data from {formatDate(dateRange.startDate)} to {formatDate(dateRange.endDate)}
-              </p>
-              <button
-                onClick={resetFilters}
-                className="text-sm text-red-600 hover:text-red-800 flex items-center gap-1"
-              >
-                <X className="w-3 h-3" />
-                Reset Filters
-              </button>
-            </div>
+            <button onClick={resetFilters} className="mt-4 text-sm text-red-600 hover:text-red-800">
+              Reset Filters
+            </button>
           )}
-        </div>
-      ) : (
-        <div className="hidden sm:block mb-6">
-          <button
-            onClick={() => setShowAllData(false)}
-            className="text-blue-600 hover:text-blue-800 flex items-center gap-2 text-sm font-medium"
-          >
-            <Filter className="w-4 h-4" />
-            Click here to filter data by date range
-          </button>
         </div>
       )}
 
       {/* Results Info */}
-      <div className="mb-4">
+      <div className="mb-4 flex justify-between items-center">
         <p className="text-sm text-gray-600">
-          {displayData.length} items from {summary.totalSales} sales
-          {viewMode === "cards" && " (Card View)"}
-          {viewMode === "table" && " (Table View)"}
+          {displayData.length} sales • {displayData.reduce((sum, s) => sum + s.items.length, 0)} items
         </p>
+        {!showAllData && periodFilter !== "all" && (
+          <p className="text-xs text-blue-600">
+            Filtered: {periodFilter}
+          </p>
+        )}
       </div>
 
-      {/* Data Display - Conditional Rendering based on viewMode */}
+      {/* Data Display */}
       {displayData.length === 0 ? (
         <div className="text-center py-8 text-gray-500">
           <PieChart className="w-12 h-12 mx-auto mb-3 text-gray-300" />
           <p>No sales data found.</p>
-          <p className="text-sm mt-1">Check if you have any sales recorded.</p>
         </div>
-      ) : viewMode === "table" ? (
-        // Table View (Desktop/Mobile)
-        <div className="overflow-x-auto rounded-lg border border-gray-200">
-          <table className="min-w-full divide-y divide-gray-200">
-            <thead className="bg-gray-50">
-              <tr>
-                <th className="px-3 py-2 sm:px-4 sm:py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Date
-                </th>
-                <th className="px-3 py-2 sm:px-4 sm:py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Sale
-                </th>
-                <th className="px-3 py-2 sm:px-4 sm:py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Customer
-                </th>
-                <th className="px-3 py-2 sm:px-4 sm:py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Product
-                </th>
-                <th className="px-3 py-2 sm:px-4 sm:py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Qty
-                </th>
-                <th className="px-3 py-2 sm:px-4 sm:py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Revenue
-                </th>
-                <th className="px-3 py-2 sm:px-4 sm:py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Cost
-                </th>
-                <th className="px-3 py-2 sm:px-4 sm:py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Profit
-                </th>
-                <th className="px-3 py-2 sm:px-4 sm:py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Margin
-                </th>
-              </tr>
-            </thead>
-            <tbody className="bg-white divide-y divide-gray-200">
-              {displayData.slice(0, 50).map((report, index) => (
-                <tr key={`${report.saleId}-${report.productId}-${index}`} className="hover:bg-gray-50">
-                  <td className="px-3 py-2 sm:px-4 sm:py-3 whitespace-nowrap text-xs sm:text-sm text-gray-900">
-                    {formatDate(report.date)}
-                  </td>
-                  <td className="px-3 py-2 sm:px-4 sm:py-3 whitespace-nowrap text-xs sm:text-sm text-gray-900">
-                    #{report.saleId}
-                  </td>
-                  <td className="px-3 py-2 sm:px-4 sm:py-3 whitespace-nowrap text-xs sm:text-sm text-gray-900 truncate max-w-[100px] sm:max-w-none">
-                    {report.customerName}
-                  </td>
-                  <td className="px-3 py-2 sm:px-4 sm:py-3 whitespace-nowrap text-xs sm:text-sm text-gray-900 truncate max-w-[80px] sm:max-w-none">
-                    {report.productName}
-                  </td>
-                  <td className="px-3 py-2 sm:px-4 sm:py-3 whitespace-nowrap text-xs sm:text-sm text-gray-900 text-center">
-                    {report.quantity}
-                  </td>
-                  <td className="px-3 py-2 sm:px-4 sm:py-3 whitespace-nowrap text-xs sm:text-sm text-gray-900">
-                    {formatCurrency(report.totalRevenue)}
-                  </td>
-                  <td className="px-3 py-2 sm:px-4 sm:py-3 whitespace-nowrap text-xs sm:text-sm text-gray-900">
-                    {formatCurrency(report.totalProductionCost)}
-                  </td>
-                  <td className={`px-3 py-2 sm:px-4 sm:py-3 whitespace-nowrap text-xs sm:text-sm font-medium ${
-                    report.grossProfit >= 0 ? 'text-green-600' : 'text-red-600'
-                  }`}>
-                    {formatCurrency(report.grossProfit)}
-                  </td>
-                  <td className={`px-3 py-2 sm:px-4 sm:py-3 whitespace-nowrap text-xs sm:text-sm font-medium ${
-                    report.profitMargin >= 0 ? 'text-green-600' : 'text-red-600'
-                  }`}>
-                    {report.profitMargin.toFixed(1)}%
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          
-          {displayData.length > 50 && (
-            <div className="bg-gray-50 px-4 py-3 border-t border-gray-200">
-              <p className="text-xs sm:text-sm text-gray-600 text-center">
-                Showing 50 of {displayData.length} items. Download CSV for complete data.
-              </p>
-            </div>
-          )}
-        </div>
-      ) : (
-        // Card View (Mobile Optimized)
-        <div className="space-y-3">
-          {displayData.slice(0, 20).map((report, index) => (
-            <div 
-              key={`${report.saleId}-${report.productId}-${index}`}
-              className="bg-white border border-gray-200 rounded-lg p-3 hover:shadow-md transition-shadow"
-            >
+      ) : viewMode === "grouped" ? (
+        // Grouped View - Products under each sale
+        <div className="space-y-4 print:space-y-2">
+          {displayData.map((sale) => (
+            <div key={sale.saleId} className="border border-gray-200 rounded-lg overflow-hidden print:border-2">
+              {/* Sale Header */}
               <div 
-                className="flex justify-between items-start cursor-pointer"
-                onClick={() => setExpandedCard(expandedCard === index ? null : index)}
+                className="bg-gray-50 p-3 sm:p-4 cursor-pointer hover:bg-gray-100 transition print:cursor-default"
+                onClick={() => setExpandedSale(expandedSale === sale.saleId ? null : sale.saleId)}
               >
-                <div>
-                  <div className="flex items-center gap-2 mb-1">
-                    <span className="text-xs font-medium text-gray-900">#{report.saleId}</span>
-                    <span className="text-xs text-gray-400">•</span>
-                    <span className="text-xs text-gray-600">{formatDate(report.date)}</span>
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div className="flex-1">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="font-bold text-gray-900">#{sale.saleId}</span>
+                      <span className="text-gray-400">•</span>
+                      <span className="text-sm text-gray-600">{formatDateTime(sale.date)}</span>
+                      {getStatusBadge(sale.status)}
+                    </div>
+                    <p className="font-medium text-gray-800 mt-1">{sale.customerName}</p>
+                    {sale.dueDate && sale.status !== "PAID" && (
+                      <p className="text-xs text-orange-600 mt-1">Due: {formatDate(sale.dueDate)}</p>
+                    )}
                   </div>
-                  <p className="text-sm font-semibold text-gray-900 truncate max-w-[200px]">
-                    {report.customerName}
-                  </p>
-                  <p className="text-xs text-gray-600 truncate max-w-[200px]">
-                    {report.productName}
-                  </p>
+                  
+                  <div className="grid grid-cols-3 gap-3 text-center sm:text-right">
+                    <div>
+                      <p className="text-xs text-gray-500">Total</p>
+                      <p className="text-sm font-semibold text-gray-900">{formatCurrency(sale.totalAmount)}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-gray-500">Paid</p>
+                      <p className="text-sm font-semibold text-green-600">{formatCurrency(sale.totalPaid)}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-gray-500">Balance</p>
+                      <p className={`text-sm font-semibold ${sale.balance > 0 ? 'text-red-600' : 'text-green-600'}`}>
+                        {formatCurrency(sale.balance)}
+                      </p>
+                    </div>
+                  </div>
+                  
+                  <button className="text-gray-400 print:hidden">
+                    {expandedSale === sale.saleId ? <ChevronUp className="w-5 h-5" /> : <ChevronDown className="w-5 h-5" />}
+                  </button>
                 </div>
-                <button className="text-gray-400">
-                  {expandedCard === index ? (
-                    <ChevronUp className="w-4 h-4" />
-                  ) : (
-                    <ChevronDown className="w-4 h-4" />
-                  )}
-                </button>
               </div>
               
-              {/* Collapsed View */}
-              {expandedCard !== index && (
-                <div className="mt-2 grid grid-cols-2 gap-2">
-                  <div className="text-center">
-                    <p className="text-xs text-gray-600">Revenue</p>
-                    <p className="text-sm font-semibold text-gray-900">
-                      {formatCurrency(report.totalRevenue)}
-                    </p>
-                  </div>
-                  <div className="text-center">
-                    <p className="text-xs text-gray-600">Profit</p>
-                    <p className={`text-sm font-semibold ${
-                      report.grossProfit >= 0 ? 'text-green-600' : 'text-red-600'
-                    }`}>
-                      {formatCurrency(report.grossProfit)}
-                    </p>
-                  </div>
-                </div>
-              )}
-              
-              {/* Expanded View */}
-              {expandedCard === index && (
-                <div className="mt-3 pt-3 border-t border-gray-100 space-y-2">
-                  <div className="grid grid-cols-2 gap-2">
-                    <div>
-                      <p className="text-xs text-gray-600">Product</p>
-                      <p className="text-sm font-medium text-gray-900">{report.productName}</p>
-                    </div>
-                    <div>
-                      <p className="text-xs text-gray-600">Quantity</p>
-                      <p className="text-sm font-medium text-gray-900 text-center">{report.quantity}</p>
-                    </div>
+              {/* Sale Items - Expandable */}
+              {(expandedSale === sale.saleId || viewMode === "grouped") && (
+                <div className="p-3 sm:p-4 border-t border-gray-200 bg-white">
+                  <h4 className="text-sm font-semibold text-gray-700 mb-3">Products Sold</h4>
+                  
+                  {/* Desktop Table View */}
+                  <div className="hidden sm:block overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead className="bg-gray-50">
+                        <tr>
+                          <th className="px-3 py-2 text-left">Product</th>
+                          <th className="px-3 py-2 text-center">Qty</th>
+                          <th className="px-3 py-2 text-right">Unit Price</th>
+                          <th className="px-3 py-2 text-right">Total</th>
+                          <th className="px-3 py-2 text-right">Cost</th>
+                          <th className="px-3 py-2 text-right">Profit</th>
+                          <th className="px-3 py-2 text-right">Margin</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-100">
+                        {sale.items.map((item, idx) => (
+                          <tr key={idx} className="hover:bg-gray-50">
+                            <td className="px-3 py-2 font-medium">{item.productName}</td>
+                            <td className="px-3 py-2 text-center">{item.quantity}</td>
+                            <td className="px-3 py-2 text-right">{formatCurrency(item.unitPrice)}</td>
+                            <td className="px-3 py-2 text-right">{formatCurrency(item.totalRevenue)}</td>
+                            <td className="px-3 py-2 text-right">{formatCurrency(item.totalProductionCost)}</td>
+                            <td className={`px-3 py-2 text-right font-medium ${item.grossProfit >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                              {formatCurrency(item.grossProfit)}
+                            </td>
+                            <td className={`px-3 py-2 text-right font-medium ${item.profitMargin >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                              {item.profitMargin.toFixed(1)}%
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                      <tfoot className="bg-gray-50 font-semibold">
+                        <tr>
+                          <td colSpan={3} className="px-3 py-2 text-right">Totals:</td>
+                          <td className="px-3 py-2 text-right">{formatCurrency(sale.totalAmount)}</td>
+                          <td className="px-3 py-2 text-right">{formatCurrency(sale.items.reduce((sum, i) => sum + i.totalProductionCost, 0))}</td>
+                          <td className="px-3 py-2 text-right text-green-600">{formatCurrency(sale.items.reduce((sum, i) => sum + i.grossProfit, 0))}</td>
+                          <td className="px-3 py-2 text-right"></td>
+                        </tr>
+                      </tfoot>
+                    </table>
                   </div>
                   
-                  <div className="grid grid-cols-2 gap-2">
-                    <div>
-                      <p className="text-xs text-gray-600">Revenue</p>
-                      <p className="text-sm font-medium text-gray-900">{formatCurrency(report.totalRevenue)}</p>
-                    </div>
-                    <div>
-                      <p className="text-xs text-gray-600">Prod. Cost</p>
-                      <p className="text-sm font-medium text-gray-900">{formatCurrency(report.totalProductionCost)}</p>
-                    </div>
+                  {/* Mobile Card View for Items */}
+                  <div className="sm:hidden space-y-2">
+                    {sale.items.map((item, idx) => (
+                      <div key={idx} className="bg-gray-50 rounded-lg p-3">
+                        <p className="font-medium text-gray-900">{item.productName}</p>
+                        <div className="grid grid-cols-2 gap-2 mt-2 text-sm">
+                          <div>
+                            <p className="text-xs text-gray-500">Quantity</p>
+                            <p className="font-medium">{item.quantity}</p>
+                          </div>
+                          <div>
+                            <p className="text-xs text-gray-500">Unit Price</p>
+                            <p className="font-medium">{formatCurrency(item.unitPrice)}</p>
+                          </div>
+                          <div>
+                            <p className="text-xs text-gray-500">Total</p>
+                            <p className="font-medium">{formatCurrency(item.totalRevenue)}</p>
+                          </div>
+                          <div>
+                            <p className="text-xs text-gray-500">Profit</p>
+                            <p className={`font-medium ${item.grossProfit >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                              {formatCurrency(item.grossProfit)}
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
                   </div>
                   
-                  <div className="grid grid-cols-2 gap-2">
-                    <div>
-                      <p className="text-xs text-gray-600">Gross Profit</p>
-                      <p className={`text-sm font-medium ${
-                        report.grossProfit >= 0 ? 'text-green-600' : 'text-red-600'
-                      }`}>
-                        {formatCurrency(report.grossProfit)}
-                      </p>
+                  {/* Payment Info */}
+                  {sale.payments.length > 0 && (
+                    <div className="mt-3 pt-3 border-t border-gray-200">
+                      <h4 className="text-sm font-semibold text-gray-700 mb-2 flex items-center gap-2">
+                        <CreditCard className="w-4 h-4" />
+                        Payment History
+                      </h4>
+                      <div className="space-y-1">
+                        {sale.payments.map((payment, idx) => (
+                          <div key={idx} className="flex justify-between text-sm">
+                            <span>{formatDateTime(payment.paidAt)}</span>
+                            <span>{payment.method}</span>
+                            <span className="font-medium text-green-600">{formatCurrency(payment.amount)}</span>
+                          </div>
+                        ))}
+                      </div>
                     </div>
-                    <div>
-                      <p className="text-xs text-gray-600">Margin</p>
-                      <p className={`text-sm font-medium ${
-                        report.profitMargin >= 0 ? 'text-green-600' : 'text-red-600'
-                      }`}>
-                        {report.profitMargin.toFixed(1)}%
-                      </p>
-                    </div>
-                  </div>
-                  
-                  <div>
-                    <p className="text-xs text-gray-600">Unit Price</p>
-                    <p className="text-sm font-medium text-gray-900">{formatCurrency(report.unitPrice)}</p>
-                  </div>
+                  )}
                 </div>
               )}
             </div>
           ))}
-          
-          {displayData.length > 20 && (
-            <div className="bg-gray-50 rounded-lg p-4 border border-gray-200 text-center">
-              <p className="text-xs sm:text-sm text-gray-600">
-                Showing 20 of {displayData.length} items. Download CSV for complete data.
-              </p>
+        </div>
+      ) : viewMode === "table" ? (
+        // Flat Table View
+        <div className="overflow-x-auto rounded-lg border border-gray-200">
+          <table className="min-w-full divide-y divide-gray-200">
+            <thead className="bg-gray-50">
+              <tr>
+                <th className="px-3 py-2 text-left text-xs font-medium text-gray-500">Date</th>
+                <th className="px-3 py-2 text-left text-xs font-medium text-gray-500">Sale ID</th>
+                <th className="px-3 py-2 text-left text-xs font-medium text-gray-500">Customer</th>
+                <th className="px-3 py-2 text-left text-xs font-medium text-gray-500">Product</th>
+                <th className="px-3 py-2 text-center text-xs font-medium text-gray-500">Qty</th>
+                <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">Revenue</th>
+                <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">Cost</th>
+                <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">Profit</th>
+                <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">Margin</th>
+              </tr>
+            </thead>
+            <tbody className="bg-white divide-y divide-gray-200">
+              {displayData.flatMap(sale => sale.items).slice(0, 100).map((item, index) => (
+                <tr key={index} className="hover:bg-gray-50">
+                  <td className="px-3 py-2 text-xs text-gray-900">{formatDate(item.date)}</td>
+                  <td className="px-3 py-2 text-xs text-gray-900">#{item.saleId}</td>
+                  <td className="px-3 py-2 text-xs text-gray-900 truncate max-w-[100px]">{item.customerName}</td>
+                  <td className="px-3 py-2 text-xs text-gray-900 truncate max-w-[100px]">{item.productName}</td>
+                  <td className="px-3 py-2 text-xs text-gray-900 text-center">{item.quantity}</td>
+                  <td className="px-3 py-2 text-xs text-right">{formatCurrency(item.totalRevenue)}</td>
+                  <td className="px-3 py-2 text-xs text-right">{formatCurrency(item.totalProductionCost)}</td>
+                  <td className={`px-3 py-2 text-xs text-right font-medium ${item.grossProfit >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                    {formatCurrency(item.grossProfit)}
+                  </td>
+                  <td className={`px-3 py-2 text-xs text-right font-medium ${item.profitMargin >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                    {item.profitMargin.toFixed(1)}%
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+           </table>
+          {displayData.flatMap(s => s.items).length > 100 && (
+            <div className="bg-gray-50 px-4 py-3 text-center text-sm text-gray-600">
+              Showing 100 of {displayData.flatMap(s => s.items).length} items. Download CSV for complete data.
             </div>
           )}
         </div>
-      )}
-
-      {/* Quick Analysis - Mobile Optimized */}
-      {displayData.length > 0 && (
-        <div className="mt-4 sm:mt-6 grid grid-cols-1 lg:grid-cols-2 gap-3 sm:gap-6">
-          <div className="bg-blue-50 rounded-lg p-3 sm:p-4">
-            <h4 className="text-xs sm:text-sm font-semibold text-gray-700 mb-2 sm:mb-3 flex items-center gap-2">
-              <BarChart className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
-              Profit Distribution
-            </h4>
-            <div className="space-y-1.5 sm:space-y-2">
-              <div>
-                <div className="flex justify-between text-xs sm:text-sm mb-1">
-                  <span className="text-gray-600">Revenue</span>
-                  <span className="font-medium">{formatCurrency(summary.totalRevenue)}</span>
+      ) : (
+        // Card View
+        <div className="space-y-3">
+          {displayData.slice(0, 20).map((sale) => (
+            <div key={sale.saleId} className="bg-white border border-gray-200 rounded-lg p-3">
+              <div className="flex justify-between items-start mb-2">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-bold">#{sale.saleId}</span>
+                    {getStatusBadge(sale.status)}
+                  </div>
+                  <p className="text-sm font-semibold mt-1">{sale.customerName}</p>
+                  <p className="text-xs text-gray-500">{formatDateTime(sale.date)}</p>
                 </div>
-                <div className="w-full bg-gray-200 rounded-full h-1.5 sm:h-2">
-                  <div 
-                    className="bg-blue-500 h-1.5 sm:h-2 rounded-full" 
-                    style={{ width: '100%' }}
-                  ></div>
+                <div className="text-right">
+                  <p className="text-xs text-gray-500">Total</p>
+                  <p className="text-sm font-bold">{formatCurrency(sale.totalAmount)}</p>
                 </div>
               </div>
               
-              <div>
-                <div className="flex justify-between text-xs sm:text-sm mb-1">
-                  <span className="text-gray-600">Production Cost</span>
-                  <span className="font-medium">{formatCurrency(summary.totalProductionCost)}</span>
+              <div className="grid grid-cols-2 gap-2 mt-2 pt-2 border-t border-gray-100">
+                <div>
+                  <p className="text-xs text-gray-500">Products</p>
+                  <p className="text-sm font-medium">{sale.items.length} items</p>
                 </div>
-                <div className="w-full bg-gray-200 rounded-full h-1.5 sm:h-2">
-                  <div 
-                    className="bg-orange-500 h-1.5 sm:h-2 rounded-full" 
-                    style={{ 
-                      width: `${summary.totalRevenue > 0 ? (summary.totalProductionCost / summary.totalRevenue * 100) : 0}%` 
-                    }}
-                  ></div>
+                <div>
+                  <p className="text-xs text-gray-500">Paid</p>
+                  <p className="text-sm font-medium text-green-600">{formatCurrency(sale.totalPaid)}</p>
                 </div>
-              </div>
-              
-              <div>
-                <div className="flex justify-between text-xs sm:text-sm mb-1">
-                  <span className="text-gray-600">Gross Profit</span>
-                  <span className="font-medium">{formatCurrency(summary.totalGrossProfit)}</span>
+                <div>
+                  <p className="text-xs text-gray-500">Balance</p>
+                  <p className={`text-sm font-medium ${sale.balance > 0 ? 'text-red-600' : 'text-green-600'}`}>
+                    {formatCurrency(sale.balance)}
+                  </p>
                 </div>
-                <div className="w-full bg-gray-200 rounded-full h-1.5 sm:h-2">
-                  <div 
-                    className="bg-green-500 h-1.5 sm:h-2 rounded-full" 
-                    style={{ 
-                      width: `${summary.totalRevenue > 0 ? (summary.totalGrossProfit / summary.totalRevenue * 100) : 0}%` 
-                    }}
-                  ></div>
+                <div>
+                  <p className="text-xs text-gray-500">Profit</p>
+                  <p className="text-sm font-medium text-green-600">
+                    {formatCurrency(sale.items.reduce((sum, i) => sum + i.grossProfit, 0))}
+                  </p>
                 </div>
               </div>
             </div>
-          </div>
-          
-          <div className="bg-green-50 rounded-lg p-3 sm:p-4">
-            <h4 className="text-xs sm:text-sm font-semibold text-gray-700 mb-2 sm:mb-3 flex items-center gap-2">
-              <DollarSign className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
-              Key Metrics
-            </h4>
-            <div className="space-y-2 sm:space-y-3">
-              <div className="flex justify-between">
-                <span className="text-xs sm:text-sm text-gray-600">Profitability</span>
-                <span className={`text-xs sm:text-sm font-medium ${summary.averageProfitMargin >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                  {summary.averageProfitMargin.toFixed(1)}%
-                </span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-xs sm:text-sm text-gray-600">Revenue/Sale</span>
-                <span className="text-xs sm:text-sm font-medium text-blue-600">
-                  {summary.totalSales > 0 ? formatCurrency(summary.totalRevenue / summary.totalSales) : formatCurrency(0)}
-                </span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-xs sm:text-sm text-gray-600">Profit/Sale</span>
-                <span className="text-xs sm:text-sm font-medium text-green-600">
-                  {summary.totalSales > 0 ? formatCurrency(summary.totalGrossProfit / summary.totalSales) : formatCurrency(0)}
-                </span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-xs sm:text-sm text-gray-600">Items/Sale</span>
-                <span className="text-xs sm:text-sm font-medium text-purple-600">
-                  {summary.totalSales > 0 ? (displayData.length / summary.totalSales).toFixed(1) : '0.0'}
-                </span>
-              </div>
-            </div>
-          </div>
+          ))}
         </div>
       )}
+
+      {/* Footer with generation info */}
+      <div className="mt-6 pt-4 border-t border-gray-200 text-center text-xs text-gray-400 print:block">
+        Generated on {formatDateTime(new Date().toISOString())}
+      </div>
     </div>
   );
 }

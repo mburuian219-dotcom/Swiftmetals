@@ -35,15 +35,31 @@ model customer {
 }
 
 model expense {
-  id        Int      @id @default(autoincrement())
-  title     String
-  amount    Float
-  category  String?
-  notes     String?
-  date      DateTime @default(now())
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  cashledger cashledger[]
+  id          Int      @id @default(autoincrement())
+  title       String
+  amount      Float
+  category    String?
+  notes       String?
+
+  date        DateTime @default(now())
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // =========================
+  // CREATED BY / UPDATED BY
+  // =========================
+
+  createdById Int?
+  updatedById Int?
+
+  createdBy   staff?   @relation("ExpenseCreatedBy", fields: [createdById], references: [id])
+  updatedBy   staff?   @relation("ExpenseUpdatedBy", fields: [updatedById], references: [id])
+
+  cashledger  cashledger[]
+
+  @@index([createdById])
+  @@index([updatedById])
 }
 
 model invoice {
@@ -324,6 +340,12 @@ model staff {
   phone            String?
   staffInventories staffInventory[]
   sales            sale[]            @relation("StaffSales")
+   // =========================
+  // EXPENSE TRACKING
+  // =========================
+
+  createdExpenses  expense[]         @relation("ExpenseCreatedBy")
+  updatedExpenses  expense[]         @relation("ExpenseUpdatedBy")
   createdAt        DateTime          @default(now())
   updatedAt        DateTime          @updatedAt
 }
