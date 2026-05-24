@@ -1,3 +1,4 @@
+// src/app/api/customer-receipt/[customerId]/route.ts
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { sendSMS } from "@/lib/sms";
@@ -49,7 +50,10 @@ export async function GET(
             payment: {
               orderBy: { paidAt: 'asc' }
             },
-            staff: {
+            assignedStaff: {
+              select: { name: true }
+            },
+            createdByStaff: {
               select: { name: true }
             }
           },
@@ -874,7 +878,7 @@ For inquiries, contact us at support@swiftmetals.com`;
           </tr>
           `).join('')}
         </tbody>
-      </table>
+      但也
       
       <!-- Payments - SAME AS RECEIPT -->
       ${sale.payment.length > 0 ? `
