@@ -22,7 +22,8 @@ interface Sale {
   customer?: any;
   saleitem?: any[];
   payment?: any[];
-  staff?: any;
+  createdByStaff?: any;  // Changed from staff to createdByStaff
+  assignedStaff?: any;   // Added this relation
 }
 
 // Define the return type for inventory operations
@@ -475,6 +476,7 @@ export async function GET(req: NextRequest, { params }: Params) {
     }
 
     // 1. Sales where createdById = staff.id (direct relation)
+    // FIXED: Changed 'staff' to 'createdByStaff' and added 'assignedStaff'
     const directSales = await prisma.sale.findMany({
       where: { createdById: staffId },
       include: {
@@ -491,7 +493,8 @@ export async function GET(req: NextRequest, { params }: Params) {
         },
         customer: true,
         payment: true,
-        staff: true
+        createdByStaff: true,      // FIXED: Changed from 'staff' to 'createdByStaff'
+        assignedStaff: true,        // Added assignedStaff relation
       },
       orderBy: { createdAt: 'desc' }
     });
@@ -520,7 +523,8 @@ export async function GET(req: NextRequest, { params }: Params) {
             },
             customer: true,
             payment: true,
-            staff: true
+            createdByStaff: true,      // FIXED: Changed from 'staff' to 'createdByStaff'
+            assignedStaff: true,        // Added assignedStaff relation
           },
           orderBy: { createdAt: 'desc' }
         });
@@ -564,7 +568,8 @@ export async function GET(req: NextRequest, { params }: Params) {
             },
             customer: true,
             payment: true,
-            staff: true
+            createdByStaff: true,      // FIXED: Changed from 'staff' to 'createdByStaff'
+            assignedStaff: true,        // Added assignedStaff relation
           },
           orderBy: { createdAt: 'desc' }
         });
@@ -736,7 +741,8 @@ export async function GET(req: NextRequest, { params }: Params) {
         createdById: s.createdById,
         amount: s.amount,
         date: s.date,
-        hasStaffObject: !!s.staff,
+        hasCreatedByStaff: !!s.createdByStaff,
+        hasAssignedStaff: !!s.assignedStaff,
         itemCount: s.saleitem?.length || 0
       }))
     });

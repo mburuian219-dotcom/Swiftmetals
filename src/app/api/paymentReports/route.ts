@@ -102,18 +102,115 @@ const ensureDate = (date: string | null): Date => {
   return isNaN(d.getTime()) ? new Date() : d;
 };
 
+// Helper to calculate actual sale status based on payments
+const calculateActualSaleStatus = (sale: any): string => {
+  let totalPaid = 0;
+  for (const p of sale.payment || []) {
+    if (p.status === 'CLEARED' || p.status === 'COMPLETED') {
+      totalPaid += p.amount;
+    }
+  }
+  
+  if (totalPaid >= sale.amount) {
+    return 'PAID';
+  } else if (totalPaid > 0) {
+    return 'PARTIAL';
+  } else {
+    return 'UNPAID';
+  }
+};
+
 // Helper to get products string from sale
 const getProductsString = (sale: any): string => {
   if (!sale.saleitem || sale.saleitem.length === 0) {
-    return 'No products';
+    return 'Debt record (no products)';
   }
   
-  return sale.saleitem.map((item: any) => {
+  const productStrings: string[] = [];
+  for (const item of sale.saleitem) {
     const productName = item.product?.name || `Product ID: ${item.productId}`;
     const quantity = item.quantity || 0;
     const price = item.price || 0;
-    return `${productName} (${quantity} x KSh ${formatCurrency(price)})`;
-  }).join('; ');
+    productStrings.push(`${productName} (${quantity} x KSh ${formatCurrency(price)})`);
+  }
+  
+  return productStrings.join('; ');
+};
+
+// Helper to get payment method string (handles unpaid sales)
+const getPaymentMethodString = (sale: any): string => {
+  if (!sale.payment || sale.payment.length === 0) {
+    return '-';
+  }
+  
+  const methods: string[] = [];
+  for (const p of sale.payment) {
+    if (p.status === 'CLEARED' || p.status === 'COMPLETED') {
+      if (!methods.includes(p.method)) {
+        methods.push(p.method);
+      }
+    }
+  }
+  
+  if (methods.length === 0) {
+    return '-';
+  }
+  
+  if (methods.length > 1) {
+    return methods.join('/');
+  }
+  
+  return methods[0];
+};
+
+// Helper to get total paid amount
+const getTotalPaid = (sale: any): number => {
+  let total = 0;
+  for (const p of sale.payment || []) {
+    if (p.status === 'CLEARED' || p.status === 'COMPLETED') {
+      total += p.amount;
+    }
+  }
+  return total;
+};
+
+// Helper to get payment methods summary
+const getPaymentMethodsSummary = (sale: any): string => {
+  if (!sale.payment || sale.payment.length === 0) {
+    return 'No payment';
+  }
+  
+  const summaries: string[] = [];
+  for (const p of sale.payment) {
+    if (p.status === 'CLEARED' || p.status === 'COMPLETED') {
+      summaries.push(`${p.method}: KSh ${formatCurrency(p.amount)}`);
+    }
+  }
+  return summaries.length > 0 ? summaries.join('; ') : 'No cleared payments';
+};
+
+// Helper to get assigned staff name
+const getAssignedStaffName = (sale: any): string => {
+  if (!sale.assignedStaff) {
+    return '-';
+  }
+  return sale.assignedStaff.name || '-';
+};
+
+// Helper to get assigned staff phone
+const getAssignedStaffPhone = (sale: any): string => {
+  if (!sale.assignedStaff) {
+    return '-';
+  }
+  return sale.assignedStaff.phone || '-';
+};
+
+// Helper to get assigned staff email
+const getAssignedStaffEmail = (sale: any): string => {
+  if (!sale.assignedStaff) {
+    return '-';
+  }
+  return sale.assignedStaff.email || '-';
 };
 
 // ==================== GET ENDPOINTS ====================
@@ -164,88 +261,126 @@ async function generateDailyPaymentReport(dateParam: string | null) {
   const startDateObj = startOfDay(targetDate);
   const endDateObj = endOfDay(targetDate);
 
-  // Get all payments made on this day
-  const payments = await prisma.payment.findMany({
+  const sales = await prisma.sale.findMany({
     where: {
-      paidAt: { gte: startDateObj, lte: endDateObj },
-      status: { in: ['CLEARED', 'COMPLETED'] }
+      date: { gte: startDateObj, lte: endDateObj },
+      isDeleted: false
     },
     include: {
-      sale: { 
-        include: { 
-          customer: true,
-          payment: true,
-          saleitem: {
-            include: {
-              product: true
-            }
-          }
-        } 
-      }
+      customer: true,
+      payment: {
+        where: {
+          status: { in: ['CLEARED', 'COMPLETED'] }
+        }
+      },
+      saleitem: {
+        include: {
+          product: true
+        }
+      },
+      assignedStaff: true  // Include assigned staff
     },
-    orderBy: { paidAt: 'asc' }
+    orderBy: { date: 'asc' }
   });
 
-  console.log(`Found ${payments.length} payments for date ${formatDate(targetDate)}`);
-
-  const transactionData = payments.map(payment => {
-    const totalPaidOverall = payment.sale.payment?.reduce((sum: number, p: any) => sum + p.amount, 0) || 0;
-    const previousBalance = payment.sale.amount - (totalPaidOverall - payment.amount);
-    const remainingBalance = payment.sale.amount - totalPaidOverall;
+  const transactionData = [];
+  for (const sale of sales) {
+    const totalPaid = getTotalPaid(sale);
+    const actualStatus = calculateActualSaleStatus(sale);
+    const remainingBalance = sale.amount - totalPaid;
+    const productsString = getProductsString(sale);
+    const paymentMethod = getPaymentMethodString(sale);
     
-    // Get products string using helper
-    const productsString = getProductsString(payment.sale);
-    
-    console.log(`Sale ${payment.saleId} has ${payment.sale.saleitem?.length || 0} items`);
-    
-    return {
-      'Date': formatDate(payment.paidAt),
-      'Time': formatTime(payment.paidAt),
-      'Sale ID': payment.saleId,
-      'Customer Name': payment.sale.customer?.name || 'Unknown',
-      'Customer Phone': payment.sale.customer?.phone || '',
+    transactionData.push({
+      'Date': formatDate(sale.date),
+      'Time': formatTime(sale.date),
+      'Sale ID': sale.id,
+      'Customer Name': sale.customer?.name || 'Unknown',
+      'Customer Phone': sale.customer?.phone || '',
+      'Assigned Staff': getAssignedStaffName(sale),
+      'Staff Phone': getAssignedStaffPhone(sale),
+      'Staff Email': getAssignedStaffEmail(sale),
       'Products Taken': productsString,
-      'Total Sale Amount': formatCurrency(payment.sale.amount),
-      'Previous Balance': formatCurrency(previousBalance),
-      'Amount Paid Today': formatCurrency(payment.amount),
+      'Total Sale Amount': formatCurrency(sale.amount),
+      'Total Paid': formatCurrency(totalPaid),
       'Remaining Balance': formatCurrency(remainingBalance),
-      'Payment Status': payment.sale.status,
-      'Payment Method': payment.method,
-      'Created By': payment.sale.createdBy || 'N/A',
-      'Updated By': payment.sale.updatedBy || 'N/A',
-      'Last Updated': payment.sale.updatedAt ? formatDateTime(payment.sale.updatedAt) : formatDateTime(payment.sale.date)
-    };
-  });
+      'Payment Status': actualStatus,
+      'Payment Method': paymentMethod,
+      'Created By': sale.createdBy || 'N/A',
+      'Updated By': sale.updatedBy || 'N/A',
+      'Last Updated': sale.updatedAt ? formatDateTime(sale.updatedAt) : formatDateTime(sale.date)
+    });
+  }
 
-  const totalPayments = payments.reduce((sum, p) => sum + p.amount, 0);
-  const uniqueCustomers = new Set(payments.map(p => p.sale.customer?.id)).size;
-  const uniqueSales = new Set(payments.map(p => p.saleId)).size;
+  let totalSales = 0;
+  let totalPayments = 0;
+  const uniqueCustomersSet = new Set<number>();
+  let unpaidSales = 0;
+  let partialSales = 0;
+  let paidSales = 0;
+
+  for (const sale of sales) {
+    totalSales += sale.amount;
+    const totalPaid = getTotalPaid(sale);
+    totalPayments += totalPaid;
+    const actualStatus = calculateActualSaleStatus(sale);
+    
+    if (sale.customer?.id) uniqueCustomersSet.add(sale.customer.id);
+    if (actualStatus === 'UNPAID') unpaidSales++;
+    else if (actualStatus === 'PARTIAL') partialSales++;
+    else if (actualStatus === 'PAID') paidSales++;
+  }
+  
+  const uniqueCustomers = uniqueCustomersSet.size;
 
   const summaryRows = [
     {
       'Date': '--- SUMMARY ---', 'Time': '', 'Sale ID': '', 'Customer Name': '', 'Customer Phone': '',
-      'Products Taken': '', 'Total Sale Amount': '', 'Previous Balance': '', 'Amount Paid Today': '',
-      'Remaining Balance': '', 'Payment Status': '', 'Payment Method': '', 'Created By': '', 'Updated By': '', 'Last Updated': ''
+      'Assigned Staff': '', 'Staff Phone': '', 'Staff Email': '',
+      'Products Taken': '', 'Total Sale Amount': '', 'Total Paid': '', 'Remaining Balance': '',
+      'Payment Status': '', 'Payment Method': '', 'Created By': '', 'Updated By': '', 'Last Updated': ''
+    },
+    {
+      'Date': 'TOTAL SALES VALUE', 'Time': '', 'Sale ID': '', 'Customer Name': '', 'Customer Phone': '',
+      'Assigned Staff': '', 'Staff Phone': '', 'Staff Email': '',
+      'Products Taken': '', 'Total Sale Amount': formatCurrency(totalSales), 'Total Paid': '', 'Remaining Balance': '',
+      'Payment Status': '', 'Payment Method': '', 'Created By': '', 'Updated By': '', 'Last Updated': ''
     },
     {
       'Date': 'TOTAL PAYMENTS RECEIVED', 'Time': '', 'Sale ID': '', 'Customer Name': '', 'Customer Phone': '',
-      'Products Taken': '', 'Total Sale Amount': formatCurrency(totalPayments), 'Previous Balance': '', 'Amount Paid Today': '',
-      'Remaining Balance': '', 'Payment Status': '', 'Payment Method': '', 'Created By': '', 'Updated By': '', 'Last Updated': ''
+      'Assigned Staff': '', 'Staff Phone': '', 'Staff Email': '',
+      'Products Taken': '', 'Total Sale Amount': '', 'Total Paid': formatCurrency(totalPayments), 'Remaining Balance': '',
+      'Payment Status': '', 'Payment Method': '', 'Created By': '', 'Updated By': '', 'Last Updated': ''
     },
     {
-      'Date': 'NUMBER OF PAYMENTS', 'Time': '', 'Sale ID': '', 'Customer Name': '', 'Customer Phone': '',
-      'Products Taken': '', 'Total Sale Amount': payments.length.toString(), 'Previous Balance': '', 'Amount Paid Today': '',
-      'Remaining Balance': '', 'Payment Status': '', 'Payment Method': '', 'Created By': '', 'Updated By': '', 'Last Updated': ''
+      'Date': 'UNPAID SALES', 'Time': '', 'Sale ID': '', 'Customer Name': '', 'Customer Phone': '',
+      'Assigned Staff': '', 'Staff Phone': '', 'Staff Email': '',
+      'Products Taken': '', 'Total Sale Amount': '', 'Total Paid': '', 'Remaining Balance': unpaidSales.toString(),
+      'Payment Status': '', 'Payment Method': '', 'Created By': '', 'Updated By': '', 'Last Updated': ''
+    },
+    {
+      'Date': 'PARTIAL SALES', 'Time': '', 'Sale ID': '', 'Customer Name': '', 'Customer Phone': '',
+      'Assigned Staff': '', 'Staff Phone': '', 'Staff Email': '',
+      'Products Taken': '', 'Total Sale Amount': '', 'Total Paid': '', 'Remaining Balance': partialSales.toString(),
+      'Payment Status': '', 'Payment Method': '', 'Created By': '', 'Updated By': '', 'Last Updated': ''
+    },
+    {
+      'Date': 'PAID SALES', 'Time': '', 'Sale ID': '', 'Customer Name': '', 'Customer Phone': '',
+      'Assigned Staff': '', 'Staff Phone': '', 'Staff Email': '',
+      'Products Taken': '', 'Total Sale Amount': '', 'Total Paid': '', 'Remaining Balance': paidSales.toString(),
+      'Payment Status': '', 'Payment Method': '', 'Created By': '', 'Updated By': '', 'Last Updated': ''
     },
     {
       'Date': 'UNIQUE CUSTOMERS', 'Time': '', 'Sale ID': '', 'Customer Name': '', 'Customer Phone': '',
-      'Products Taken': '', 'Total Sale Amount': uniqueCustomers.toString(), 'Previous Balance': '', 'Amount Paid Today': '',
-      'Remaining Balance': '', 'Payment Status': '', 'Payment Method': '', 'Created By': '', 'Updated By': '', 'Last Updated': ''
+      'Assigned Staff': '', 'Staff Phone': '', 'Staff Email': '',
+      'Products Taken': '', 'Total Sale Amount': '', 'Total Paid': '', 'Remaining Balance': uniqueCustomers.toString(),
+      'Payment Status': '', 'Payment Method': '', 'Created By': '', 'Updated By': '', 'Last Updated': ''
     },
     {
-      'Date': 'SALES UPDATED', 'Time': '', 'Sale ID': '', 'Customer Name': '', 'Customer Phone': '',
-      'Products Taken': '', 'Total Sale Amount': uniqueSales.toString(), 'Previous Balance': '', 'Amount Paid Today': '',
-      'Remaining Balance': '', 'Payment Status': '', 'Payment Method': '', 'Created By': '', 'Updated By': '', 'Last Updated': ''
+      'Date': 'TOTAL SALES COUNT', 'Time': '', 'Sale ID': '', 'Customer Name': '', 'Customer Phone': '',
+      'Assigned Staff': '', 'Staff Phone': '', 'Staff Email': '',
+      'Products Taken': '', 'Total Sale Amount': sales.length.toString(), 'Total Paid': '', 'Remaining Balance': '',
+      'Payment Status': '', 'Payment Method': '', 'Created By': '', 'Updated By': '', 'Last Updated': ''
     }
   ];
 
@@ -267,92 +402,121 @@ async function generateWeeklyPaymentReport(startDateParam: string | null, endDat
   const startDateObj = startDateParam ? startOfDay(ensureDate(startDateParam)) : startOfWeek(new Date());
   const endDateObj = endDateParam ? endOfDay(ensureDate(endDateParam)) : endOfWeek(new Date());
 
-  const payments = await prisma.payment.findMany({
+  const sales = await prisma.sale.findMany({
     where: {
-      paidAt: { gte: startDateObj, lte: endDateObj },
-      status: { in: ['CLEARED', 'COMPLETED'] }
+      date: { gte: startDateObj, lte: endDateObj },
+      isDeleted: false
     },
     include: {
-      sale: { 
-        include: { 
-          customer: true,
-          payment: true,
-          saleitem: {
-            include: {
-              product: true
-            }
-          }
-        } 
-      }
+      customer: true,
+      payment: {
+        where: {
+          status: { in: ['CLEARED', 'COMPLETED'] }
+        }
+      },
+      saleitem: {
+        include: {
+          product: true
+        }
+      },
+      assignedStaff: true  // Include assigned staff
     },
-    orderBy: { paidAt: 'asc' }
+    orderBy: { date: 'asc' }
   });
 
-  console.log(`Found ${payments.length} payments for week ${formatDate(startDateObj)} to ${formatDate(endDateObj)}`);
-
-  const paymentTransactions = payments.map(payment => {
-    const totalPaidOverall = payment.sale.payment?.reduce((sum: number, p: any) => sum + p.amount, 0) || 0;
-    const previousBalance = payment.sale.amount - (totalPaidOverall - payment.amount);
-    const remainingBalance = payment.sale.amount - totalPaidOverall;
-    const productsString = getProductsString(payment.sale);
+  const salesData = [];
+  for (const sale of sales) {
+    const totalPaid = getTotalPaid(sale);
+    const actualStatus = calculateActualSaleStatus(sale);
+    const remainingBalance = sale.amount - totalPaid;
+    const productsString = getProductsString(sale);
+    const paymentMethod = getPaymentMethodString(sale);
     
-    return {
-      'Date': formatDate(payment.paidAt),
-      'Time': formatTime(payment.paidAt),
-      'Sale ID': payment.saleId,
-      'Customer Name': payment.sale.customer?.name || 'Unknown',
-      'Customer Phone': payment.sale.customer?.phone || '',
+    salesData.push({
+      'Date': formatDate(sale.date),
+      'Time': formatTime(sale.date),
+      'Sale ID': sale.id,
+      'Customer Name': sale.customer?.name || 'Unknown',
+      'Customer Phone': sale.customer?.phone || '',
+      'Assigned Staff': getAssignedStaffName(sale),
+      'Staff Phone': getAssignedStaffPhone(sale),
+      'Staff Email': getAssignedStaffEmail(sale),
       'Products Taken': productsString,
-      'Total Sale Amount': formatCurrency(payment.sale.amount),
-      'Previous Balance Before Payment': formatCurrency(previousBalance),
-      'Amount Paid': formatCurrency(payment.amount),
+      'Total Sale Amount': formatCurrency(sale.amount),
+      'Total Paid': formatCurrency(totalPaid),
       'Remaining Balance': formatCurrency(remainingBalance),
-      'Payment Status': payment.sale.status,
-      'Payment Method': payment.method,
-      'Created By': payment.sale.createdBy || 'N/A',
-      'Updated By': payment.sale.updatedBy || 'N/A',
-      'Last Updated': payment.sale.updatedAt ? formatDateTime(payment.sale.updatedAt) : formatDateTime(payment.sale.date)
-    };
-  });
+      'Payment Status': actualStatus,
+      'Payment Method': paymentMethod,
+      'Payments Summary': getPaymentMethodsSummary(sale),
+      'Created By': sale.createdBy || 'N/A',
+      'Updated By': sale.updatedBy || 'N/A',
+      'Last Updated': sale.updatedAt ? formatDateTime(sale.updatedAt) : formatDateTime(sale.date)
+    });
+  }
 
-  const totalPayments = payments.reduce((sum, p) => sum + p.amount, 0);
-  const uniqueCustomers = new Set(payments.map(p => p.sale.customer?.id)).size;
-  const uniqueSales = new Set(payments.map(p => p.saleId)).size;
+  let totalSales = 0;
+  let totalPayments = 0;
+  const uniqueCustomersSet = new Set<number>();
+  let unpaidSales = 0;
+
+  for (const sale of sales) {
+    totalSales += sale.amount;
+    const totalPaid = getTotalPaid(sale);
+    totalPayments += totalPaid;
+    const actualStatus = calculateActualSaleStatus(sale);
+    
+    if (sale.customer?.id) uniqueCustomersSet.add(sale.customer.id);
+    if (actualStatus === 'UNPAID') unpaidSales++;
+  }
+  
+  const uniqueCustomers = uniqueCustomersSet.size;
 
   const summaryRows = [
     {
       'Date': '--- WEEKLY SUMMARY ---', 'Time': '', 'Sale ID': '', 'Customer Name': '', 'Customer Phone': '',
-      'Products Taken': '', 'Total Sale Amount': '', 'Previous Balance Before Payment': '', 'Amount Paid': '',
-      'Remaining Balance': '', 'Payment Status': '', 'Payment Method': '', 'Created By': '', 'Updated By': '', 'Last Updated': ''
+      'Assigned Staff': '', 'Staff Phone': '', 'Staff Email': '',
+      'Products Taken': '', 'Total Sale Amount': '', 'Total Paid': '', 'Remaining Balance': '',
+      'Payment Status': '', 'Payment Method': '', 'Payments Summary': '', 'Created By': '', 'Updated By': '', 'Last Updated': ''
     },
     {
       'Date': `Week: ${formatDate(startDateObj)} to ${formatDate(endDateObj)}`, 'Time': '', 'Sale ID': '', 'Customer Name': '', 'Customer Phone': '',
-      'Products Taken': '', 'Total Sale Amount': '', 'Previous Balance Before Payment': '', 'Amount Paid': '',
-      'Remaining Balance': '', 'Payment Status': '', 'Payment Method': '', 'Created By': '', 'Updated By': '', 'Last Updated': ''
+      'Assigned Staff': '', 'Staff Phone': '', 'Staff Email': '',
+      'Products Taken': '', 'Total Sale Amount': '', 'Total Paid': '', 'Remaining Balance': '',
+      'Payment Status': '', 'Payment Method': '', 'Payments Summary': '', 'Created By': '', 'Updated By': '', 'Last Updated': ''
+    },
+    {
+      'Date': 'TOTAL SALES VALUE', 'Time': '', 'Sale ID': '', 'Customer Name': '', 'Customer Phone': '',
+      'Assigned Staff': '', 'Staff Phone': '', 'Staff Email': '',
+      'Products Taken': '', 'Total Sale Amount': formatCurrency(totalSales), 'Total Paid': '', 'Remaining Balance': '',
+      'Payment Status': '', 'Payment Method': '', 'Payments Summary': '', 'Created By': '', 'Updated By': '', 'Last Updated': ''
     },
     {
       'Date': 'TOTAL PAYMENTS', 'Time': '', 'Sale ID': '', 'Customer Name': '', 'Customer Phone': '',
-      'Products Taken': '', 'Total Sale Amount': formatCurrency(totalPayments), 'Previous Balance Before Payment': '', 'Amount Paid': '',
-      'Remaining Balance': '', 'Payment Status': '', 'Payment Method': '', 'Created By': '', 'Updated By': '', 'Last Updated': ''
+      'Assigned Staff': '', 'Staff Phone': '', 'Staff Email': '',
+      'Products Taken': '', 'Total Sale Amount': '', 'Total Paid': formatCurrency(totalPayments), 'Remaining Balance': '',
+      'Payment Status': '', 'Payment Method': '', 'Payments Summary': '', 'Created By': '', 'Updated By': '', 'Last Updated': ''
     },
     {
-      'Date': 'NUMBER OF PAYMENTS', 'Time': '', 'Sale ID': '', 'Customer Name': '', 'Customer Phone': '',
-      'Products Taken': '', 'Total Sale Amount': payments.length.toString(), 'Previous Balance Before Payment': '', 'Amount Paid': '',
-      'Remaining Balance': '', 'Payment Status': '', 'Payment Method': '', 'Created By': '', 'Updated By': '', 'Last Updated': ''
+      'Date': 'UNPAID SALES', 'Time': '', 'Sale ID': '', 'Customer Name': '', 'Customer Phone': '',
+      'Assigned Staff': '', 'Staff Phone': '', 'Staff Email': '',
+      'Products Taken': '', 'Total Sale Amount': '', 'Total Paid': '', 'Remaining Balance': unpaidSales.toString(),
+      'Payment Status': '', 'Payment Method': '', 'Payments Summary': '', 'Created By': '', 'Updated By': '', 'Last Updated': ''
     },
     {
       'Date': 'UNIQUE CUSTOMERS', 'Time': '', 'Sale ID': '', 'Customer Name': '', 'Customer Phone': '',
-      'Products Taken': '', 'Total Sale Amount': uniqueCustomers.toString(), 'Previous Balance Before Payment': '', 'Amount Paid': '',
-      'Remaining Balance': '', 'Payment Status': '', 'Payment Method': '', 'Created By': '', 'Updated By': '', 'Last Updated': ''
+      'Assigned Staff': '', 'Staff Phone': '', 'Staff Email': '',
+      'Products Taken': '', 'Total Sale Amount': '', 'Total Paid': '', 'Remaining Balance': uniqueCustomers.toString(),
+      'Payment Status': '', 'Payment Method': '', 'Payments Summary': '', 'Created By': '', 'Updated By': '', 'Last Updated': ''
     },
     {
-      'Date': 'SALES UPDATED', 'Time': '', 'Sale ID': '', 'Customer Name': '', 'Customer Phone': '',
-      'Products Taken': '', 'Total Sale Amount': uniqueSales.toString(), 'Previous Balance Before Payment': '', 'Amount Paid': '',
-      'Remaining Balance': '', 'Payment Status': '', 'Payment Method': '', 'Created By': '', 'Updated By': '', 'Last Updated': ''
+      'Date': 'TOTAL SALES COUNT', 'Time': '', 'Sale ID': '', 'Customer Name': '', 'Customer Phone': '',
+      'Assigned Staff': '', 'Staff Phone': '', 'Staff Email': '',
+      'Products Taken': '', 'Total Sale Amount': sales.length.toString(), 'Total Paid': '', 'Remaining Balance': '',
+      'Payment Status': '', 'Payment Method': '', 'Payments Summary': '', 'Created By': '', 'Updated By': '', 'Last Updated': ''
     }
   ];
 
-  const finalData = [...paymentTransactions, ...summaryRows];
+  const finalData = [...salesData, ...summaryRows];
   const csv = arrayToCSV(finalData);
   
   return new NextResponse(csv, {
@@ -370,90 +534,120 @@ async function generateMonthlyPaymentReport(startDateParam: string | null, endDa
   const startDateObj = startDateParam ? startOfDay(ensureDate(startDateParam)) : startOfMonth(new Date());
   const endDateObj = endDateParam ? endOfDay(ensureDate(endDateParam)) : endOfMonth(new Date());
 
-  const payments = await prisma.payment.findMany({
+  const sales = await prisma.sale.findMany({
     where: {
-      paidAt: { gte: startDateObj, lte: endDateObj },
-      status: { in: ['CLEARED', 'COMPLETED'] }
+      date: { gte: startDateObj, lte: endDateObj },
+      isDeleted: false
     },
     include: {
-      sale: { 
-        include: { 
-          customer: true,
-          payment: true,
-          saleitem: {
-            include: {
-              product: true
-            }
-          }
-        } 
-      }
+      customer: true,
+      payment: {
+        where: {
+          status: { in: ['CLEARED', 'COMPLETED'] }
+        }
+      },
+      saleitem: {
+        include: {
+          product: true
+        }
+      },
+      assignedStaff: true  // Include assigned staff
     },
-    orderBy: { paidAt: 'asc' }
+    orderBy: { date: 'asc' }
   });
 
-  const paymentTransactions = payments.map(payment => {
-    const totalPaidOverall = payment.sale.payment?.reduce((sum: number, p: any) => sum + p.amount, 0) || 0;
-    const previousBalance = payment.sale.amount - (totalPaidOverall - payment.amount);
-    const remainingBalance = payment.sale.amount - totalPaidOverall;
-    const productsString = getProductsString(payment.sale);
+  const salesData = [];
+  for (const sale of sales) {
+    const totalPaid = getTotalPaid(sale);
+    const actualStatus = calculateActualSaleStatus(sale);
+    const remainingBalance = sale.amount - totalPaid;
+    const productsString = getProductsString(sale);
+    const paymentMethod = getPaymentMethodString(sale);
     
-    return {
-      'Date': formatDate(payment.paidAt),
-      'Time': formatTime(payment.paidAt),
-      'Sale ID': payment.saleId,
-      'Customer Name': payment.sale.customer?.name || 'Unknown',
-      'Customer Phone': payment.sale.customer?.phone || '',
+    salesData.push({
+      'Date': formatDate(sale.date),
+      'Time': formatTime(sale.date),
+      'Sale ID': sale.id,
+      'Customer Name': sale.customer?.name || 'Unknown',
+      'Customer Phone': sale.customer?.phone || '',
+      'Assigned Staff': getAssignedStaffName(sale),
+      'Staff Phone': getAssignedStaffPhone(sale),
+      'Staff Email': getAssignedStaffEmail(sale),
       'Products Taken': productsString,
-      'Total Sale Amount': formatCurrency(payment.sale.amount),
-      'Previous Balance Before Payment': formatCurrency(previousBalance),
-      'Amount Paid': formatCurrency(payment.amount),
+      'Total Sale Amount': formatCurrency(sale.amount),
+      'Total Paid': formatCurrency(totalPaid),
       'Remaining Balance': formatCurrency(remainingBalance),
-      'Payment Status': payment.sale.status,
-      'Payment Method': payment.method,
-      'Created By': payment.sale.createdBy || 'N/A',
-      'Updated By': payment.sale.updatedBy || 'N/A',
-      'Last Updated': payment.sale.updatedAt ? formatDateTime(payment.sale.updatedAt) : formatDateTime(payment.sale.date)
-    };
-  });
+      'Payment Status': actualStatus,
+      'Payment Method': paymentMethod,
+      'Created By': sale.createdBy || 'N/A',
+      'Updated By': sale.updatedBy || 'N/A',
+      'Last Updated': sale.updatedAt ? formatDateTime(sale.updatedAt) : formatDateTime(sale.date)
+    });
+  }
 
-  const totalPayments = payments.reduce((sum, p) => sum + p.amount, 0);
-  const uniqueCustomers = new Set(payments.map(p => p.sale.customer?.id)).size;
-  const uniqueSales = new Set(payments.map(p => p.saleId)).size;
+  let totalSales = 0;
+  let totalPayments = 0;
+  const uniqueCustomersSet = new Set<number>();
+  let unpaidSales = 0;
+
+  for (const sale of sales) {
+    totalSales += sale.amount;
+    const totalPaid = getTotalPaid(sale);
+    totalPayments += totalPaid;
+    const actualStatus = calculateActualSaleStatus(sale);
+    
+    if (sale.customer?.id) uniqueCustomersSet.add(sale.customer.id);
+    if (actualStatus === 'UNPAID') unpaidSales++;
+  }
+  
+  const uniqueCustomers = uniqueCustomersSet.size;
 
   const summaryRows = [
     {
       'Date': '--- MONTHLY SUMMARY ---', 'Time': '', 'Sale ID': '', 'Customer Name': '', 'Customer Phone': '',
-      'Products Taken': '', 'Total Sale Amount': '', 'Previous Balance Before Payment': '', 'Amount Paid': '',
-      'Remaining Balance': '', 'Payment Status': '', 'Payment Method': '', 'Created By': '', 'Updated By': '', 'Last Updated': ''
+      'Assigned Staff': '', 'Staff Phone': '', 'Staff Email': '',
+      'Products Taken': '', 'Total Sale Amount': '', 'Total Paid': '', 'Remaining Balance': '',
+      'Payment Status': '', 'Payment Method': '', 'Created By': '', 'Updated By': '', 'Last Updated': ''
     },
     {
       'Date': `Month: ${formatDate(startDateObj)} to ${formatDate(endDateObj)}`, 'Time': '', 'Sale ID': '', 'Customer Name': '', 'Customer Phone': '',
-      'Products Taken': '', 'Total Sale Amount': '', 'Previous Balance Before Payment': '', 'Amount Paid': '',
-      'Remaining Balance': '', 'Payment Status': '', 'Payment Method': '', 'Created By': '', 'Updated By': '', 'Last Updated': ''
+      'Assigned Staff': '', 'Staff Phone': '', 'Staff Email': '',
+      'Products Taken': '', 'Total Sale Amount': '', 'Total Paid': '', 'Remaining Balance': '',
+      'Payment Status': '', 'Payment Method': '', 'Created By': '', 'Updated By': '', 'Last Updated': ''
+    },
+    {
+      'Date': 'TOTAL SALES VALUE', 'Time': '', 'Sale ID': '', 'Customer Name': '', 'Customer Phone': '',
+      'Assigned Staff': '', 'Staff Phone': '', 'Staff Email': '',
+      'Products Taken': '', 'Total Sale Amount': formatCurrency(totalSales), 'Total Paid': '', 'Remaining Balance': '',
+      'Payment Status': '', 'Payment Method': '', 'Created By': '', 'Updated By': '', 'Last Updated': ''
     },
     {
       'Date': 'TOTAL PAYMENTS', 'Time': '', 'Sale ID': '', 'Customer Name': '', 'Customer Phone': '',
-      'Products Taken': '', 'Total Sale Amount': formatCurrency(totalPayments), 'Previous Balance Before Payment': '', 'Amount Paid': '',
-      'Remaining Balance': '', 'Payment Status': '', 'Payment Method': '', 'Created By': '', 'Updated By': '', 'Last Updated': ''
+      'Assigned Staff': '', 'Staff Phone': '', 'Staff Email': '',
+      'Products Taken': '', 'Total Sale Amount': '', 'Total Paid': formatCurrency(totalPayments), 'Remaining Balance': '',
+      'Payment Status': '', 'Payment Method': '', 'Created By': '', 'Updated By': '', 'Last Updated': ''
     },
     {
-      'Date': 'NUMBER OF PAYMENTS', 'Time': '', 'Sale ID': '', 'Customer Name': '', 'Customer Phone': '',
-      'Products Taken': '', 'Total Sale Amount': payments.length.toString(), 'Previous Balance Before Payment': '', 'Amount Paid': '',
-      'Remaining Balance': '', 'Payment Status': '', 'Payment Method': '', 'Created By': '', 'Updated By': '', 'Last Updated': ''
+      'Date': 'UNPAID SALES', 'Time': '', 'Sale ID': '', 'Customer Name': '', 'Customer Phone': '',
+      'Assigned Staff': '', 'Staff Phone': '', 'Staff Email': '',
+      'Products Taken': '', 'Total Sale Amount': '', 'Total Paid': '', 'Remaining Balance': unpaidSales.toString(),
+      'Payment Status': '', 'Payment Method': '', 'Created By': '', 'Updated By': '', 'Last Updated': ''
     },
     {
       'Date': 'UNIQUE CUSTOMERS', 'Time': '', 'Sale ID': '', 'Customer Name': '', 'Customer Phone': '',
-      'Products Taken': '', 'Total Sale Amount': uniqueCustomers.toString(), 'Previous Balance Before Payment': '', 'Amount Paid': '',
-      'Remaining Balance': '', 'Payment Status': '', 'Payment Method': '', 'Created By': '', 'Updated By': '', 'Last Updated': ''
+      'Assigned Staff': '', 'Staff Phone': '', 'Staff Email': '',
+      'Products Taken': '', 'Total Sale Amount': '', 'Total Paid': '', 'Remaining Balance': uniqueCustomers.toString(),
+      'Payment Status': '', 'Payment Method': '', 'Created By': '', 'Updated By': '', 'Last Updated': ''
     },
     {
-      'Date': 'SALES UPDATED', 'Time': '', 'Sale ID': '', 'Customer Name': '', 'Customer Phone': '',
-      'Products Taken': '', 'Total Sale Amount': uniqueSales.toString(), 'Previous Balance Before Payment': '', 'Amount Paid': '',
-      'Remaining Balance': '', 'Payment Status': '', 'Payment Method': '', 'Created By': '', 'Updated By': '', 'Last Updated': ''
+      'Date': 'TOTAL SALES COUNT', 'Time': '', 'Sale ID': '', 'Customer Name': '', 'Customer Phone': '',
+      'Assigned Staff': '', 'Staff Phone': '', 'Staff Email': '',
+      'Products Taken': '', 'Total Sale Amount': sales.length.toString(), 'Total Paid': '', 'Remaining Balance': '',
+      'Payment Status': '', 'Payment Method': '', 'Created By': '', 'Updated By': '', 'Last Updated': ''
     }
   ];
 
-  const finalData = [...paymentTransactions, ...summaryRows];
+  const finalData = [...salesData, ...summaryRows];
   const csv = arrayToCSV(finalData);
   
   return new NextResponse(csv, {
@@ -490,13 +684,19 @@ async function generateCustomerHistory(customerIdParam: string | null, startDate
       isDeleted: false
     },
     include: {
-      payment: { orderBy: { paidAt: 'asc' } },
+      payment: {
+        where: {
+          status: { in: ['CLEARED', 'COMPLETED'] }
+        },
+        orderBy: { paidAt: 'asc' }
+      },
       customer: true,
       saleitem: {
         include: {
           product: true
         }
-      }
+      },
+      assignedStaff: true  // Include assigned staff
     },
     orderBy: { date: 'asc' }
   });
@@ -510,6 +710,7 @@ async function generateCustomerHistory(customerIdParam: string | null, startDate
 
   for (const sale of sales) {
     const productsString = getProductsString(sale);
+    const actualStatus = calculateActualSaleStatus(sale);
     
     runningBalance += sale.amount;
     transactions.push({
@@ -517,48 +718,57 @@ async function generateCustomerHistory(customerIdParam: string | null, startDate
       'Type': 'SALE (CREDIT)',
       'Sale ID': sale.id,
       'Products': productsString,
+      'Assigned Staff': getAssignedStaffName(sale),
       'Debit': formatCurrency(sale.amount),
       'Credit': '0.00',
       'Running Balance': formatCurrency(runningBalance),
-      'Status': sale.status
+      'Status': actualStatus,
+      'Payment Method': '-'
     });
 
     for (const payment of sale.payment) {
       runningBalance -= payment.amount;
+      const newStatus = runningBalance === 0 ? 'PAID' : (runningBalance > 0 ? 'PARTIAL' : 'OVERPAID');
       transactions.push({
         'Date': formatDate(payment.paidAt),
         'Type': 'PAYMENT',
         'Sale ID': sale.id,
         'Products': `Payment via ${payment.method}`,
+        'Assigned Staff': getAssignedStaffName(sale),
         'Debit': '0.00',
         'Credit': formatCurrency(payment.amount),
         'Running Balance': formatCurrency(runningBalance),
-        'Status': runningBalance === 0 ? 'PAID' : 'PARTIAL'
+        'Status': newStatus,
+        'Payment Method': payment.method
       });
     }
   }
 
-  const totalCredit = sales.reduce((sum, s) => sum + s.amount, 0);
-  const totalPayments = sales.reduce((sum, s) => sum + s.payment.reduce((ps, p) => ps + p.amount, 0), 0);
+  let totalCredit = 0;
+  let totalPayments = 0;
+  for (const sale of sales) {
+    totalCredit += sale.amount;
+    totalPayments += getTotalPaid(sale);
+  }
   const outstandingBalance = totalCredit - totalPayments;
 
   transactions.push(
     {
-      'Date': '--- SUMMARY ---', 'Type': '', 'Sale ID': '', 'Products': '',
-      'Debit': '', 'Credit': '', 'Running Balance': '', 'Status': ''
+      'Date': '--- SUMMARY ---', 'Type': '', 'Sale ID': '', 'Products': '', 'Assigned Staff': '',
+      'Debit': '', 'Credit': '', 'Running Balance': '', 'Status': '', 'Payment Method': ''
     },
     {
-      'Date': '', 'Type': 'TOTAL CREDIT', 'Sale ID': '', 'Products': '',
-      'Debit': formatCurrency(totalCredit), 'Credit': '', 'Running Balance': '', 'Status': ''
+      'Date': '', 'Type': 'TOTAL CREDIT', 'Sale ID': '', 'Products': '', 'Assigned Staff': '',
+      'Debit': formatCurrency(totalCredit), 'Credit': '', 'Running Balance': '', 'Status': '', 'Payment Method': ''
     },
     {
-      'Date': '', 'Type': 'TOTAL PAYMENTS', 'Sale ID': '', 'Products': '',
-      'Debit': '', 'Credit': formatCurrency(totalPayments), 'Running Balance': '', 'Status': ''
+      'Date': '', 'Type': 'TOTAL PAYMENTS', 'Sale ID': '', 'Products': '', 'Assigned Staff': '',
+      'Debit': '', 'Credit': formatCurrency(totalPayments), 'Running Balance': '', 'Status': '', 'Payment Method': ''
     },
     {
-      'Date': '', 'Type': 'OUTSTANDING BALANCE', 'Sale ID': '', 'Products': '',
+      'Date': '', 'Type': 'OUTSTANDING BALANCE', 'Sale ID': '', 'Products': '', 'Assigned Staff': '',
       'Debit': '', 'Credit': '', 'Running Balance': formatCurrency(outstandingBalance),
-      'Status': outstandingBalance === 0 ? 'CLEARED' : 'PENDING'
+      'Status': outstandingBalance === 0 ? 'CLEARED' : 'PENDING', 'Payment Method': ''
     }
   );
 
@@ -582,19 +792,23 @@ async function generateOutstandingReport(asOfParam: string | null) {
 
   const sales = await prisma.sale.findMany({
     where: {
-      status: { in: ['UNPAID', 'PARTIAL'] },
       isDeleted: false,
       date: { lte: endOfAsOfDate }
     },
     include: {
       customer: true,
-      payment: true,
+      payment: {
+        where: {
+          status: { in: ['CLEARED', 'COMPLETED'] }
+        }
+      },
       paymentschedule: true,
       saleitem: {
         include: {
           product: true
         }
-      }
+      },
+      assignedStaff: true  // Include assigned staff
     },
     orderBy: [
       { customer: { name: 'asc' } },
@@ -602,11 +816,21 @@ async function generateOutstandingReport(asOfParam: string | null) {
     ]
   });
 
-  const outstandingData = sales.map(sale => {
-    const totalPaid = sale.payment.reduce((sum, p) => sum + p.amount, 0);
+  // Filter to only unpaid and partial sales based on actual payments
+  const unpaidPartialSales = sales.filter(sale => {
+    const totalPaid = getTotalPaid(sale);
+    const remaining = sale.amount - totalPaid;
+    return remaining > 0;
+  });
+
+  const outstandingData = [];
+  for (const sale of unpaidPartialSales) {
+    const totalPaid = getTotalPaid(sale);
     const currentBalance = sale.amount - totalPaid;
+    const actualStatus = calculateActualSaleStatus(sale);
     const nextPaymentDue = sale.paymentschedule.find(ps => !ps.isPaid);
     const productsString = getProductsString(sale);
+    const paymentMethod = getPaymentMethodString(sale);
     
     let daysOverdue = 0;
     if (sale.dueDate) {
@@ -617,62 +841,83 @@ async function generateOutstandingReport(asOfParam: string | null) {
     }
     
     let lastPaymentDate = 'No payments';
+    let lastPaymentMethod = '-';
     if (sale.payment.length > 0) {
-      const lastPaymentTimes = sale.payment.map(p => p.paidAt.getTime());
-      const lastPayment = new Date(Math.max(...lastPaymentTimes));
-      lastPaymentDate = formatDate(lastPayment);
+      let latestPayment = sale.payment[0];
+      for (const p of sale.payment) {
+        if (p.paidAt > latestPayment.paidAt) {
+          latestPayment = p;
+        }
+      }
+      lastPaymentDate = formatDate(latestPayment.paidAt);
+      lastPaymentMethod = latestPayment.method;
     }
     
-    return {
+    outstandingData.push({
       'Customer Name': sale.customer.name,
       'Customer Phone': sale.customer.phone || '',
       'Sale ID': sale.id,
       'Sale Date': formatDate(sale.date),
+      'Assigned Staff': getAssignedStaffName(sale),
+      'Staff Phone': getAssignedStaffPhone(sale),
+      'Staff Email': getAssignedStaffEmail(sale),
       'Products Taken': productsString,
       'Original Amount': formatCurrency(sale.amount),
       'Total Paid': formatCurrency(totalPaid),
       'Outstanding Balance': formatCurrency(currentBalance),
-      'Status': sale.status,
-      'Payment Method': sale.paymentMethod || 'Not specified',
+      'Status': actualStatus,
+      'Payment Method': paymentMethod,
       'Due Date': sale.dueDate ? formatDate(sale.dueDate) : 'N/A',
       'Next Payment Due': nextPaymentDue ? formatDate(nextPaymentDue.dueDate) : 'N/A',
       'Days Overdue': daysOverdue,
       'Last Payment Date': lastPaymentDate,
+      'Last Payment Method': lastPaymentMethod,
       'Created By': sale.createdBy || 'N/A',
       'Updated By': sale.updatedBy || 'N/A'
-    };
-  });
+    });
+  }
 
-  const totalOutstanding = outstandingData.reduce((sum, d) => sum + parseFloat(d['Outstanding Balance'] as string), 0);
-  const totalOverdue = outstandingData
-    .filter(d => d['Days Overdue'] > 0)
-    .reduce((sum, d) => sum + parseFloat(d['Outstanding Balance'] as string), 0);
-  const overdueCount = outstandingData.filter(d => d['Days Overdue'] > 0).length;
+  let totalOutstanding = 0;
+  let totalOverdue = 0;
+  let overdueCount = 0;
+  
+  for (const d of outstandingData) {
+    const outstanding = parseFloat(d['Outstanding Balance'] as string);
+    totalOutstanding += outstanding;
+    if (d['Days Overdue'] > 0) {
+      totalOverdue += outstanding;
+      overdueCount++;
+    }
+  }
 
   const summaryRows = [
     {
       'Customer Name': '--- SUMMARY ---', 'Customer Phone': '', 'Sale ID': '', 'Sale Date': '',
+      'Assigned Staff': '', 'Staff Phone': '', 'Staff Email': '',
       'Products Taken': '', 'Original Amount': '', 'Total Paid': '', 'Outstanding Balance': '',
       'Status': '', 'Payment Method': '', 'Due Date': '', 'Next Payment Due': '', 'Days Overdue': '',
-      'Last Payment Date': '', 'Created By': '', 'Updated By': ''
+      'Last Payment Date': '', 'Last Payment Method': '', 'Created By': '', 'Updated By': ''
     },
     {
       'Customer Name': 'TOTAL OUTSTANDING', 'Customer Phone': '', 'Sale ID': '', 'Sale Date': '',
+      'Assigned Staff': '', 'Staff Phone': '', 'Staff Email': '',
       'Products Taken': '', 'Original Amount': '', 'Total Paid': '', 'Outstanding Balance': formatCurrency(totalOutstanding),
       'Status': '', 'Payment Method': '', 'Due Date': '', 'Next Payment Due': '', 'Days Overdue': '',
-      'Last Payment Date': '', 'Created By': '', 'Updated By': ''
+      'Last Payment Date': '', 'Last Payment Method': '', 'Created By': '', 'Updated By': ''
     },
     {
       'Customer Name': 'OVERDUE AMOUNT', 'Customer Phone': '', 'Sale ID': '', 'Sale Date': '',
+      'Assigned Staff': '', 'Staff Phone': '', 'Staff Email': '',
       'Products Taken': '', 'Original Amount': '', 'Total Paid': '', 'Outstanding Balance': formatCurrency(totalOverdue),
       'Status': '', 'Payment Method': '', 'Due Date': '', 'Next Payment Due': '', 'Days Overdue': '',
-      'Last Payment Date': '', 'Created By': '', 'Updated By': ''
+      'Last Payment Date': '', 'Last Payment Method': '', 'Created By': '', 'Updated By': ''
     },
     {
-      'Customer Name': `Overdue Customers: ${overdueCount}`, 'Customer Phone': '', 'Sale ID': '', 'Sale Date': '',
+      'Customer Name': `Overdue Accounts: ${overdueCount}`, 'Customer Phone': '', 'Sale ID': '', 'Sale Date': '',
+      'Assigned Staff': '', 'Staff Phone': '', 'Staff Email': '',
       'Products Taken': '', 'Original Amount': '', 'Total Paid': '', 'Outstanding Balance': '',
       'Status': '', 'Payment Method': '', 'Due Date': '', 'Next Payment Due': '', 'Days Overdue': '',
-      'Last Payment Date': '', 'Created By': '', 'Updated By': ''
+      'Last Payment Date': '', 'Last Payment Method': '', 'Created By': '', 'Updated By': ''
     }
   ];
 
@@ -725,50 +970,66 @@ async function generatePaymentActivityReport(period: string, startDateParam: str
           status: { in: ['CLEARED', 'COMPLETED'] }
         }
       },
-      saleitem: { include: { product: true } }
+      saleitem: { include: { product: true } },
+      assignedStaff: true  // Include assigned staff
     },
     orderBy: { updatedAt: 'desc' }
   });
 
-  const activityData = salesWithPayments.map(sale => {
-    const totalPaidInPeriod = sale.payment.reduce((sum, p) => sum + p.amount, 0);
-    const totalPaidOverall = sale.payment.reduce((sum, p) => sum + p.amount, 0);
+  const activityData = [];
+  for (const sale of salesWithPayments) {
+    let totalPaidInPeriod = 0;
+    for (const p of sale.payment) {
+      totalPaidInPeriod += p.amount;
+    }
+    const totalPaidOverall = getTotalPaid(sale);
     const remainingBalance = sale.amount - totalPaidOverall;
+    const actualStatus = calculateActualSaleStatus(sale);
     const productsString = getProductsString(sale);
+    const paymentMethod = getPaymentMethodString(sale);
     
-    return {
+    activityData.push({
       'Sale ID': sale.id,
       'Sale Date': formatDate(sale.date),
       'Customer Name': sale.customer.name,
       'Customer Phone': sale.customer.phone || '',
+      'Assigned Staff': getAssignedStaffName(sale),
+      'Staff Phone': getAssignedStaffPhone(sale),
+      'Staff Email': getAssignedStaffEmail(sale),
       'Products Taken': productsString,
       'Original Amount': formatCurrency(sale.amount),
       'Paid in Period': formatCurrency(totalPaidInPeriod),
       'Total Paid Overall': formatCurrency(totalPaidOverall),
       'Remaining Balance': formatCurrency(remainingBalance),
-      'Status': sale.status,
+      'Status': actualStatus,
+      'Payment Method': paymentMethod,
       'Payments Count': sale.payment.length,
       'Last Updated': formatDateTime(sale.updatedAt),
       'Created By': sale.createdBy || 'N/A',
       'Updated By': sale.updatedBy || 'N/A'
-    };
-  });
+    });
+  }
 
-  const totalPaidInPeriod = activityData.reduce((sum, d) => sum + parseFloat(d['Paid in Period'] as string), 0);
+  let totalPaidInPeriod = 0;
+  for (const d of activityData) {
+    totalPaidInPeriod += parseFloat(d['Paid in Period'] as string);
+  }
   const totalSalesUpdated = activityData.length;
 
   const summaryRows = [
     {
       'Sale ID': '--- SUMMARY ---', 'Sale Date': '', 'Customer Name': '', 'Customer Phone': '',
+      'Assigned Staff': '', 'Staff Phone': '', 'Staff Email': '',
       'Products Taken': '', 'Original Amount': '', 'Paid in Period': '', 'Total Paid Overall': '',
-      'Remaining Balance': '', 'Status': '', 'Payments Count': '', 'Last Updated': '',
+      'Remaining Balance': '', 'Status': '', 'Payment Method': '', 'Payments Count': '', 'Last Updated': '',
       'Created By': '', 'Updated By': ''
     },
     {
       'Sale ID': 'TOTAL', 'Sale Date': '', 'Customer Name': '', 'Customer Phone': '',
+      'Assigned Staff': '', 'Staff Phone': '', 'Staff Email': '',
       'Products Taken': '', 'Original Amount': '', 'Paid in Period': formatCurrency(totalPaidInPeriod),
       'Total Paid Overall': '', 'Remaining Balance': '', 'Status': '',
-      'Payments Count': totalSalesUpdated, 'Last Updated': '', 'Created By': '', 'Updated By': ''
+      'Payment Method': '', 'Payments Count': totalSalesUpdated, 'Last Updated': '', 'Created By': '', 'Updated By': ''
     }
   ];
 
@@ -823,7 +1084,12 @@ async function recordPayment(data: any) {
     return NextResponse.json({ error: 'Sale not found' }, { status: 404 });
   }
 
-  const totalPaidSoFar = sale.payment.reduce((sum, p) => sum + p.amount, 0);
+  let totalPaidSoFar = 0;
+  for (const p of sale.payment) {
+    if (p.status === 'CLEARED' || p.status === 'COMPLETED') {
+      totalPaidSoFar += p.amount;
+    }
+  }
   const newTotalPaid = totalPaidSoFar + amount;
   const newStatus = newTotalPaid >= sale.amount ? 'PAID' : 'PARTIAL';
 
@@ -897,26 +1163,30 @@ async function generateBulkPaymentReport(data: any) {
             include: {
               product: true
             }
-          }
+          },
+          assignedStaff: true  // Include assigned staff
         } 
       }
     },
     orderBy: { paidAt: 'asc' }
   });
 
-  const reportData = payments.map(payment => {
+  const reportData = [];
+  for (const payment of payments) {
     const productsString = getProductsString(payment.sale);
     
-    return {
+    reportData.push({
       'Date': formatDate(payment.paidAt),
       'Time': formatTime(payment.paidAt),
       'Customer': payment.sale.customer.name,
+      'Customer Phone': payment.sale.customer.phone || '',
+      'Assigned Staff': getAssignedStaffName(payment.sale),
       'Sale ID': payment.saleId,
       'Products': productsString,
       'Amount': formatCurrency(payment.amount),
       'Method': payment.method
-    };
-  });
+    });
+  }
 
   const csv = arrayToCSV(reportData);
   
@@ -948,18 +1218,34 @@ async function generatePaymentTrends(data: any) {
         status: { in: ['CLEARED', 'COMPLETED'] }
       },
       include: {
-        sale: { include: { customer: true } }
+        sale: { 
+          include: { 
+            customer: true,
+            assignedStaff: true  // Include assigned staff
+          } 
+        }
       }
     });
 
-    const totalAmount = payments.reduce((sum, p) => sum + p.amount, 0);
-    const uniqueCustomers = new Set(payments.map(p => p.sale.customerId)).size;
+    let totalAmount = 0;
+    for (const p of payments) {
+      totalAmount += p.amount;
+    }
+    const uniqueCustomersSet = new Set<number>();
+    const uniqueStaffSet = new Set<number>();
+    for (const p of payments) {
+      if (p.sale.customerId) uniqueCustomersSet.add(p.sale.customerId);
+      if (p.sale.assignedStaffId) uniqueStaffSet.add(p.sale.assignedStaffId);
+    }
+    const uniqueCustomers = uniqueCustomersSet.size;
+    const uniqueStaff = uniqueStaffSet.size;
     
     monthlyData.push({
       'Month': formatDate(monthStart).substring(0, 7),
       'Total Payments': formatCurrency(totalAmount),
       'Payment Count': payments.length,
       'Unique Customers': uniqueCustomers,
+      'Unique Staff Involved': uniqueStaff,
       'Average Payment': formatCurrency(payments.length > 0 ? totalAmount / payments.length : 0)
     });
   }

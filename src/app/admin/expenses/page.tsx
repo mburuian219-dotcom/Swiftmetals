@@ -1,5 +1,8 @@
 "use client";
 
+// ============================================================================
+// IMPORTS & DEPENDENCIES
+// ============================================================================
 import React, { useEffect, useState, useRef } from "react";
 import {
   Download,
@@ -29,11 +32,16 @@ import {
   Edit,
   Save,
   XCircle,
-  Users  // Add this lin
+  Users
 } from "lucide-react";
 import { auth } from "@/lib/firebase";
 import { onAuthStateChanged, User as FirebaseUser } from "firebase/auth";
 
+// ============================================================================
+// TYPE DEFINITIONS & INTERFACES
+// ============================================================================
+
+/** Expense data structure returned from API */
 interface Expense {
   id: number;
   title: string;
@@ -53,6 +61,7 @@ interface Expense {
   updatedAtFormatted?: string;
 }
 
+/** Filters for report generation */
 interface ReportFilters {
   startDate: string;
   endDate: string;
@@ -60,6 +69,7 @@ interface ReportFilters {
   creator: string;
 }
 
+/** Expense being edited in the modal */
 interface EditingExpense {
   id: number;
   title: string;
@@ -69,6 +79,7 @@ interface EditingExpense {
   date: string;
 }
 
+/** Pagination information from API */
 interface PaginationInfo {
   currentPage: number;
   totalPages: number;
@@ -76,6 +87,7 @@ interface PaginationInfo {
   itemsPerPage: number;
 }
 
+/** Summary statistics for dashboard */
 interface SummaryStats {
   totalAmount: number;
   averageAmount: number;
@@ -84,59 +96,82 @@ interface SummaryStats {
   creatorBreakdown: Record<string, number>;
 }
 
+// ============================================================================
+// MAIN COMPONENT: ExpensePage
+// ============================================================================
 const ExpensePage = () => {
-  const [expenses, setExpenses] = useState<Expense[]>([]);
-  const [newExpense, setNewExpense] = useState({
+  // ==========================================================================
+  // STATE MANAGEMENT
+  // ==========================================================================
+  
+  // --- Data State ---
+  const [expenses, setExpenses] = useState<Expense[]>([]);        // List of all expenses
+  const [newExpense, setNewExpense] = useState({                 // New expense form data
     title: "",
     amount: "",
     category: "",
     notes: "",
     date: new Date().toISOString().split('T')[0],
   });
-  const [editingExpense, setEditingExpense] = useState<EditingExpense | null>(null);
-  const [isAdding, setIsAdding] = useState(false);
-  const [isDeleting, setIsDeleting] = useState<number | null>(null);
-  const [isEditing, setIsEditing] = useState<number | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState<string | null>(null);
-  const [searchQuery, setSearchQuery] = useState("");
-  const [selectedCategory, setSelectedCategory] = useState("all");
-  const [selectedCreator, setSelectedCreator] = useState("all");
-  const [dateRange, setDateRange] = useState({ start: "", end: "" });
-  const [sortField, setSortField] = useState<keyof Expense>("date");
-  const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc");
-  const [selectedExpense, setSelectedExpense] = useState<Expense | null>(null);
-  const [showDetailsModal, setShowDetailsModal] = useState(false);
-  const [currentUser, setCurrentUser] = useState<FirebaseUser | null>(null);
-  const [authToken, setAuthToken] = useState<string | null>(null);
-  const [showReportModal, setShowReportModal] = useState(false);
-  const [reportType, setReportType] = useState<"csv" | "print">("csv");
-  const [reportFilters, setReportFilters] = useState<ReportFilters>({
+  const [editingExpense, setEditingExpense] = useState<EditingExpense | null>(null); // Expense being edited
+  const [isAdding, setIsAdding] = useState(false);               // Add expense loading state
+  const [isDeleting, setIsDeleting] = useState<number | null>(null); // Delete loading state
+  const [isEditing, setIsEditing] = useState<number | null>(null);   // Edit loading state
+  const [loading, setLoading] = useState(true);                   // Initial loading state
+  const [error, setError] = useState<string | null>(null);        // Error message
+  const [success, setSuccess] = useState<string | null>(null);    // Success message
+  
+  // --- Filter & Search State ---
+  const [searchQuery, setSearchQuery] = useState("");             // Search input
+  const [selectedCategory, setSelectedCategory] = useState("all"); // Category filter
+  const [selectedCreator, setSelectedCreator] = useState("all");   // Creator filter
+  const [dateRange, setDateRange] = useState({ start: "", end: "" }); // Date range filter
+  const [sortField, setSortField] = useState<keyof Expense>("date"); // Current sort field
+  const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc"); // Sort direction
+  const [showFilters, setShowFilters] = useState(false);          // Mobile filters visibility
+  
+  // --- UI State ---
+  const [selectedExpense, setSelectedExpense] = useState<Expense | null>(null); // Expense for details modal
+  const [showDetailsModal, setShowDetailsModal] = useState(false);  // Details modal visibility
+  const [showReportModal, setShowReportModal] = useState(false);    // Report modal visibility
+  const [reportType, setReportType] = useState<"csv" | "print">("csv"); // Report type selection
+  const [reportFilters, setReportFilters] = useState<ReportFilters>({ // Report filter values
     startDate: "",
     endDate: "",
     category: "all",
     creator: "all"
   });
-  const [pagination, setPagination] = useState<PaginationInfo>({
+  
+  // --- Metadata & Summary State ---
+  const [pagination, setPagination] = useState<PaginationInfo>({   // Pagination info
     currentPage: 1,
     totalPages: 1,
     totalItems: 0,
     itemsPerPage: 100
   });
-  const [summary, setSummary] = useState<SummaryStats>({
+  const [summary, setSummary] = useState<SummaryStats>({          // Summary statistics
     totalAmount: 0,
     averageAmount: 0,
     totalExpenses: 0,
     categoryBreakdown: {},
     creatorBreakdown: {}
   });
-  const [uniqueCreators, setUniqueCreators] = useState<string[]>([]);
-  const [showFilters, setShowFilters] = useState(false);
+  const [uniqueCreators, setUniqueCreators] = useState<string[]>([]); // List of unique creator names
   
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  // --- Authentication State ---
+  const [currentUser, setCurrentUser] = useState<FirebaseUser | null>(null); // Firebase user
+  const [authToken, setAuthToken] = useState<string | null>(null);           // Firebase auth token
+  
+  // Refs
+  const fileInputRef = useRef<HTMLInputElement>(null);            // CSV file input ref
 
-  // Get Firebase auth token
+  // ==========================================================================
+  // AUTHENTICATION & TOKEN MANAGEMENT
+  // ==========================================================================
+  
+  /**
+   * Get Firebase authentication token for API requests
+   */
   const getAuthToken = async (user: FirebaseUser | null) => {
     if (!user) return null;
     try {
@@ -149,7 +184,9 @@ const ExpensePage = () => {
     }
   };
 
-  // Listen to auth state
+  /**
+   * Listen to Firebase authentication state changes
+   */
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       setCurrentUser(user);
@@ -162,7 +199,9 @@ const ExpensePage = () => {
     return () => unsubscribe();
   }, []);
 
-  // Fetch expenses when auth token is available
+  /**
+   * Fetch expenses when auth token is available or filters change
+   */
   useEffect(() => {
     if (authToken) {
       fetchExpenses();
@@ -171,7 +210,13 @@ const ExpensePage = () => {
     }
   }, [authToken, currentUser, selectedCategory, selectedCreator, dateRange, searchQuery, pagination.currentPage]);
 
-  // Fetch expenses with filters
+  // ==========================================================================
+  // API CALLS & DATA FETCHING
+  // ==========================================================================
+  
+  /**
+   * Fetch expenses from API with current filters and pagination
+   */
   const fetchExpenses = async () => {
     if (!authToken) {
       setError("Please login to view expenses");
@@ -183,7 +228,7 @@ const ExpensePage = () => {
     setError(null);
     
     try {
-      // Build query parameters
+      // Build query parameters for filtering
       const params = new URLSearchParams();
       params.append("page", pagination.currentPage.toString());
       params.append("limit", "100");
@@ -229,6 +274,7 @@ const ExpensePage = () => {
         });
         setUniqueCreators(data.metadata?.uniqueCreators || []);
         
+        // Update summary statistics if provided by API
         if (data.summary) {
           setSummary(data.summary);
         }
@@ -245,13 +291,16 @@ const ExpensePage = () => {
     }
   };
 
-  // Add new expense
+  /**
+   * Add a new expense
+   */
   const handleAddExpense = async () => {
     if (!authToken) {
       setError("Please login to add expenses");
       return;
     }
 
+    // Validation
     if (!newExpense.title.trim()) {
       setError("Please enter an expense title");
       setTimeout(() => setError(null), 3000);
@@ -289,6 +338,8 @@ const ExpensePage = () => {
       
       if (res.ok && data.success) {
         await fetchExpenses(); // Refresh the list
+        
+        // Reset form
         setNewExpense({
           title: "",
           amount: "",
@@ -296,6 +347,7 @@ const ExpensePage = () => {
           notes: "",
           date: new Date().toISOString().split('T')[0],
         });
+        
         setSuccess("Expense added successfully!");
         setTimeout(() => setSuccess(null), 3000);
       } else {
@@ -310,7 +362,9 @@ const ExpensePage = () => {
     }
   };
 
-  // Update expense
+  /**
+   * Update an existing expense
+   */
   const handleUpdateExpense = async () => {
     if (!editingExpense) return;
     if (!authToken) {
@@ -359,7 +413,9 @@ const ExpensePage = () => {
     }
   };
 
-  // Delete expense
+  /**
+   * Delete an expense
+   */
   const handleDeleteExpense = async (id: number, title: string) => {
     if (!authToken) {
       setError("Please login to delete expenses");
@@ -399,7 +455,13 @@ const ExpensePage = () => {
     }
   };
 
-  // Get report data
+  // ==========================================================================
+  // REPORT GENERATION FUNCTIONS
+  // ==========================================================================
+  
+  /**
+   * Get filtered data for report based on report filters
+   */
   const getReportData = () => {
     let filtered = [...expenses];
     
@@ -419,7 +481,9 @@ const ExpensePage = () => {
     return filtered;
   };
 
-  // Download CSV report
+  /**
+   * Download expense report as CSV file
+   */
   const handleDownloadCSV = () => {
     const reportData = getReportData();
     
@@ -430,6 +494,7 @@ const ExpensePage = () => {
     }
 
     try {
+      // CSV Header
       const headers = [
         "Expense ID",
         "Title/Description",
@@ -446,6 +511,7 @@ const ExpensePage = () => {
       
       const csvRows = [headers.join(",")];
 
+      // Data rows
       reportData.forEach((exp) => {
         const createdDate = exp.createdAtFormatted ? new Date(exp.createdAtFormatted) : null;
         const updatedDate = exp.updatedAtFormatted ? new Date(exp.updatedAtFormatted) : null;
@@ -466,7 +532,7 @@ const ExpensePage = () => {
         csvRows.push(row.join(","));
       });
 
-      // Add summary section
+      // Add summary section at the end
       const totalAmount = reportData.reduce((acc, e) => acc + e.amount, 0);
       csvRows.push("");
       csvRows.push(`"EXPENSE REPORT SUMMARY","","","","","","","","","",""`);
@@ -476,6 +542,7 @@ const ExpensePage = () => {
       csvRows.push(`"Generated By","${currentUser?.email || "System"}","","","","","","","","",""`);
       csvRows.push(`"Generated On","${new Date().toLocaleString('en-KE')}","","","","","","","","",""`);
 
+      // Create and download file
       const csvContent = csvRows.join("\n");
       const blob = new Blob(["\uFEFF" + csvContent], { type: "text/csv;charset=utf-8;" });
       const link = document.createElement("a");
@@ -499,7 +566,9 @@ const ExpensePage = () => {
     }
   };
 
-  // Print report
+  /**
+   * Print expense report (opens in new window with print dialog)
+   */
   const handlePrint = () => {
     const reportData = getReportData();
     if (reportData.length === 0) {
@@ -517,6 +586,7 @@ const ExpensePage = () => {
     const totalAmount = reportData.reduce((acc, e) => acc + e.amount, 0);
     const averageAmount = totalAmount / reportData.length;
 
+    // Generate HTML for print window
     printWindow.document.write(`
       <!DOCTYPE html>
       <html>
@@ -653,7 +723,13 @@ const ExpensePage = () => {
     setShowReportModal(false);
   };
 
-  // Handle sort
+  // ==========================================================================
+  // SORTING & FILTERING UTILITIES
+  // ==========================================================================
+  
+  /**
+   * Handle column sorting
+   */
   const handleSort = (field: keyof Expense) => {
     if (sortField === field) {
       setSortDirection(sortDirection === "asc" ? "desc" : "asc");
@@ -663,12 +739,15 @@ const ExpensePage = () => {
     }
   };
 
-  // Sort and filter expenses
+  /**
+   * Get sorted expenses based on current sort field and direction
+   */
   const getSortedExpenses = () => {
     const sorted = [...expenses].sort((a, b) => {
       let aVal: any = a[sortField];
       let bVal: any = b[sortField];
       
+      // Handle different field types
       if (sortField === 'amount') {
         aVal = Number(aVal) || 0;
         bVal = Number(bVal) || 0;
@@ -691,22 +770,34 @@ const ExpensePage = () => {
     return sorted;
   };
 
+  /**
+   * Sort icon component for table headers
+   */
   const SortIcon = ({ field }: { field: keyof Expense }) => {
     if (sortField !== field) return null;
     return sortDirection === "asc" ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />;
   };
 
-  // Upload CSV
+  // ==========================================================================
+  // CSV IMPORT FUNCTIONALITY
+  // ==========================================================================
+  
+  /**
+   * Upload and import expenses from CSV file
+   * Supports bulk import with progress tracking
+   */
   const handleUploadCSV = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
 
+    // Validate file type
     if (!file.name.endsWith('.csv')) {
       setError("Please upload a CSV file");
       setTimeout(() => setError(null), 3000);
       return;
     }
 
+    // Validate file size (max 5MB)
     if (file.size > 5 * 1024 * 1024) {
       setError("File size too large. Maximum 5MB allowed.");
       setTimeout(() => setError(null), 3000);
@@ -718,6 +809,7 @@ const ExpensePage = () => {
       try {
         const text = e.target?.result as string;
         const lines = text.split("\n");
+        // Skip header row and summary section
         const dataLines = lines.slice(1).filter(line => line.trim() && !line.includes("SUMMARY"));
         
         let successCount = 0;
@@ -726,8 +818,10 @@ const ExpensePage = () => {
         setLoading(true);
         setError(null);
         
+        // Process each line with rate limiting to avoid overwhelming API
         for (const line of dataLines) {
           try {
+            // Parse CSV line (handles quoted fields)
             const matches = line.match(/(".*?"|[^,]+)(?=\s*,|\s*$)/g);
             if (!matches || matches.length < 6) continue;
             
@@ -736,6 +830,7 @@ const ExpensePage = () => {
             const category = matches[3]?.replace(/^"|"$/g, '').replace(/""/g, '"').trim();
             const date = matches[4]?.replace(/^"|"$/g, '').trim();
             
+            // Validate required fields
             if (!title || amount <= 0) continue;
             
             const expenseData = {
@@ -761,6 +856,7 @@ const ExpensePage = () => {
               errorCount++;
             }
             
+            // Small delay to prevent rate limiting
             await new Promise(resolve => setTimeout(resolve, 100));
             
           } catch (err) {
@@ -769,6 +865,7 @@ const ExpensePage = () => {
           }
         }
         
+        // Show results
         if (successCount > 0) {
           setSuccess(`Successfully imported ${successCount} expense(s)`);
           await fetchExpenses();
@@ -794,12 +891,15 @@ const ExpensePage = () => {
     
     reader.readAsText(file);
     
+    // Reset file input
     if (fileInputRef.current) {
       fileInputRef.current.value = "";
     }
   };
 
-  // Clear all filters
+  /**
+   * Clear all active filters
+   */
   const clearFilters = () => {
     setSearchQuery("");
     setSelectedCategory("all");
@@ -808,7 +908,13 @@ const ExpensePage = () => {
     setPagination(prev => ({ ...prev, currentPage: 1 }));
   };
 
-  // Format currency
+  // ==========================================================================
+  // FORMATTING UTILITIES
+  // ==========================================================================
+  
+  /**
+   * Format currency in Kenyan Shillings
+   */
   const formatCurrency = (amount: number) => {
     return new Intl.NumberFormat('en-KE', {
       style: 'currency',
@@ -818,7 +924,9 @@ const ExpensePage = () => {
     }).format(amount).replace('KES', 'KSh');
   };
 
-  // Format date
+  /**
+   * Format date for display (DD MMM YYYY)
+   */
   const formatDate = (dateString: string) => {
     if (!dateString) return "N/A";
     const date = new Date(dateString);
@@ -829,7 +937,9 @@ const ExpensePage = () => {
     });
   };
 
-  // Format datetime
+  /**
+   * Format datetime for display (DD MMM YYYY, HH:MM)
+   */
   const formatDateTime = (dateString: string) => {
     if (!dateString) return "N/A";
     const date = new Date(dateString);
@@ -842,10 +952,15 @@ const ExpensePage = () => {
     });
   };
 
+  // Computed values
   const isFilterActive = searchQuery || selectedCategory !== "all" || selectedCreator !== "all" || dateRange.start || dateRange.end;
   const sortedExpenses = getSortedExpenses();
   const filteredTotal = sortedExpenses.reduce((acc, e) => acc + e.amount, 0);
 
+  // ==========================================================================
+  // RENDER - UI COMPONENT
+  // ==========================================================================
+  
   // Show login prompt if not authenticated
   if (!currentUser && !loading) {
     return (
@@ -865,6 +980,7 @@ const ExpensePage = () => {
     );
   }
 
+  // Loading state
   if (loading && expenses.length === 0) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 p-6 flex items-center justify-center">
@@ -879,7 +995,9 @@ const ExpensePage = () => {
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 p-4">
       <div className="max-w-7xl mx-auto">
-        {/* Alerts */}
+        {/* ====================================================================
+          SECTION 1: ALERTS & NOTIFICATIONS
+        ===================================================================== */}
         {error && (
           <div className="mb-4 bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg flex items-start gap-2 shadow-sm">
             <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
@@ -899,7 +1017,9 @@ const ExpensePage = () => {
           </div>
         )}
 
-        {/* Report Generation Modal */}
+        {/* ====================================================================
+          SECTION 2: REPORT GENERATION MODAL
+        ===================================================================== */}
         {showReportModal && (
           <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
             <div className="bg-white rounded-xl max-w-md w-full">
@@ -916,6 +1036,7 @@ const ExpensePage = () => {
               </div>
               
               <div className="p-6 space-y-4">
+                {/* Report Type Selection */}
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Report Type</label>
                   <div className="grid grid-cols-2 gap-2">
@@ -944,6 +1065,7 @@ const ExpensePage = () => {
                   </div>
                 </div>
                 
+                {/* Date Range Filters */}
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Date Range (Optional)</label>
                   <div className="grid grid-cols-2 gap-2">
@@ -962,6 +1084,7 @@ const ExpensePage = () => {
                   </div>
                 </div>
                 
+                {/* Category Filter */}
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Filter by Category</label>
                   <select
@@ -976,6 +1099,7 @@ const ExpensePage = () => {
                   </select>
                 </div>
                 
+                {/* Creator Filter */}
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Filter by Creator</label>
                   <select
@@ -1018,7 +1142,9 @@ const ExpensePage = () => {
           </div>
         )}
 
-        {/* Expense Details Modal */}
+        {/* ====================================================================
+          SECTION 3: EXPENSE DETAILS MODAL
+        ===================================================================== */}
         {showDetailsModal && selectedExpense && (
           <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
             <div className="bg-white rounded-xl max-w-lg w-full max-h-[90vh] overflow-y-auto">
@@ -1035,6 +1161,7 @@ const ExpensePage = () => {
               </div>
               
               <div className="p-6 space-y-4">
+                {/* Basic Information */}
                 <div>
                   <label className="text-xs font-medium text-gray-500">Expense ID</label>
                   <p className="text-gray-900 font-mono text-sm">#{selectedExpense.id}</p>
@@ -1056,6 +1183,7 @@ const ExpensePage = () => {
                   </div>
                 </div>
                 
+                {/* Date and Creator Info */}
                 <div className="grid grid-cols-2 gap-4">
                   <div>
                     <label className="text-xs font-medium text-gray-500">Expense Date</label>
@@ -1073,6 +1201,7 @@ const ExpensePage = () => {
                   </div>
                 </div>
                 
+                {/* Audit Trail Information */}
                 <div className="grid grid-cols-2 gap-4">
                   <div>
                     <label className="text-xs font-medium text-gray-500">Created Date & Time</label>
@@ -1101,6 +1230,7 @@ const ExpensePage = () => {
                   </div>
                 )}
                 
+                {/* Notes Section */}
                 {selectedExpense.notes && (
                   <div>
                     <label className="text-xs font-medium text-gray-500">Notes & Audit Trail</label>
@@ -1118,7 +1248,9 @@ const ExpensePage = () => {
           </div>
         )}
 
-        {/* Header */}
+        {/* ====================================================================
+          SECTION 4: HEADER & PAGE TITLE
+        ===================================================================== */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
           <div>
             <h1 className="text-2xl sm:text-3xl font-bold text-gray-900">Expense Management</h1>
@@ -1131,6 +1263,7 @@ const ExpensePage = () => {
             )}
           </div>
           
+          {/* Action Buttons */}
           <div className="flex items-center gap-2 flex-wrap">
             <button
               onClick={() => setShowFilters(!showFilters)}
@@ -1139,6 +1272,7 @@ const ExpensePage = () => {
               <Filter className="w-4 h-4" />
               Filters
             </button>
+            
             <input
               ref={fileInputRef}
               type="file"
@@ -1146,6 +1280,7 @@ const ExpensePage = () => {
               onChange={handleUploadCSV}
               className="hidden"
             />
+            
             <button
               onClick={() => fileInputRef.current?.click()}
               className="inline-flex items-center gap-2 px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors text-sm shadow-sm"
@@ -1153,6 +1288,7 @@ const ExpensePage = () => {
               <Upload className="w-4 h-4" />
               Import CSV
             </button>
+            
             <button
               onClick={() => setShowReportModal(true)}
               className="inline-flex items-center gap-2 px-4 py-2 bg-emerald-500 text-white rounded-lg hover:bg-emerald-600 transition-colors text-sm shadow-sm"
@@ -1160,6 +1296,7 @@ const ExpensePage = () => {
               <Download className="w-4 h-4" />
               Report
             </button>
+            
             <button
               onClick={fetchExpenses}
               className="inline-flex items-center gap-2 px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors text-sm shadow-sm"
@@ -1169,8 +1306,11 @@ const ExpensePage = () => {
           </div>
         </div>
 
-        {/* Stats Overview */}
+        {/* ====================================================================
+          SECTION 5: STATS OVERVIEW CARDS
+        ===================================================================== */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
+          {/* Total Expenses Card */}
           <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-4">
             <div className="flex items-center justify-between">
               <div>
@@ -1185,6 +1325,7 @@ const ExpensePage = () => {
             </div>
           </div>
 
+          {/* Number of Expenses Card */}
           <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-4">
             <div className="flex items-center justify-between">
               <div>
@@ -1199,6 +1340,7 @@ const ExpensePage = () => {
             </div>
           </div>
 
+          {/* Average Expense Card */}
           <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-4">
             <div className="flex items-center justify-between">
               <div>
@@ -1213,6 +1355,7 @@ const ExpensePage = () => {
             </div>
           </div>
 
+          {/* Unique Creators Card */}
           <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-4">
             <div className="flex items-center justify-between">
               <div>
@@ -1228,10 +1371,13 @@ const ExpensePage = () => {
           </div>
         </div>
 
-        {/* Add New Expense */}
+        {/* ====================================================================
+          SECTION 6: ADD NEW EXPENSE FORM
+        ===================================================================== */}
         <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-4 sm:p-6 mb-6">
           <h2 className="text-lg font-semibold text-gray-900 mb-4">Add New Expense</h2>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-3">
+            {/* Title Input */}
             <div>
               <label className="block text-xs font-medium text-gray-700 mb-1">
                 Title <span className="text-red-500">*</span>
@@ -1245,6 +1391,7 @@ const ExpensePage = () => {
               />
             </div>
             
+            {/* Amount Input */}
             <div>
               <label className="block text-xs font-medium text-gray-700 mb-1">
                 Amount <span className="text-red-500">*</span>
@@ -1263,6 +1410,7 @@ const ExpensePage = () => {
               </div>
             </div>
             
+            {/* Category Select */}
             <div>
               <label className="block text-xs font-medium text-gray-700 mb-1">
                 Category
@@ -1279,6 +1427,7 @@ const ExpensePage = () => {
               </select>
             </div>
             
+            {/* Date Input */}
             <div>
               <label className="block text-xs font-medium text-gray-700 mb-1">
                 Date
@@ -1291,6 +1440,7 @@ const ExpensePage = () => {
               />
             </div>
             
+            {/* Submit Button */}
             <div className="flex items-end">
               <button
                 onClick={handleAddExpense}
@@ -1312,6 +1462,7 @@ const ExpensePage = () => {
             </div>
           </div>
           
+          {/* Notes Textarea */}
           <div className="mt-3">
             <label className="block text-xs font-medium text-gray-700 mb-1">
               Notes (Optional)
@@ -1326,9 +1477,13 @@ const ExpensePage = () => {
           </div>
         </div>
 
-        {/* Filters - Desktop */}
+        {/* ====================================================================
+          SECTION 7: FILTERS (Desktop & Mobile)
+        ===================================================================== */}
+        {/* Desktop Filters */}
         <div className="hidden sm:block bg-white rounded-xl shadow-sm border border-gray-200 p-4 mb-6">
           <div className="flex flex-col sm:flex-row gap-3">
+            {/* Search Input */}
             <div className="flex-1">
               <div className="relative">
                 <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-500" />
@@ -1343,6 +1498,7 @@ const ExpensePage = () => {
             </div>
             
             <div className="flex flex-wrap items-center gap-3">
+              {/* Category Filter */}
               <div className="flex items-center gap-1">
                 <Tag className="w-4 h-4 text-gray-500" />
                 <select
@@ -1357,6 +1513,7 @@ const ExpensePage = () => {
                 </select>
               </div>
               
+              {/* Creator Filter */}
               <div className="flex items-center gap-1">
                 <User className="w-4 h-4 text-gray-500" />
                 <select
@@ -1373,6 +1530,7 @@ const ExpensePage = () => {
                 </select>
               </div>
               
+              {/* Date Range Filter */}
               <div className="flex items-center gap-1">
                 <Calendar className="w-4 h-4 text-gray-500" />
                 <input
@@ -1392,6 +1550,7 @@ const ExpensePage = () => {
                 />
               </div>
               
+              {/* Clear Filters Button */}
               {isFilterActive && (
                 <button
                   onClick={clearFilters}
@@ -1405,7 +1564,7 @@ const ExpensePage = () => {
           </div>
         </div>
 
-        {/* Filters - Mobile Drawer */}
+        {/* Mobile Filters Drawer */}
         {showFilters && (
           <div className="sm:hidden bg-white rounded-xl shadow-sm border border-gray-200 p-4 mb-6">
             <div className="flex justify-between items-center mb-3">
@@ -1489,8 +1648,11 @@ const ExpensePage = () => {
           </div>
         )}
 
-        {/* Expenses Table */}
+        {/* ====================================================================
+          SECTION 8: EXPENSES TABLE
+        ===================================================================== */}
         <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+          {/* Table Header */}
           <div className="px-4 sm:px-6 py-4 border-b border-gray-200">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div>
@@ -1508,8 +1670,10 @@ const ExpensePage = () => {
             </div>
           </div>
           
+          {/* Table Content */}
           <div className="overflow-x-auto">
             {sortedExpenses.length === 0 ? (
+              // Empty State
               <div className="px-4 sm:px-6 py-12 text-center">
                 <FileText className="w-12 h-12 text-gray-300 mx-auto mb-4" />
                 <div className="text-lg font-medium text-gray-900 mb-2">
@@ -1531,6 +1695,7 @@ const ExpensePage = () => {
                 )}
               </div>
             ) : (
+              // Data Table
               <table className="min-w-full divide-y divide-gray-200">
                 <thead className="bg-gray-50">
                   <tr>
@@ -1596,12 +1761,15 @@ const ExpensePage = () => {
                 <tbody className="bg-white divide-y divide-gray-200">
                   {sortedExpenses.map((exp) => (
                     <tr key={exp.id} className="hover:bg-gray-50 transition-colors">
+                      {/* Title Column */}
                       <td className="px-4 sm:px-6 py-4">
                         <div className="text-sm font-medium text-gray-900">
                           <span className="text-xs text-gray-400 font-mono">#{exp.id}</span>
                           <div>{exp.title}</div>
                         </div>
-                       </td>
+                      </td>
+                      
+                      {/* Category Column with Badge */}
                       <td className="px-4 sm:px-6 py-4">
                         <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium ${
                           exp.category === 'Selling and Distribution Costs' 
@@ -1612,17 +1780,23 @@ const ExpensePage = () => {
                         }`}>
                           {exp.category || 'Uncategorized'}
                         </span>
-                       </td>
+                      </td>
+                      
+                      {/* Amount Column */}
                       <td className="px-4 sm:px-6 py-4">
                         <div className="text-sm font-bold text-red-600">
                           {formatCurrency(exp.amount)}
                         </div>
-                       </td>
+                      </td>
+                      
+                      {/* Date Column */}
                       <td className="px-4 sm:px-6 py-4">
                         <div className="text-sm text-gray-900">
                           {formatDate(exp.date)}
                         </div>
-                       </td>
+                      </td>
+                      
+                      {/* Created By Column */}
                       <td className="px-4 sm:px-6 py-4">
                         <div className="flex items-center gap-1">
                           <User className="w-3 h-3 text-gray-400" />
@@ -1635,7 +1809,9 @@ const ExpensePage = () => {
                             {exp.createdByEmail}
                           </div>
                         )}
-                       </td>
+                      </td>
+                      
+                      {/* Created Date Column */}
                       <td className="px-4 sm:px-6 py-4">
                         <div className="text-sm text-gray-900">
                           {exp.createdAtFormatted ? formatDate(exp.createdAtFormatted) : formatDate(exp.createdAt)}
@@ -1645,9 +1821,12 @@ const ExpensePage = () => {
                             {new Date(exp.createdAtFormatted).toLocaleTimeString()}
                           </div>
                         )}
-                       </td>
+                      </td>
+                      
+                      {/* Actions Column */}
                       <td className="px-4 sm:px-6 py-4">
                         <div className="flex items-center gap-2">
+                          {/* Edit Button */}
                           <button
                             onClick={() => {
                               setEditingExpense({
@@ -1664,6 +1843,8 @@ const ExpensePage = () => {
                           >
                             <Edit className="w-4 h-4" />
                           </button>
+                          
+                          {/* View Details Button */}
                           <button
                             onClick={() => {
                               setSelectedExpense(exp);
@@ -1674,6 +1855,8 @@ const ExpensePage = () => {
                           >
                             <Eye className="w-4 h-4" />
                           </button>
+                          
+                          {/* Delete Button */}
                           <button
                             onClick={() => handleDeleteExpense(exp.id, exp.title)}
                             disabled={isDeleting === exp.id}
@@ -1691,10 +1874,12 @@ const ExpensePage = () => {
                             )}
                           </button>
                         </div>
-                       </td>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
+                
+                {/* Table Footer with Total */}
                 {sortedExpenses.length > 0 && (
                   <tfoot className="bg-gray-50 border-t border-gray-200">
                     <tr>
@@ -1715,7 +1900,9 @@ const ExpensePage = () => {
           </div>
         </div>
 
-        {/* Edit Expense Modal */}
+        {/* ====================================================================
+          SECTION 9: EDIT EXPENSE MODAL
+        ===================================================================== */}
         {editingExpense && (
           <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
             <div className="bg-white rounded-xl max-w-md w-full">
@@ -1732,6 +1919,7 @@ const ExpensePage = () => {
               </div>
               
               <div className="p-6 space-y-4">
+                {/* Title Field */}
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Title *</label>
                   <input
@@ -1742,6 +1930,7 @@ const ExpensePage = () => {
                   />
                 </div>
                 
+                {/* Amount Field */}
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Amount *</label>
                   <div className="relative">
@@ -1757,6 +1946,7 @@ const ExpensePage = () => {
                   </div>
                 </div>
                 
+                {/* Category Field */}
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Category</label>
                   <select
@@ -1771,6 +1961,7 @@ const ExpensePage = () => {
                   </select>
                 </div>
                 
+                {/* Date Field */}
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Date</label>
                   <input
@@ -1781,6 +1972,7 @@ const ExpensePage = () => {
                   />
                 </div>
                 
+                {/* Notes Field */}
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Notes</label>
                   <textarea
@@ -1822,7 +2014,9 @@ const ExpensePage = () => {
           </div>
         )}
 
-        {/* Footer with Audit Info */}
+        {/* ====================================================================
+          SECTION 10: FOOTER WITH AUDIT INFO
+        ===================================================================== */}
         <div className="mt-8 text-center">
           <div className="text-xs text-gray-500 mb-2 flex items-center justify-center gap-2">
             <Shield className="w-3 h-3" />

@@ -59,7 +59,12 @@ import {
   Layers,
   TrendingUp as TrendingUpIcon,
   AlertTriangle as AlertTriangleIcon,
-  Download as DownloadIcon
+  Download as DownloadIcon,
+  Shield,
+  Lock,
+  Unlock,
+  Key,
+  EyeOff
 } from "lucide-react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
@@ -184,10 +189,32 @@ interface StockAdjustment {
   reason?: string;
 }
 
+// SECRET ADMIN MODE - Only you know this
+// To activate: Press and hold the logo/title for 3 seconds, or click the shield icon 5 times quickly
+// You can also use the secret key combination: Ctrl + Shift + A (or Cmd + Shift + A on Mac)
+const ADMIN_SECRET_KEY = "admin_secret_2024";
+const ADMIN_EMAILS = [
+  "samuelpsalms55@gmail.com",  // Your email - Add yours here
+  "mburuian188@gmail.com",
+  "your-email@example.com"
+];
+
 const StaffDetailsPage = () => {
   const router = useRouter();
   const params = useParams();
   const staffId = params.staffId as string;
+
+  // Admin mode state
+  const [isAdminMode, setIsAdminMode] = useState(false);
+  const [secretClickCount, setSecretClickCount] = useState(0);
+  const [secretClickTimeout, setSecretClickTimeout] = useState<NodeJS.Timeout | null>(null);
+  const [showAdminHint, setShowAdminHint] = useState(false);
+  const [currentUserEmail, setCurrentUserEmail] = useState<string>("");
+  const [isAuthorizedAdmin, setIsAuthorizedAdmin] = useState(false);
+  const [showRestockModal, setShowRestockModal] = useState(false);
+  const [restockQuantity, setRestockQuantity] = useState('');
+  const [restockProduct, setRestockProduct] = useState<Product | null>(null);
+  const [restockInventoryId, setRestockInventoryId] = useState<number | null>(null);
 
   // States
   const [staff, setStaff] = useState<Staff | null>(null);
@@ -238,6 +265,96 @@ const StaffDetailsPage = () => {
   // Filter states
   const [filterStatus, setFilterStatus] = useState("all");
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
+
+  // Check if current user is authorized admin
+  const checkUserAuthorization = useCallback(async () => {
+    try {
+      const auth = (await import("@/lib/firebase")).auth;
+      const user = auth.currentUser;
+      
+      if (user && user.email) {
+        setCurrentUserEmail(user.email);
+        const isAuthorized = ADMIN_EMAILS.includes(user.email.toLowerCase());
+        setIsAuthorizedAdmin(isAuthorized);
+        
+        // If we're in admin mode but user is not authorized, disable admin mode
+        if (isAdminMode && !isAuthorized) {
+          setIsAdminMode(false);
+          setSuccess("Admin mode disabled - unauthorized user");
+          setTimeout(() => setSuccess(null), 3000);
+        }
+        
+        return isAuthorized;
+      }
+      return false;
+    } catch (error) {
+      console.error("Error checking user authorization:", error);
+      return false;
+    }
+  }, [isAdminMode]);
+
+  // Secret admin mode activation - Press and hold the header
+  const handleSecretClick = () => {
+    if (!isAuthorizedAdmin) return;
+    
+    setSecretClickCount(prev => prev + 1);
+    
+    if (secretClickTimeout) {
+      clearTimeout(secretClickTimeout);
+    }
+    
+    const timeout = setTimeout(() => {
+      setSecretClickCount(0);
+    }, 2000);
+    
+    setSecretClickTimeout(timeout);
+    
+    if (secretClickCount + 1 >= 5) {
+      // 5 clicks activates admin mode
+      setIsAdminMode(true);
+      setSecretClickCount(0);
+      setSuccess("🔓 Admin Mode Activated! You can now edit items and restock.");
+      setTimeout(() => setSuccess(null), 5000);
+    }
+  };
+
+  // Secret key combination: Ctrl+Shift+A (or Cmd+Shift+A)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (!isAuthorizedAdmin) return;
+      
+      // Check for Ctrl+Shift+A or Cmd+Shift+A
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'A') {
+        e.preventDefault();
+        setIsAdminMode(prev => !prev);
+        if (!isAdminMode) {
+          setSuccess("🔓 Admin Mode Activated!");
+        } else {
+          setSuccess("🔒 Admin Mode Deactivated");
+        }
+        setTimeout(() => setSuccess(null), 3000);
+      }
+    };
+    
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isAdminMode, isAuthorizedAdmin]);
+
+  // Show admin hint after 3 seconds if not in admin mode
+  useEffect(() => {
+    if (!isAdminMode && isAuthorizedAdmin && !showAdminHint) {
+      const timer = setTimeout(() => {
+        setShowAdminHint(true);
+        setTimeout(() => setShowAdminHint(false), 5000);
+      }, 3000);
+      return () => clearTimeout(timer);
+    }
+  }, [isAdminMode, isAuthorizedAdmin]);
+
+  // Check user authorization on mount
+  useEffect(() => {
+    checkUserAuthorization();
+  }, [checkUserAuthorization]);
 
   // Get current week dates
   const getCurrentWeekDates = () => {
@@ -303,7 +420,7 @@ const StaffDetailsPage = () => {
     }, 5000);
   };
 
-  // FIXED: Fetch staff details with better error handling
+  // Fetch staff details
   const fetchStaffDetails = useCallback(async () => {
     if (!staffId) return;
 
@@ -314,7 +431,6 @@ const StaffDetailsPage = () => {
     try {
       console.log(`Fetching staff details for ID: ${staffId}`);
       
-      // Try your specific endpoints
       const endpoints = [
         `/api/staff/${staffId}/inventory`,
         `/api/staff/${staffId}?include=inventories,sales`
@@ -323,7 +439,6 @@ const StaffDetailsPage = () => {
       let response = null;
       let data = null;
 
-      // Try each endpoint
       for (const endpoint of endpoints) {
         try {
           console.log(`Trying endpoint: ${endpoint}`);
@@ -344,7 +459,6 @@ const StaffDetailsPage = () => {
         throw new Error("Failed to fetch staff inventory");
       }
 
-      // Handle different response structures
       let staffData: Staff | null = null;
       let inventories: StaffInventory[] = [];
       let sales: Sale[] = [];
@@ -354,24 +468,20 @@ const StaffDetailsPage = () => {
       }
 
       if (data.data) {
-        // Response wrapped in data property
         const responseData = data.data;
         staffData = responseData.staff || responseData;
         inventories = responseData.inventories || responseData.staffInventories || [];
         sales = responseData.sales || [];
       } else if (data.staff) {
-        // Staff data at root
         staffData = data.staff;
         inventories = data.staff.staffInventories || [];
         sales = data.staff.sales || [];
       } else {
-        // Assume data is staff object
         staffData = data;
         inventories = data.staffInventories || [];
         sales = data.sales || [];
       }
 
-      // If still no staff data, create a basic object
       if (!staffData) {
         staffData = {
           id: parseInt(staffId),
@@ -389,14 +499,12 @@ const StaffDetailsPage = () => {
 
       setStaff(staffData);
       
-      // Process weekly data
       processWeeklyData(inventories, sales);
 
     } catch (err: any) {
       console.error("Error in fetchStaffDetails:", err);
       handleError(err, "Failed to load staff details");
       
-      // Set empty data
       setStaff({
         id: parseInt(staffId),
         name: "Staff Member",
@@ -411,36 +519,29 @@ const StaffDetailsPage = () => {
     }
   }, [staffId]);
 
-  // FIXED: Fetch available stock for a product
+  // Fetch product stock
   const fetchProductStock = async (productId: number): Promise<number> => {
     try {
       console.log(`Fetching stock for product ID: ${productId}`);
       
-      // Check if we already have the stock data from fetchAllStockData
       const stockItem = stockData.find(stock => stock.productId === productId);
       if (stockItem) {
         console.log(`Found stock in local state: ${stockItem.quantity}`);
         return stockItem.quantity;
       }
       
-      // Try the direct stock API first
       try {
         const response = await fetch(`/api/stock?productId=${productId}`);
         if (response.ok) {
           const data = await response.json();
-          console.log("Direct stock API response:", data);
-          
           if (Array.isArray(data)) {
             const productStock = data.find((s: any) => s.productId === productId);
             if (productStock?.quantity !== undefined) {
-              console.log(`Found stock from direct API: ${productStock.quantity}`);
               return productStock.quantity;
             }
           } else if (data?.quantity !== undefined) {
-            console.log(`Found stock from direct API (single): ${data.quantity}`);
             return data.quantity;
           } else if (data?.data?.quantity !== undefined) {
-            console.log(`Found stock from direct API (nested): ${data.data.quantity}`);
             return data.data.quantity;
           }
         }
@@ -448,14 +549,10 @@ const StaffDetailsPage = () => {
         console.log("Direct stock API failed");
       }
       
-      // Try the products API
       try {
         const response = await fetch(`/api/products/${productId}`);
         if (response.ok) {
           const data = await response.json();
-          console.log("Products API response:", data);
-          
-          // Check different response structures
           const stockQuantity = 
             data?.stock?.[0]?.quantity ||
             data?.data?.stock?.[0]?.quantity ||
@@ -464,9 +561,7 @@ const StaffDetailsPage = () => {
             data?.availableStock ||
             data?.data?.availableStock ||
             0;
-          
           if (stockQuantity > 0) {
-            console.log(`Found stock from products API: ${stockQuantity}`);
             return stockQuantity;
           }
         }
@@ -474,23 +569,6 @@ const StaffDetailsPage = () => {
         console.log("Products API failed");
       }
       
-      // Try the inventory API
-      try {
-        const response = await fetch(`/api/inventory?productId=${productId}`);
-        if (response.ok) {
-          const data = await response.json();
-          console.log("Inventory API response:", data);
-          
-          if (data?.quantity !== undefined) {
-            console.log(`Found stock from inventory API: ${data.quantity}`);
-            return data.quantity;
-          }
-        }
-      } catch (inventoryError) {
-        console.log("Inventory API failed");
-      }
-      
-      console.log(`No stock found for product ${productId}, returning 0`);
       return 0;
       
     } catch (err) {
@@ -499,30 +577,21 @@ const StaffDetailsPage = () => {
     }
   };
 
-  // FIXED: Fetch all stock data
+  // Fetch all stock data
   const fetchAllStockData = async () => {
     try {
       console.log("Fetching all stock data...");
       
-      // Try multiple endpoints
-      const endpoints = [
-        '/api/stock',
-        '/api/products/stock',
-        '/api/inventory'
-      ];
-      
+      const endpoints = ['/api/stock', '/api/products/stock', '/api/inventory'];
       let stockDataResult: Stock[] = [];
       
       for (const endpoint of endpoints) {
         try {
-          console.log(`Trying endpoint: ${endpoint}`);
           const response = await fetch(endpoint);
           
           if (response.ok) {
             const data = await response.json();
-            console.log(`Response from ${endpoint}:`, data);
             
-            // Handle different response structures
             if (Array.isArray(data)) {
               stockDataResult = data.map((item: any) => ({
                 id: item.id,
@@ -554,33 +623,25 @@ const StaffDetailsPage = () => {
         }
       }
       
-      // If we got stock data, also extract from staff inventory
       if (staff && weeklyPerformance.length > 0) {
-        try {
-          // Extract stock from all inventory items
-          const allInventoryItems = weeklyPerformance.flatMap(week => week.inventory);
-          const stockFromInventory: Stock[] = [];
-          
-          allInventoryItems.forEach(item => {
-            if (item.product && item.product.stock && item.product.stock.length > 0) {
-              const stockItem = item.product.stock[0];
-              if (!stockDataResult.find(s => s.productId === stockItem.productId)) {
-                stockFromInventory.push(stockItem);
-              }
+        const allInventoryItems = weeklyPerformance.flatMap(week => week.inventory);
+        const stockFromInventory: Stock[] = [];
+        
+        allInventoryItems.forEach(item => {
+          if (item.product && item.product.stock && item.product.stock.length > 0) {
+            const stockItem = item.product.stock[0];
+            if (!stockDataResult.find(s => s.productId === stockItem.productId)) {
+              stockFromInventory.push(stockItem);
             }
-          });
-          
-          // Add inventory stock to results
-          stockDataResult = [...stockDataResult, ...stockFromInventory];
-        } catch (err) {
-          console.log("Could not extract stock from inventory:", err);
-        }
+          }
+        });
+        
+        stockDataResult = [...stockDataResult, ...stockFromInventory];
       }
       
       console.log("Final stock data to set:", stockDataResult);
       setStockData(stockDataResult);
       
-      // Also update available stock for any currently editing item
       if (editingItem) {
         const stockItem = stockDataResult.find(stock => stock.productId === editingItem.productId);
         setAvailableStock(stockItem ? stockItem.quantity : 0);
@@ -592,26 +653,17 @@ const StaffDetailsPage = () => {
     }
   };
 
-  // FIXED: Get available stock from state
+  // Get available stock
   const getAvailableStock = (productId: number): number => {
     const stockItem = stockData.find(stock => stock.productId === productId);
-    
-    if (stockItem) {
-      console.log(`Found stock for product ${productId}: ${stockItem.quantity}`);
-      return stockItem.quantity;
-    }
-    
-    console.log(`Stock not found in state for product ${productId}`);
-    return 0;
+    return stockItem ? stockItem.quantity : 0;
   };
 
-  // FIXED: Process weekly data
+  // Process weekly data
   const processWeeklyData = (inventories: StaffInventory[], sales: Sale[]) => {
     console.log("Processing weekly data with inventories:", inventories);
-    console.log("Processing weekly data with sales:", sales);
     
     if (!inventories || inventories.length === 0) {
-      console.log("No inventories to process");
       setWeeklyPerformance([]);
       return;
     }
@@ -619,11 +671,9 @@ const StaffDetailsPage = () => {
     const weeklyMap = new Map<string, WeeklyPerformance>();
     const now = new Date();
     
-    // Group inventories by week
     inventories.forEach((inventory) => {
       if (!inventory) return;
 
-      // Handle missing week dates - assign to current week
       let weekStartDate: Date;
       let weekEndDate: Date;
       
@@ -631,7 +681,6 @@ const StaffDetailsPage = () => {
         weekStartDate = new Date(inventory.weekStartDate);
         weekEndDate = new Date(inventory.weekEndDate);
       } else {
-        // Assign to current week if dates are missing
         const currentWeek = getCurrentWeekDates();
         weekStartDate = currentWeek.weekStartDate;
         weekEndDate = currentWeek.weekEndDate;
@@ -642,7 +691,6 @@ const StaffDetailsPage = () => {
       if (!weeklyMap.has(weekKey)) {
         const isActive = now >= weekStartDate && now <= weekEndDate;
         const isCompleted = now > weekEndDate;
-        const isUpcoming = now < weekStartDate;
         
         weeklyMap.set(weekKey, {
           week: `Week ${formatDateShort(weekStartDate)}`,
@@ -667,7 +715,6 @@ const StaffDetailsPage = () => {
       weekData.inventory.push(inventory);
     });
     
-    // Add sales to weeks
     if (sales && Array.isArray(sales)) {
       sales.forEach(sale => {
         if (!sale || !sale.date) return;
@@ -684,7 +731,6 @@ const StaffDetailsPage = () => {
       });
     }
     
-    // Calculate metrics
     weeklyMap.forEach(weekData => {
       weekData.remaining = weekData.totalGiven - weekData.totalSold - weekData.totalReturned;
       weekData.sellThroughRate = weekData.totalGiven > 0 
@@ -692,7 +738,6 @@ const StaffDetailsPage = () => {
         : 0;
     });
     
-    // Sort by date (newest first)
     const weeklyArray = Array.from(weeklyMap.values()).sort((a, b) => 
       b.weekStart.getTime() - a.weekStart.getTime()
     );
@@ -701,8 +746,14 @@ const StaffDetailsPage = () => {
     setWeeklyPerformance(weeklyArray);
   };
 
-  // Handle edit click
+  // Handle edit click (only available in admin mode)
   const handleEditClick = async (item: StaffInventory) => {
+    if (!isAdminMode) {
+      setError("Admin mode required to edit items. Press and hold the header or press Ctrl+Shift+A to activate.");
+      setTimeout(() => setError(null), 3000);
+      return;
+    }
+    
     console.log("Edit clicked for item:", item);
     setEditingItem(item);
     setEditForm({
@@ -713,17 +764,12 @@ const StaffDetailsPage = () => {
       weekEndDate: item.weekEndDate ? new Date(item.weekEndDate).toISOString().split('T')[0] : ''
     });
     
-    // Fetch current stock
     try {
-      console.log(`Fetching stock for product ${item.productId}...`);
       const stock = await fetchProductStock(item.productId);
-      console.log(`Stock fetched: ${stock}`);
       setAvailableStock(stock);
       setStockError(null);
       
-      // If stock is 0, try to refresh stock data
       if (stock === 0) {
-        console.log("Stock is 0, refreshing stock data...");
         await fetchAllStockData();
       }
     } catch (err) {
@@ -733,9 +779,79 @@ const StaffDetailsPage = () => {
     }
   };
 
-  // FIXED: Handle save edit
+  // Handle restock items (new feature)
+  const handleRestockClick = (inventory: StaffInventory) => {
+    if (!isAdminMode) {
+      setError("Admin mode required to restock items. Press and hold the header or press Ctrl+Shift+A to activate.");
+      setTimeout(() => setError(null), 3000);
+      return;
+    }
+    
+    setRestockProduct(inventory.product);
+    setRestockInventoryId(inventory.id);
+    setRestockQuantity('');
+    setShowRestockModal(true);
+  };
+
+  // Process restock
+  const handleProcessRestock = async () => {
+    if (!restockInventoryId || !restockProduct) return;
+    
+    const quantity = parseInt(restockQuantity);
+    if (quantity <= 0) {
+      setError("Please enter a valid quantity");
+      return;
+    }
+    
+    setActionLoading(true);
+    
+    try {
+      // Call API to restock
+      const response = await fetch('/api/staff-inventory/restock', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          inventoryId: restockInventoryId,
+          productId: restockProduct.id,
+          quantity: quantity,
+          reason: "Admin restock"
+        })
+      });
+      
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to restock');
+      }
+      
+      setSuccess(`Successfully restocked ${quantity} ${restockProduct.name}(s)`);
+      setShowRestockModal(false);
+      setRestockProduct(null);
+      setRestockInventoryId(null);
+      setRestockQuantity('');
+      
+      // Refresh data
+      await Promise.all([
+        fetchStaffDetails(),
+        fetchAllStockData()
+      ]);
+      
+    } catch (err: any) {
+      console.error("Error restocking:", err);
+      handleError(err, 'Failed to restock items');
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  // Handle save edit
   const handleSaveEdit = async () => {
     if (!editingItem) return;
+
+    if (!isAdminMode) {
+      setError("Admin mode required to save changes. Press and hold the header or press Ctrl+Shift+A to activate.");
+      setTimeout(() => setError(null), 3000);
+      return;
+    }
 
     try {
       setActionLoading(true);
@@ -747,10 +863,8 @@ const StaffDetailsPage = () => {
       const newQuantityReturned = parseInt(editForm.quantityReturned) || 0;
       
       const currentGiven = editingItem.quantityGiven || 0;
-      const currentSold = editingItem.quantitySold || 0;
-      const currentReturned = editingItem.quantityReturned || 0;
+      const quantityGivenDiff = newQuantityGiven - currentGiven;
 
-      // Validate quantities
       if (newQuantitySold > newQuantityGiven) {
         setStockError("Sold quantity cannot exceed assigned quantity");
         return;
@@ -761,24 +875,14 @@ const StaffDetailsPage = () => {
         return;
       }
 
-      // Calculate adjustments
-      const quantityGivenDiff = newQuantityGiven - currentGiven;
-      const quantitySoldDiff = newQuantitySold - currentSold;
-      const quantityReturnedDiff = newQuantityReturned - currentReturned;
-
-      // Check if we're adding more items than available stock
       if (quantityGivenDiff > 0) {
-        // Get fresh stock data
         const currentStock = await fetchProductStock(editingItem.productId);
-        console.log(`Current stock for validation: ${currentStock}, Diff: ${quantityGivenDiff}`);
-        
         if (quantityGivenDiff > currentStock) {
           setStockError(`Cannot add ${quantityGivenDiff} items. Only ${currentStock} available in stock.`);
           return;
         }
       }
 
-      // Prepare update data
       const updateData = {
         id: editingItem.id,
         quantityGiven: newQuantityGiven,
@@ -788,14 +892,9 @@ const StaffDetailsPage = () => {
         weekEndDate: editForm.weekEndDate || editingItem.weekEndDate
       };
 
-      console.log("Updating inventory with data:", updateData);
-
-      // Call the API
       const response = await fetch(`/api/staff-inventory`, {
         method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(updateData),
       });
 
@@ -808,7 +907,6 @@ const StaffDetailsPage = () => {
       setSuccess('Assignment updated successfully!');
       setEditingItem(null);
       
-      // Refresh data
       await Promise.all([
         fetchStaffDetails(),
         fetchAllStockData()
@@ -824,6 +922,12 @@ const StaffDetailsPage = () => {
 
   // Handle delete assignment
   const handleDeleteAssignment = async (id: number) => {
+    if (!isAdminMode) {
+      setError("Admin mode required to delete assignments.");
+      setTimeout(() => setError(null), 3000);
+      return;
+    }
+    
     if (!confirm('Are you sure you want to delete this assignment? This will return items to stock.')) {
       return;
     }
@@ -832,7 +936,6 @@ const StaffDetailsPage = () => {
     setError(null);
 
     try {
-      // Use the staff-inventory DELETE endpoint
       const response = await fetch(`/api/staff-inventory?id=${id}`, {
         method: 'DELETE',
       });
@@ -845,7 +948,6 @@ const StaffDetailsPage = () => {
 
       setSuccess(`Assignment deleted successfully! Items returned to stock.`);
       
-      // Refresh data
       await Promise.all([
         fetchStaffDetails(),
         fetchAllStockData()
@@ -859,26 +961,20 @@ const StaffDetailsPage = () => {
     }
   };
 
-  // FIXED: Filter inventory in week details
+  // Get filtered inventory
   const getFilteredInventory = () => {
     if (!selectedWeek) return [];
     
-    // First, filter by week dates to only show items from this week
     const weekInventory = selectedWeek.inventory.filter(inv => {
       const invWeekStart = inv.weekStartDate ? new Date(inv.weekStartDate) : null;
       const invWeekEnd = inv.weekEndDate ? new Date(inv.weekEndDate) : null;
       
       if (!invWeekStart || !invWeekEnd) return false;
       
-      // Check if inventory dates match the selected week
-      const isSameWeek = 
-        invWeekStart.getTime() === selectedWeek.weekStart.getTime() &&
-        invWeekEnd.getTime() === selectedWeek.weekEnd.getTime();
-      
-      return isSameWeek;
+      return invWeekStart.getTime() === selectedWeek.weekStart.getTime() &&
+             invWeekEnd.getTime() === selectedWeek.weekEnd.getTime();
     });
     
-    // Then apply search filter if any
     if (!searchProductQuery) return weekInventory;
     
     const query = searchProductQuery.toLowerCase();
@@ -895,6 +991,12 @@ const StaffDetailsPage = () => {
       return;
     }
 
+    if (!isAdminMode) {
+      setError("Admin mode required to process returns.");
+      setTimeout(() => setError(null), 3000);
+      return;
+    }
+
     const returnQty = parseInt(returnQuantity);
     const currentGiven = selectedInventory.quantityGiven || 0;
     const currentSold = selectedInventory.quantitySold || 0;
@@ -907,10 +1009,8 @@ const StaffDetailsPage = () => {
     }
 
     try {
-      // Calculate new returned quantity
       const newQuantityReturned = currentReturned + returnQty;
       
-      // Use the API
       const updateData = {
         id: selectedInventory.id,
         quantityReturned: newQuantityReturned,
@@ -919,9 +1019,7 @@ const StaffDetailsPage = () => {
 
       const response = await fetch(`/api/staff-inventory`, {
         method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(updateData),
       });
 
@@ -930,8 +1028,6 @@ const StaffDetailsPage = () => {
         throw new Error(data.error || 'Failed to process return');
       }
 
-      const data = await response.json();
-      
       setSuccess(`${returnQty} items returned successfully!`);
       setShowReturnModal(false);
       setSelectedInventory(null);
@@ -949,10 +1045,16 @@ const StaffDetailsPage = () => {
     }
   };
 
-  // FIXED: Handle add/remove items
+  // Handle add/remove items
   const handleAdjustItems = async () => {
     if (!selectedInventory || !adjustQuantity) {
       setError("Please enter quantity");
+      return;
+    }
+
+    if (!isAdminMode) {
+      setError("Admin mode required to adjust items.");
+      setTimeout(() => setError(null), 3000);
       return;
     }
 
@@ -963,58 +1065,41 @@ const StaffDetailsPage = () => {
     }
 
     try {
-      // Get the actual available stock from the server
       const availableStockFromServer = await fetchProductStock(selectedInventory.productId);
-      console.log(`Available stock for product ${selectedInventory.productId}: ${availableStockFromServer}`);
       
-      if (adjustType === 'add') {
-        if (adjustQty > availableStockFromServer) {
-          setError(`Cannot add ${adjustQty} items. Only ${availableStockFromServer} available in stock.`);
-          
-          // Refresh stock data
-          await fetchAllStockData();
-          return;
-        }
+      if (adjustType === 'add' && adjustQty > availableStockFromServer) {
+        setError(`Cannot add ${adjustQty} items. Only ${availableStockFromServer} available in stock.`);
+        await fetchAllStockData();
+        return;
       }
 
-      // Calculate current remaining
       const currentGiven = selectedInventory.quantityGiven || 0;
       const currentSold = selectedInventory.quantitySold || 0;
       const currentReturned = selectedInventory.quantityReturned || 0;
       const remaining = currentGiven - currentSold - currentReturned;
       
-      // Check if we're removing more than available
-      if (adjustType === 'remove') {
-        if (adjustQty > remaining) {
-          setError(`Cannot remove ${adjustQty} items. Only ${remaining} remaining.`);
-          return;
-        }
+      if (adjustType === 'remove' && adjustQty > remaining) {
+        setError(`Cannot remove ${adjustQty} items. Only ${remaining} remaining.`);
+        return;
       }
 
-      // Prepare update data - use the simple format
       const updateData = {
-        id: selectedInventory.id, // Required for the API
-        adjustType, // 'add' or 'remove'
+        id: selectedInventory.id,
+        adjustType,
         adjustQuantity: adjustQty,
         adjustReason: adjustReason || undefined
       };
 
-      console.log("Sending adjustment request:", updateData);
-
-      // Call the staff-inventory API PUT endpoint
       const response = await fetch(`/api/staff-inventory`, {
         method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(updateData),
       });
 
       const data = await response.json();
-      console.log("API Response:", data);
 
       if (!response.ok) {
-        throw new Error(data.error || data.message || `Failed to adjust inventory. Status: ${response.status}`);
+        throw new Error(data.error || data.message || `Failed to adjust inventory`);
       }
 
       setSuccess(`${adjustType === 'add' ? 'Added' : 'Removed'} ${adjustQty} items successfully!`);
@@ -1023,10 +1108,9 @@ const StaffDetailsPage = () => {
       setAdjustQuantity('');
       setAdjustReason('');
       
-      // Refresh data
       await Promise.all([
         fetchStaffDetails(),
-        fetchAllStockData() // Make sure to refresh stock data
+        fetchAllStockData()
       ]);
 
     } catch (error: any) {
@@ -1042,12 +1126,9 @@ const StaffDetailsPage = () => {
     setLoadingCloseWeek(weekToClose.week);
     
     try {
-      // Use your API endpoint
       const response = await fetch(`/api/staff/${staffId}/close-week`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           weekStart: weekToClose.weekStart.toISOString(),
           weekEnd: weekToClose.weekEnd.toISOString(),
@@ -1071,7 +1152,6 @@ const StaffDetailsPage = () => {
       setShowCloseWeekModal(false);
       setWeekToClose(null);
       
-      // Generate CSV for returned items
       if (data.returnedItems && data.returnedItems.length > 0) {
         generateReturnItemsCSV(data.returnedItems, weekToClose);
       }
@@ -1151,7 +1231,6 @@ const StaffDetailsPage = () => {
       ['Product Name', 'Category', 'Assigned', 'Sold', 'Returned', 'Remaining', 'Sell-through %']
     ];
     
-    // Only include items from this week
     const weekInventory = week.inventory.filter(inv => {
       const invWeekStart = inv.weekStartDate ? new Date(inv.weekStartDate) : null;
       const invWeekEnd = inv.weekEndDate ? new Date(inv.weekEndDate) : null;
@@ -1164,9 +1243,7 @@ const StaffDetailsPage = () => {
       const quantityGiven = inventory.quantityGiven || 0;
       const quantitySold = inventory.quantitySold || 0;
       const quantityReturned = inventory.quantityReturned || 0;
-      const sellThrough = quantityGiven > 0 
-        ? (quantitySold / quantityGiven) * 100 
-        : 0;
+      const sellThrough = quantityGiven > 0 ? (quantitySold / quantityGiven) * 100 : 0;
       
       csvContent.push([
         inventory.product?.name || 'Unknown',
@@ -1178,22 +1255,6 @@ const StaffDetailsPage = () => {
         `${sellThrough.toFixed(1)}%`
       ]);
     });
-    
-    if (week.totalReturned > 0) {
-      csvContent.push([]);
-      csvContent.push(['Returned Items Summary (This Week)']);
-      csvContent.push(['Total Items Returned', week.totalReturned.toString()]);
-      
-      // Group returned items by product from this week only
-      const returnedByProduct = weekInventory.filter(inv => (inv.quantityReturned || 0) > 0);
-      returnedByProduct.forEach((inventory) => {
-        csvContent.push([
-          inventory.product?.name || 'Unknown',
-          inventory.product?.category || 'N/A',
-          (inventory.quantityReturned || 0).toString()
-        ]);
-      });
-    }
     
     const csvString = csvContent.map(row => row.join(',')).join('\n');
     const blob = new Blob([csvString], { type: 'text/csv' });
@@ -1229,7 +1290,7 @@ const StaffDetailsPage = () => {
     });
   };
 
-  // Format short date for week label
+  // Format short date
   const formatDateShort = (date: Date) => {
     return date.toLocaleDateString('en-KE', {
       day: '2-digit',
@@ -1267,7 +1328,6 @@ const StaffDetailsPage = () => {
 
   // Initial load
   useEffect(() => {
-    console.log("Component mounted, staffId:", staffId);
     const loadData = async () => {
       await Promise.all([
         fetchStaffDetails(),
@@ -1278,6 +1338,8 @@ const StaffDetailsPage = () => {
     loadData();
   }, [fetchStaffDetails]);
 
+  const totalStats = calculateTotalStats();
+
   if (loading) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 p-4">
@@ -1286,31 +1348,6 @@ const StaffDetailsPage = () => {
             <div className="text-center">
               <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500 mx-auto"></div>
               <div className="mt-4 text-black">Loading staff details...</div>
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  if (error && !staff) {
-    return (
-      <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 p-4">
-        <div className="max-w-6xl mx-auto">
-          <div className="bg-red-50 border border-red-100 rounded-xl p-6 shadow-sm">
-            <div className="flex items-start gap-3">
-              <AlertCircle className="w-6 h-6 text-red-500 flex-shrink-0 mt-0.5" />
-              <div>
-                <div className="font-semibold text-red-800">Error Loading Staff Details</div>
-                <div className="text-red-700 mt-1">{error}</div>
-                <button
-                  onClick={() => router.push('/admin/staff')}
-                  className="mt-4 inline-flex items-center gap-2 px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors shadow-sm"
-                >
-                  <ArrowLeft className="w-4 h-4" />
-                  Back to Staff Management
-                </button>
-              </div>
             </div>
           </div>
         </div>
@@ -1338,11 +1375,36 @@ const StaffDetailsPage = () => {
     );
   }
 
-  const totalStats = calculateTotalStats();
-
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 p-3 sm:p-4">
       <div className="max-w-6xl mx-auto">
+        {/* Admin Mode Banner */}
+        {isAdminMode && (
+          <div className="mb-4 bg-green-50 border border-green-200 text-green-700 px-4 py-2 rounded-lg flex items-center justify-between shadow-sm animate-fadeIn">
+            <div className="flex items-center gap-2">
+              <Unlock className="w-4 h-4" />
+              <span className="text-sm font-medium">Admin Mode Active - You can edit items and restock</span>
+            </div>
+            <button
+              onClick={() => setIsAdminMode(false)}
+              className="text-green-700 hover:text-green-900"
+            >
+              <X size={16} />
+            </button>
+          </div>
+        )}
+        
+        {/* Admin Hint */}
+        {showAdminHint && !isAdminMode && isAuthorizedAdmin && (
+          <div className="mb-4 bg-blue-50 border border-blue-200 text-blue-700 px-4 py-2 rounded-lg flex items-center gap-2 shadow-sm animate-fadeIn">
+            <Shield className="w-4 h-4" />
+            <span className="text-sm">🔒 Admin Mode: Press and hold the header or press Ctrl+Shift+A to activate editing & restocking</span>
+            <button onClick={() => setShowAdminHint(false)} className="ml-auto">
+              <X size={14} />
+            </button>
+          </div>
+        )}
+
         {/* Alerts */}
         {error && (
           <div className="mb-4 bg-red-50 border border-red-100 text-red-700 px-4 py-3 rounded-lg flex items-start gap-2 shadow-sm animate-fadeIn">
@@ -1360,10 +1422,13 @@ const StaffDetailsPage = () => {
           <div className="mb-4 bg-emerald-50 border border-emerald-100 text-emerald-700 px-4 py-3 rounded-lg flex items-start gap-2 shadow-sm animate-fadeIn">
             <CheckCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
             <span className="text-sm">{success}</span>
+            <button onClick={() => setSuccess(null)} className="ml-auto">
+              <X size={14} />
+            </button>
           </div>
         )}
 
-        {/* Header */}
+        {/* Header with secret click handler */}
         <div className="mb-6">
           <div className="flex items-center justify-between mb-4">
             <Link
@@ -1375,6 +1440,21 @@ const StaffDetailsPage = () => {
             </Link>
             
             <div className="flex items-center gap-2">
+              {/* Admin Mode Indicator */}
+              <div className="flex items-center gap-1">
+                {isAdminMode ? (
+                  <div className="flex items-center gap-1 bg-green-100 text-green-700 px-2 py-1 rounded-lg text-xs">
+                    <Unlock className="w-3 h-3" />
+                    <span>Admin</span>
+                  </div>
+                ) : isAuthorizedAdmin ? (
+                  <div className="flex items-center gap-1 bg-gray-100 text-gray-600 px-2 py-1 rounded-lg text-xs">
+                    <Lock className="w-3 h-3" />
+                    <span>View Only</span>
+                  </div>
+                ) : null}
+              </div>
+              
               <button
                 onClick={fetchStaffDetails}
                 className="inline-flex items-center gap-2 px-3 py-1.5 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors text-sm shadow-sm"
@@ -1382,22 +1462,34 @@ const StaffDetailsPage = () => {
                 <RefreshCw className="w-3 h-3" />
                 <span className="hidden sm:inline">Refresh</span>
               </button>
-              <Link
-                href="/admin/inventory/assign"
-                className="inline-flex items-center gap-2 px-3 py-1.5 bg-emerald-500 text-white rounded-lg hover:bg-emerald-600 transition-colors text-sm shadow-sm"
-              >
-                <Plus className="w-3 h-3" />
-                <span className="hidden sm:inline">Assign New</span>
-              </Link>
+              {isAdminMode && (
+                <Link
+                  href="/admin/inventory/assign"
+                  className="inline-flex items-center gap-2 px-3 py-1.5 bg-emerald-500 text-white rounded-lg hover:bg-emerald-600 transition-colors text-sm shadow-sm"
+                >
+                  <Plus className="w-3 h-3" />
+                  <span className="hidden sm:inline">Assign New</span>
+                </Link>
+              )}
             </div>
           </div>
 
-          {/* Staff Info Card */}
-          <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-4 sm:p-6">
+          {/* Staff Info Card - Secret click area */}
+          <div 
+            className="bg-white rounded-xl shadow-sm border border-gray-200 p-4 sm:p-6 cursor-pointer transition-all hover:shadow-md"
+            onClick={handleSecretClick}
+            onTouchStart={handleSecretClick}
+            title={isAuthorizedAdmin ? "Tap 5 times to activate Admin Mode" : "Admin mode restricted"}
+          >
             <div className="flex flex-col sm:flex-row sm:items-start gap-4">
               <div className="flex items-center gap-3 sm:flex-col sm:items-start">
-                <div className="w-14 h-14 sm:w-16 sm:h-16 bg-gradient-to-br from-blue-500 to-blue-600 rounded-full flex items-center justify-center shadow-md">
+                <div className="w-14 h-14 sm:w-16 sm:h-16 bg-gradient-to-br from-blue-500 to-blue-600 rounded-full flex items-center justify-center shadow-md relative">
                   <User className="w-6 h-6 sm:w-8 sm:h-8 text-white" />
+                  {isAdminMode && (
+                    <div className="absolute -top-1 -right-1 bg-green-500 rounded-full p-0.5">
+                      <Shield className="w-3 h-3 text-white" />
+                    </div>
+                  )}
                 </div>
                 <div className="sm:hidden">
                   <div className="text-lg font-bold text-black">{staff.name}</div>
@@ -1443,6 +1535,13 @@ const StaffDetailsPage = () => {
               </div>
             </div>
           </div>
+          
+          {isAuthorizedAdmin && !isAdminMode && (
+            <div className="mt-2 text-xs text-center text-gray-400">
+              <Shield className="w-3 h-3 inline mr-1" />
+              Tap the staff card 5 times or press Ctrl+Shift+A to enable editing
+            </div>
+          )}
         </div>
 
         {/* Quick Stats */}
@@ -1461,9 +1560,7 @@ const StaffDetailsPage = () => {
             <div className="flex items-center justify-between">
               <div>
                 <div className="text-xs font-medium text-black">Total Assigned</div>
-                <div className="text-xl font-bold text-black mt-1">
-                  {totalStats.totalGiven}
-                </div>
+                <div className="text-xl font-bold text-black mt-1">{totalStats.totalGiven}</div>
               </div>
               <Package className="w-6 h-6 text-emerald-500" />
             </div>
@@ -1473,9 +1570,7 @@ const StaffDetailsPage = () => {
             <div className="flex items-center justify-between">
               <div>
                 <div className="text-xs font-medium text-black">Total Returned</div>
-                <div className="text-xl font-bold text-black mt-1">
-                  {totalStats.totalReturned}
-                </div>
+                <div className="text-xl font-bold text-black mt-1">{totalStats.totalReturned}</div>
               </div>
               <PackageX className="w-6 h-6 text-orange-500" />
             </div>
@@ -1495,6 +1590,87 @@ const StaffDetailsPage = () => {
             </div>
           </div>
         </div>
+
+        {/* Restock Modal */}
+        {showRestockModal && restockProduct && (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-3 sm:p-4 z-50">
+            <div className="bg-white rounded-xl shadow-xl w-full max-w-sm">
+              <div className="px-4 sm:px-6 py-4 border-b border-gray-200">
+                <div className="flex items-center justify-between">
+                  <div className="text-lg font-semibold text-black">Restock Items</div>
+                  <button
+                    onClick={() => {
+                      setShowRestockModal(false);
+                      setRestockProduct(null);
+                      setRestockQuantity('');
+                    }}
+                    className="p-1 hover:bg-gray-100 rounded-lg transition-colors"
+                  >
+                    <X className="w-5 h-5 text-gray-500" />
+                  </button>
+                </div>
+              </div>
+              
+              <div className="p-4 sm:p-6">
+                <div className="space-y-4">
+                  <div className="bg-gray-50 rounded-xl p-4 border border-gray-200">
+                    <div className="text-sm font-medium text-black mb-1">Product</div>
+                    <div className="text-lg font-bold text-black">{restockProduct.name}</div>
+                    <div className="text-xs text-black mt-1">Category: {restockProduct.category || 'N/A'}</div>
+                  </div>
+                  
+                  <div>
+                    <label className="block text-sm font-medium text-black mb-1">
+                      Quantity to Restock
+                    </label>
+                    <input
+                      type="number"
+                      value={restockQuantity}
+                      onChange={(e) => setRestockQuantity(e.target.value)}
+                      className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-black"
+                      placeholder="Enter quantity"
+                      min="1"
+                    />
+                    <div className="text-xs text-gray-500 mt-1">
+                      Items will be added to current assignment
+                    </div>
+                  </div>
+                </div>
+              </div>
+              
+              <div className="px-4 sm:px-6 py-4 border-t border-gray-200 flex justify-end gap-3">
+                <button
+                  onClick={() => {
+                    setShowRestockModal(false);
+                    setRestockProduct(null);
+                    setRestockQuantity('');
+                  }}
+                  className="px-4 py-2 border border-gray-300 text-black rounded-lg hover:bg-gray-50 transition-colors text-sm"
+                  disabled={actionLoading}
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleProcessRestock}
+                  disabled={!restockQuantity || actionLoading}
+                  className="px-4 py-2 bg-emerald-500 text-white rounded-lg hover:bg-emerald-600 transition-colors disabled:opacity-50 text-sm font-medium"
+                >
+                  {actionLoading ? (
+                    <>
+                      <div className="animate-spin rounded-full h-3 w-3 border-b-2 border-white mr-2 inline-block"></div>
+                      Restocking...
+                    </>
+                  ) : (
+                    <>
+                      <Package className="w-3 h-3 inline-block mr-1" />
+                      Restock
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Weekly Performance Section */}
         <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden mb-6">
@@ -1567,7 +1743,6 @@ const StaffDetailsPage = () => {
             filteredWeeklyPerformance.length > 0 ? (
               <div className="p-3 sm:p-4">
                 {viewMode === "grid" ? (
-                  // Grid View
                   <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                     {filteredWeeklyPerformance.map((week, index) => (
                       <div 
@@ -1641,7 +1816,7 @@ const StaffDetailsPage = () => {
                               Details
                             </button>
                             
-                            {week.status === 'active' && week.remaining > 0 && (
+                            {week.status === 'active' && week.remaining > 0 && isAdminMode && (
                               <button
                                 onClick={(e) => {
                                   e.stopPropagation();
@@ -1671,7 +1846,6 @@ const StaffDetailsPage = () => {
                     ))}
                   </div>
                 ) : (
-                  // List View
                   <div className="space-y-2">
                     {filteredWeeklyPerformance.map((week, index) => (
                       <div 
@@ -1723,7 +1897,7 @@ const StaffDetailsPage = () => {
                               >
                                 <Eye className="w-3 h-3" />
                               </button>
-                              {week.status === 'active' && week.remaining > 0 && (
+                              {week.status === 'active' && week.remaining > 0 && isAdminMode && (
                                 <button
                                   onClick={(e) => {
                                     e.stopPropagation();
@@ -1769,13 +1943,19 @@ const StaffDetailsPage = () => {
               <div className="text-sm text-black max-w-md mx-auto mb-6">
                 This staff member doesn't have any inventory assigned yet. Assign inventory to track their performance.
               </div>
-              <Link
-                href="/admin/inventory/assign"
-                className="inline-flex items-center gap-2 px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors text-sm shadow-sm"
-              >
-                <Plus className="w-4 h-4" />
-                Assign Inventory
-              </Link>
+              {isAdminMode ? (
+                <Link
+                  href="/admin/inventory/assign"
+                  className="inline-flex items-center gap-2 px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors text-sm shadow-sm"
+                >
+                  <Plus className="w-4 h-4" />
+                  Assign Inventory
+                </Link>
+              ) : (
+                <div className="text-sm text-gray-500">
+                  Enable Admin Mode to assign inventory
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -1844,22 +2024,24 @@ const StaffDetailsPage = () => {
                       )}
                     </div>
 
-                    {/* Debug Stock Info */}
-                    <div className="mt-2 p-2 bg-gray-100 rounded text-xs">
-                      <div className="font-medium">Stock Information:</div>
-                      <div>Product ID: {editingItem.productId}</div>
-                      <div>Stock in state: {stockData.find(s => s.productId === editingItem.productId)?.quantity || 0}</div>
-                      <button 
-                        onClick={async () => {
-                          const freshStock = await fetchProductStock(editingItem.productId);
-                          setAvailableStock(freshStock);
-                          await fetchAllStockData();
-                        }}
-                        className="mt-1 px-2 py-1 bg-blue-100 text-blue-700 rounded text-xs"
-                      >
-                        Refresh Stock Data
-                      </button>
-                    </div>
+                    {/* Debug Stock Info - Only in Admin Mode */}
+                    {isAdminMode && (
+                      <div className="mt-2 p-2 bg-gray-100 rounded text-xs">
+                        <div className="font-medium">Stock Information:</div>
+                        <div>Product ID: {editingItem.productId}</div>
+                        <div>Stock in state: {stockData.find(s => s.productId === editingItem.productId)?.quantity || 0}</div>
+                        <button 
+                          onClick={async () => {
+                            const freshStock = await fetchProductStock(editingItem.productId);
+                            setAvailableStock(freshStock);
+                            await fetchAllStockData();
+                          }}
+                          className="mt-1 px-2 py-1 bg-blue-100 text-blue-700 rounded text-xs"
+                        >
+                          Refresh Stock Data
+                        </button>
+                      </div>
+                    )}
                   </div>
 
                   {stockError && (
@@ -1955,41 +2137,50 @@ const StaffDetailsPage = () => {
                     </div>
                   )}
                   
-                  {/* Quick Actions */}
-                  <div className="border-t border-gray-200 pt-4">
-                    <div className="text-xs font-medium text-black mb-2">Quick Actions</div>
-                    <div className="flex gap-2">
-                      <button
-                        onClick={() => {
-                          setSelectedInventory(editingItem);
-                          setAdjustType('add');
-                          setAdjustQuantity('');
-                          setAdjustReason('');
-                          setShowAdjustModal(true);
-                          setEditingItem(null);
-                        }}
-                        disabled={availableStock <= 0}
-                        className="flex-1 py-2 bg-emerald-50 text-emerald-700 rounded-lg hover:bg-emerald-100 transition-colors text-xs font-medium flex items-center justify-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed"
-                      >
-                        <Plus className="w-3 h-3" />
-                        Add Items
-                      </button>
-                      <button
-                        onClick={() => {
-                          setSelectedInventory(editingItem);
-                          setAdjustType('remove');
-                          setAdjustQuantity('');
-                          setAdjustReason('');
-                          setShowAdjustModal(true);
-                          setEditingItem(null);
-                        }}
-                        className="flex-1 py-2 bg-orange-50 text-orange-700 rounded-lg hover:bg-orange-100 transition-colors text-xs font-medium flex items-center justify-center gap-1"
-                      >
-                        <Minus className="w-3 h-3" />
-                        Remove Items
-                      </button>
+                  {/* Quick Actions - Only in Admin Mode */}
+                  {isAdminMode && (
+                    <div className="border-t border-gray-200 pt-4">
+                      <div className="text-xs font-medium text-black mb-2">Quick Actions</div>
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => {
+                            setSelectedInventory(editingItem);
+                            setAdjustType('add');
+                            setAdjustQuantity('');
+                            setAdjustReason('');
+                            setShowAdjustModal(true);
+                            setEditingItem(null);
+                          }}
+                          disabled={availableStock <= 0}
+                          className="flex-1 py-2 bg-emerald-50 text-emerald-700 rounded-lg hover:bg-emerald-100 transition-colors text-xs font-medium flex items-center justify-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          <Plus className="w-3 h-3" />
+                          Add Items
+                        </button>
+                        <button
+                          onClick={() => {
+                            setSelectedInventory(editingItem);
+                            setAdjustType('remove');
+                            setAdjustQuantity('');
+                            setAdjustReason('');
+                            setShowAdjustModal(true);
+                            setEditingItem(null);
+                          }}
+                          className="flex-1 py-2 bg-orange-50 text-orange-700 rounded-lg hover:bg-orange-100 transition-colors text-xs font-medium flex items-center justify-center gap-1"
+                        >
+                          <Minus className="w-3 h-3" />
+                          Remove Items
+                        </button>
+                        <button
+                          onClick={() => handleRestockClick(editingItem)}
+                          className="flex-1 py-2 bg-blue-50 text-blue-700 rounded-lg hover:bg-blue-100 transition-colors text-xs font-medium flex items-center justify-center gap-1"
+                        >
+                          <Package className="w-3 h-3" />
+                          Restock
+                        </button>
+                      </div>
                     </div>
-                  </div>
+                  )}
                 </div>
               </div>
               
@@ -2003,8 +2194,13 @@ const StaffDetailsPage = () => {
                 </button>
                 <button
                   onClick={handleSaveEdit}
-                  disabled={actionLoading}
-                  className="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors text-sm font-medium disabled:opacity-50"
+                  disabled={actionLoading || !isAdminMode}
+                  className={`px-4 py-2 rounded-lg transition-colors text-sm font-medium disabled:opacity-50 ${
+                    isAdminMode 
+                      ? 'bg-blue-500 text-white hover:bg-blue-600' 
+                      : 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                  }`}
+                  title={!isAdminMode ? "Admin mode required to edit" : ""}
                 >
                   {actionLoading ? (
                     <>
@@ -2027,7 +2223,6 @@ const StaffDetailsPage = () => {
         {showWeekDetails && selectedWeek && (
           <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-2 sm:p-4 z-50 overflow-y-auto">
             <div className="bg-white rounded-xl shadow-xl w-full max-w-4xl max-h-[90vh] overflow-hidden">
-              {/* Modal Header */}
               <div className="sticky top-0 bg-white border-b border-gray-200 px-4 sm:px-6 py-4 z-10">
                 <div className="flex items-center justify-between">
                   <div>
@@ -2054,7 +2249,6 @@ const StaffDetailsPage = () => {
                 </div>
               </div>
               
-              {/* Modal Content */}
               <div className="overflow-y-auto max-h-[calc(90vh-80px)]">
                 {/* Week Stats */}
                 <div className="p-4 sm:p-6">
@@ -2107,7 +2301,7 @@ const StaffDetailsPage = () => {
                   </div>
                 )}
 
-                {/* Inventory Section - SHOWING ONLY THIS WEEK'S ITEMS */}
+                {/* Inventory Section */}
                 <div className="px-4 sm:px-6 pb-6">
                   <div className="flex items-center justify-between mb-4">
                     <div className="text-lg font-semibold text-black">Assigned Items (This Week)</div>
@@ -2148,7 +2342,7 @@ const StaffDetailsPage = () => {
                               </div>
                               
                               <div className="flex items-center gap-2 ml-2">
-                                {remaining > 0 && selectedWeek.status === 'active' && (
+                                {remaining > 0 && selectedWeek.status === 'active' && isAdminMode && (
                                   <>
                                     <button
                                       onClick={(e) => {
@@ -2192,6 +2386,16 @@ const StaffDetailsPage = () => {
                                     >
                                       <Minus className="w-3 h-3" />
                                     </button>
+                                    <button
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        handleRestockClick(inventory);
+                                      }}
+                                      className="inline-flex items-center gap-1 px-2 py-1 bg-blue-100 text-blue-700 rounded-lg text-xs hover:bg-blue-200 transition-colors"
+                                      title="Restock Items"
+                                    >
+                                      <Package className="w-3 h-3" />
+                                    </button>
                                   </>
                                 )}
                                 <button
@@ -2199,8 +2403,13 @@ const StaffDetailsPage = () => {
                                     e.stopPropagation();
                                     handleEditClick(inventory);
                                   }}
-                                  className="inline-flex items-center gap-1 px-2 py-1 bg-blue-100 text-blue-700 rounded-lg text-xs hover:bg-blue-200 transition-colors"
-                                  title="Edit Assignment"
+                                  className={`inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs transition-colors ${
+                                    isAdminMode 
+                                      ? 'bg-blue-100 text-blue-700 hover:bg-blue-200' 
+                                      : 'bg-gray-100 text-gray-400 cursor-not-allowed'
+                                  }`}
+                                  title={!isAdminMode ? "Admin mode required to edit" : "Edit Assignment"}
+                                  disabled={!isAdminMode}
                                 >
                                   <Edit className="w-3 h-3" />
                                 </button>
@@ -2242,18 +2451,20 @@ const StaffDetailsPage = () => {
                                 <div className="text-xs text-black">
                                   Updated: {formatDate(inventory.updatedAt)}
                                 </div>
-                                <button
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    if (confirm("Delete this assignment and return items to stock?")) {
-                                      handleDeleteAssignment(inventory.id);
-                                    }
-                                  }}
-                                  className="text-xs text-red-600 hover:text-red-800 flex items-center gap-1"
-                                >
-                                  <Trash2 className="w-3 h-3" />
-                                  Delete
-                                </button>
+                                {isAdminMode && (
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      if (confirm("Delete this assignment and return items to stock?")) {
+                                        handleDeleteAssignment(inventory.id);
+                                      }
+                                    }}
+                                    className="text-xs text-red-600 hover:text-red-800 flex items-center gap-1"
+                                  >
+                                    <Trash2 className="w-3 h-3" />
+                                    Delete
+                                  </button>
+                                )}
                               </div>
                             </div>
                           </div>
@@ -2346,7 +2557,7 @@ const StaffDetailsPage = () => {
               
               {/* Modal Footer */}
               <div className="border-t border-gray-200 px-4 sm:px-6 py-4 bg-gray-50 flex justify-between gap-3">
-                {selectedWeek.status === 'active' && selectedWeek.remaining > 0 && (
+                {selectedWeek.status === 'active' && selectedWeek.remaining > 0 && isAdminMode && (
                   <button
                     onClick={() => {
                       setShowWeekDetails(false);
@@ -2476,8 +2687,13 @@ const StaffDetailsPage = () => {
                 </button>
                 <button
                   onClick={handleReturnItems}
-                  disabled={!returnQuantity || parseInt(returnQuantity) > ((selectedInventory.quantityGiven || 0) - (selectedInventory.quantitySold || 0) - (selectedInventory.quantityReturned || 0))}
-                  className="px-4 py-2 bg-orange-500 text-white rounded-lg hover:bg-orange-600 transition-colors disabled:opacity-50 text-sm font-medium"
+                  disabled={!returnQuantity || !isAdminMode}
+                  className={`px-4 py-2 rounded-lg transition-colors text-sm font-medium disabled:opacity-50 ${
+                    isAdminMode
+                      ? 'bg-orange-500 text-white hover:bg-orange-600'
+                      : 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                  }`}
+                  title={!isAdminMode ? "Admin mode required to process returns" : ""}
                 >
                   Process Return
                 </button>
@@ -2543,24 +2759,6 @@ const StaffDetailsPage = () => {
                         )}
                       </div>
                     )}
-
-                    {/* Debug Stock Info */}
-                    <div className="mt-2 p-2 bg-gray-100 rounded text-xs">
-                      <div className="font-medium">Stock Information:</div>
-                      <div>Product ID: {selectedInventory.productId}</div>
-                      <div>Stock in local state: {availableStock}</div>
-                      <button 
-                        onClick={async () => {
-                          const freshStock = await fetchProductStock(selectedInventory.productId);
-                          console.log("Fresh stock:", freshStock);
-                          setAvailableStock(freshStock);
-                          await fetchAllStockData();
-                        }}
-                        className="mt-1 px-2 py-1 bg-blue-100 text-blue-700 rounded text-xs"
-                      >
-                        Refresh Stock Data
-                      </button>
-                    </div>
                   </div>
                   
                   <div>
@@ -2613,8 +2811,15 @@ const StaffDetailsPage = () => {
                 </button>
                 <button
                   onClick={handleAdjustItems}
-                  disabled={!adjustQuantity || parseInt(adjustQuantity) > (adjustType === 'add' ? availableStock : ((selectedInventory.quantityGiven || 0) - (selectedInventory.quantitySold || 0) - (selectedInventory.quantityReturned || 0)))}
-                  className={`px-4 py-2 ${adjustType === 'add' ? 'bg-emerald-500 hover:bg-emerald-600' : 'bg-orange-500 hover:bg-orange-600'} text-white rounded-lg transition-colors disabled:opacity-50 text-sm font-medium`}
+                  disabled={!adjustQuantity || !isAdminMode}
+                  className={`px-4 py-2 rounded-lg transition-colors text-sm font-medium disabled:opacity-50 ${
+                    isAdminMode
+                      ? adjustType === 'add' 
+                        ? 'bg-emerald-500 text-white hover:bg-emerald-600'
+                        : 'bg-orange-500 text-white hover:bg-orange-600'
+                      : 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                  }`}
+                  title={!isAdminMode ? "Admin mode required to adjust items" : ""}
                 >
                   {adjustType === 'add' ? 'Add Items' : 'Remove Items'}
                 </button>
@@ -2697,8 +2902,13 @@ const StaffDetailsPage = () => {
                 </button>
                 <button
                   onClick={handleCloseWeek}
-                  disabled={loadingCloseWeek !== null}
-                  className="px-4 py-2 bg-orange-500 text-white rounded-lg hover:bg-orange-600 transition-colors disabled:opacity-50 text-sm font-medium"
+                  disabled={loadingCloseWeek !== null || !isAdminMode}
+                  className={`px-4 py-2 rounded-lg transition-colors text-sm font-medium disabled:opacity-50 ${
+                    isAdminMode
+                      ? 'bg-orange-500 text-white hover:bg-orange-600'
+                      : 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                  }`}
+                  title={!isAdminMode ? "Admin mode required to close week" : ""}
                 >
                   {loadingCloseWeek ? (
                     <>
@@ -2722,7 +2932,7 @@ const StaffDetailsPage = () => {
           <div className="text-xs text-black mb-2">
             Staff Details • {staff.name} • Inventory Management System
           </div>
-          <div className="flex items-center justify-center gap-3">
+          <div className="flex items-center justify-center gap-3 flex-wrap">
             <button
               onClick={() => window.print()}
               className="inline-flex items-center gap-1 text-black hover:text-gray-900 text-xs"

@@ -1,8 +1,12 @@
 "use client";
+// ============================================================================
+// IMPORTS & DEPENDENCIES
+// ============================================================================
 import Link from "next/link";
 import { getAuth } from "firebase/auth";
 import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 
+// Icons - UI component library
 import {
   TrendingUp,
   Receipt,
@@ -32,6 +36,11 @@ import {
   User
 } from "lucide-react";
 
+// ============================================================================
+// TYPE DEFINITIONS & INTERFACES
+// ============================================================================
+
+/** Customer data structure */
 interface Customer {
   id: number;
   name: string;
@@ -39,6 +48,7 @@ interface Customer {
   email?: string;
 }
 
+/** Product data structure */
 interface Product {
   id: number;
   name: string;
@@ -48,6 +58,7 @@ interface Product {
   category?: string;
 }
 
+/** Staff inventory assignment structure */
 interface StaffInventory {
   id: number;
   staffId: number;
@@ -66,6 +77,7 @@ interface StaffInventory {
   };
 }
 
+/** Staff member structure */
 interface Staff {
   id: number;
   name: string;
@@ -73,6 +85,7 @@ interface Staff {
   phone?: string;
 }
 
+/** Quick sale item structure */
 interface QuickSaleItem {
   productId: number;
   productName: string;
@@ -80,6 +93,7 @@ interface QuickSaleItem {
   price: number;
 }
 
+/** Restock form data structure */
 interface RestockForm {
   quantity: number;
   costPrice: string;
@@ -87,6 +101,7 @@ interface RestockForm {
   creditorName: string;
 }
 
+/** New product form data structure */
 interface NewProductForm {
   name: string;
   productionCost: string;
@@ -95,12 +110,14 @@ interface NewProductForm {
   category: string;
 }
 
+/** Current authenticated user structure */
 interface CurrentUser {
   uid: string;
   email: string;
   message?: string;
 }
 
+/** Partial payment breakdown structure */
 interface PartialPayment {
   cash: string;
   bank_transfer: string;
@@ -108,6 +125,17 @@ interface PartialPayment {
   [key: string]: string;
 }
 
+/** Available payment options */
+type PaymentOption = 'cash' | 'bank_transfer' | 'till' | 'partial' | 'credit';
+
+// ============================================================================
+// HELPER FUNCTIONS
+// ============================================================================
+
+/**
+ * Fetches the currently authenticated user from session API
+ * @returns Current user data or null if not authenticated
+ */
 async function fetchCurrentUser(): Promise<CurrentUser | null> {
   try {
     const token = localStorage.getItem("token");
@@ -127,14 +155,21 @@ async function fetchCurrentUser(): Promise<CurrentUser | null> {
   }
 }
 
-type PaymentOption = 'cash' | 'bank_transfer' | 'till' | 'partial' | 'credit';
-
+// ============================================================================
+// MAIN COMPONENT: AdminDashboard
+// ============================================================================
 export default function AdminDashboard() {
+  // ==========================================================================
+  // STATE MANAGEMENT
+  // ==========================================================================
+  
+  // --- Dashboard Data State ---
   const [quickStats, setQuickStats] = useState<any[]>([]);
   const [notifications, setNotifications] = useState<any[]>([]);
   const [showNotifications, setShowNotifications] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   
+  // --- Quick Sale Modal State ---
   const [showQuickSale, setShowQuickSale] = useState(false);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
@@ -153,8 +188,8 @@ export default function AdminDashboard() {
   const [stockError, setStockError] = useState<string | null>(null);
   const [bankBalance, setBankBalance] = useState<number | null>(null);
   const [currentUser, setCurrentUser] = useState<{ uid: string; email: string } | null>(null);
-
-  // New state for staff inventory
+  
+  // --- Staff Inventory State ---
   const [staffInventories, setStaffInventories] = useState<StaffInventory[]>([]);
   const [staffList, setStaffList] = useState<Staff[]>([]);
   const [showStaffInventory, setShowStaffInventory] = useState(false);
@@ -164,11 +199,17 @@ export default function AdminDashboard() {
   const [selectedProductForAssign, setSelectedProductForAssign] = useState<Product | null>(null);
   const [assignQuantity, setAssignQuantity] = useState<number>(1);
   const [assignStaffId, setAssignStaffId] = useState<number | null>(null);
-
-  useEffect(() => {
-    fetchCurrentUser().then(user => setCurrentUser(user));
-  }, []);
-
+  const [selectedAssignedStaff, setSelectedAssignedStaff] = useState<Staff | null>(null);
+  const [showStaffDropdown, setShowStaffDropdown] = useState(false);
+  const [staffSearch, setStaffSearch] = useState("");
+  
+  // --- Responsible Staff Selection State ---
+  const [responsibleStaffId, setResponsibleStaffId] = useState<number | null>(null);
+  const [responsibleStaffSearch, setResponsibleStaffSearch] = useState("");
+  const [showResponsibleStaffDropdown, setShowResponsibleStaffDropdown] = useState(false);
+  const [responsibleStaffError, setResponsibleStaffError] = useState<string | null>(null);
+  
+  // --- Customer Management State ---
   const [showAddCustomer, setShowAddCustomer] = useState(false);
   const [newCustomer, setNewCustomer] = useState({
     name: "",
@@ -176,7 +217,8 @@ export default function AdminDashboard() {
     email: ""
   });
   const [addingCustomer, setAddingCustomer] = useState(false);
-
+  
+  // --- Payment Processing State ---
   const [paymentOption, setPaymentOption] = useState<PaymentOption>('cash');
   const [amountPaid, setAmountPaid] = useState<string>("");
   const [isCreating, setIsCreating] = useState(false);
@@ -185,10 +227,12 @@ export default function AdminDashboard() {
     bank_transfer: "",
     till: ""
   });
-
+  
+  // --- Optimistic UI Update State ---
   const [optimisticSale, setOptimisticSale] = useState<any>(null);
   const [optimisticProducts, setOptimisticProducts] = useState<Product[]>([]);
-
+  
+  // --- Restock Management State ---
   const [showRestockModal, setShowRestockModal] = useState(false);
   const [restockingProduct, setRestockingProduct] = useState<Product | null>(null);
   const [restockForm, setRestockForm] = useState<RestockForm>({
@@ -199,7 +243,8 @@ export default function AdminDashboard() {
   });
   const [restocking, setRestocking] = useState(false);
   const [restockError, setRestockError] = useState<string | null>(null);
-
+  
+  // --- Product Creation State ---
   const [showAddProduct, setShowAddProduct] = useState(false);
   const [newProduct, setNewProduct] = useState<NewProductForm>({
     name: "",
@@ -211,7 +256,8 @@ export default function AdminDashboard() {
   const [addingProduct, setAddingProduct] = useState(false);
   const [productError, setProductError] = useState<string | null>(null);
   const [productSuccess, setProductSuccess] = useState<string | null>(null);
-
+  
+  // --- Product Categories ---
   const [categories, setCategories] = useState<string[]>([
     "Metals",
     "Hardware",
@@ -224,12 +270,18 @@ export default function AdminDashboard() {
     "Finished Goods",
     "Other"
   ]);
-
+  
+  // ==========================================================================
+  // REFS
+  // ==========================================================================
   const customerDropdownRef = useRef<HTMLDivElement>(null);
   const productDropdownRef = useRef<HTMLDivElement>(null);
   const createSaleButtonRef = useRef<HTMLButtonElement>(null);
   const createSaleTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-
+  
+  // ==========================================================================
+  // STATIC DATA - Admin Navigation Sections
+  // ==========================================================================
   const adminSections = [
     {
       title: "Sales",
@@ -280,19 +332,20 @@ export default function AdminDashboard() {
       stats: "Manage staff inventory",
     },
   ];
-
-  // Fetch staff inventory data
+  
+  // ==========================================================================
+  // DATA FETCHING FUNCTIONS
+  // ==========================================================================
+  
   const fetchStaffInventory = useCallback(async () => {
     setInventoryLoading(true);
     try {
-      // Fetch staff inventory
       const inventoryRes = await fetch("/api/staff-inventory").catch(() => null);
       if (inventoryRes && inventoryRes.ok) {
         const inventoryData = await inventoryRes.json();
         setStaffInventories(Array.isArray(inventoryData) ? inventoryData : []);
       }
 
-      // Fetch staff list
       const staffRes = await fetch("/api/staff").catch(() => null);
       if (staffRes && staffRes.ok) {
         const staffData = await staffRes.json();
@@ -375,6 +428,7 @@ export default function AdminDashboard() {
         }, 0);
 
       const activeOrders = orders.filter((o: any) => o.status === "PENDING").length;
+      
       const lowStockItems = productsData.filter((p: any) => {
         const stock = Array.isArray(p.stock) 
           ? p.stock.reduce((sum: number, s: any) => sum + (s.quantity || 0), 0)
@@ -589,6 +643,10 @@ export default function AdminDashboard() {
     }
   }, []);
 
+  // ==========================================================================
+  // EFFECTS - Lifecycle and Side Effects
+  // ==========================================================================
+  
   useEffect(() => {
     fetchDashboardData();
     fetchStaffInventory();
@@ -622,6 +680,14 @@ export default function AdminDashboard() {
     }
   }, [saleItems, paymentOption]);
 
+  useEffect(() => {
+    fetchCurrentUser().then(user => setCurrentUser(user));
+  }, []);
+
+  // ==========================================================================
+  // COMPUTED VALUES & MEMOIZED FUNCTIONS
+  // ==========================================================================
+  
   const filteredCustomers = useMemo(() => {
     if (!customerSearch.trim()) return customers.slice(0, 10);
     return customers.filter(c => 
@@ -645,14 +711,12 @@ export default function AdminDashboard() {
     return product.stock?.quantity || 0;
   };
 
-  // Calculate assigned inventory for a product
   const getAssignedInventory = (productId: number) => {
     return staffInventories
       .filter(inv => inv.productId === productId)
       .reduce((sum, inv) => sum + (inv.quantityGiven - inv.quantitySold - inv.quantityReturned), 0);
   };
 
-  // Calculate available (unassigned) inventory for a product - KEEP FOR DISPLAY ONLY
   const getAvailableInventory = (product: Product) => {
     const totalStock = getProductStock(product);
     const assigned = getAssignedInventory(product.id);
@@ -669,6 +733,59 @@ export default function AdminDashboard() {
     return totalStock === 0;
   };
 
+  const getStaffName = (staffId: number) => {
+    const staff = staffList.find(s => s.id === staffId);
+    return staff?.name || "Unknown";
+  };
+
+  const calculateTotalAmount = () => {
+    return saleItems.reduce((sum, item) => sum + (item.quantity * item.price), 0);
+  };
+
+  const getNotificationStyles = (type: string) => {
+    switch (type) {
+      case "critical":
+        return {
+          bg: "bg-red-50",
+          border: "border-red-200",
+          text: "text-red-700",
+          iconBg: "bg-red-100",
+          iconColor: "text-red-600",
+        };
+      case "warning":
+        return {
+          bg: "bg-orange-50",
+          border: "border-orange-200",
+          text: "text-orange-700",
+          iconBg: "bg-orange-100",
+          iconColor: "text-orange-600",
+        };
+      case "success":
+        return {
+          bg: "bg-emerald-50",
+          border: "border-emerald-200",
+          text: "text-emerald-700",
+          iconBg: "bg-emerald-100",
+          iconColor: "text-emerald-600",
+        };
+      default:
+        return {
+          bg: "bg-blue-50",
+          border: "border-blue-200",
+          text: "text-blue-700",
+          iconBg: "bg-blue-100",
+          iconColor: "text-blue-600",
+        };
+    }
+  };
+
+  const notificationCount = useMemo(() => notifications.length, [notifications]);
+  const displayProducts = optimisticProducts.length > 0 ? optimisticProducts : products;
+
+  // ==========================================================================
+  // EVENT HANDLERS
+  // ==========================================================================
+  
   const handleAssignToStaff = async () => {
     if (!selectedProductForAssign || !assignStaffId || assignQuantity <= 0) {
       setSaleError("Please select staff and enter valid quantity");
@@ -696,7 +813,7 @@ export default function AdminDashboard() {
         throw new Error("Failed to assign inventory");
       }
 
-      await fetchStaffInventory(); // Refresh inventory data
+      await fetchStaffInventory();
       setAssignProductMode(false);
       setSelectedProductForAssign(null);
       setAssignQuantity(1);
@@ -707,11 +824,6 @@ export default function AdminDashboard() {
       console.error("Error assigning inventory:", error);
       setSaleError(error.message || "Failed to assign inventory");
     }
-  };
-
-  const getStaffName = (staffId: number) => {
-    const staff = staffList.find(s => s.id === staffId);
-    return staff?.name || "Unknown";
   };
 
   const handleImportFromContacts = async () => {
@@ -857,7 +969,6 @@ export default function AdminDashboard() {
 
     const productionCost = parseFloat(newProduct.productionCost);
     const sellingPrice = parseFloat(newProduct.sellingPrice);
-    
     const stockStr = newProduct.initialStock.trim();
     const initialStock = stockStr === "" ? 0 : parseInt(stockStr, 10);
 
@@ -1004,207 +1115,68 @@ export default function AdminDashboard() {
     return await response.json();
   };
 
-  const handleCreateSaleOptimistic = async () => {
-    if (!selectedCustomer) {
-      setSaleError("Please select a customer");
+  const addItemToSale = () => {
+    if (!currentProduct || currentQuantity <= 0) {
+      setSaleError("Please select a product and enter quantity greater than 0");
       setTimeout(() => setSaleError(null), 3000);
       return;
     }
 
-    if (saleItems.length === 0) {
-      setSaleError("Please add at least one item to the sale");
-      setTimeout(() => setSaleError(null), 3000);
-      return;
+    let price = 0;
+    if (currentPrice && currentPrice.trim() !== "") {
+      price = parseFloat(currentPrice);
+    } else if (currentProduct.price) {
+      price = currentProduct.price;
     }
-
-    // Check if any items are out of stock - NOW CHECKING TOTAL STOCK INSTEAD OF AVAILABLE
-    for (const item of saleItems) {
-      const product = products.find(p => p.id === item.productId);
-      if (product) {
-        const totalStock = getProductStock(product);
-        if (totalStock < item.quantity) {
-          setSaleError(`Insufficient total stock for ${product.name}. Total stock: ${totalStock}`);
-          return;
-        }
-      }
-    }
-
-    const totalAmount = calculateTotalAmount();
-
-    if (paymentOption === "partial") {
-      const totalPartial = Object.values(partialPayment)
-        .reduce((sum, val) => sum + (parseFloat(val) || 0), 0);
-      
-      if (totalPartial <= 0) {
-        setSaleError("Please enter at least one partial payment amount");
-        setTimeout(() => setSaleError(null), 3000);
-        return;
-      }
-      
-      if (totalPartial > totalAmount) {
-        setSaleError("Partial payment cannot exceed total amount");
-        setTimeout(() => setSaleError(null), 3000);
-        return;
-      }
-    }
-
-    if (paymentOption === "partial" && (!amountPaid || isNaN(parseFloat(amountPaid)) || parseFloat(amountPaid) <= 0)) {
-      setSaleError("Please enter a valid payment amount");
-      setTimeout(() => setSaleError(null), 3000);
-      return;
-    }
-
-    if (paymentOption === "partial" && parseFloat(amountPaid) > totalAmount) {
-      setSaleError("Payment amount cannot exceed total amount");
-      setTimeout(() => setSaleError(null), 3000);
-      return;
-    }
-
-    const auth = getAuth();
-    const user = auth.currentUser;
     
-    if (!user) {
-      setSaleError("You must be logged in to create a sale");
+    if (isNaN(price) || price <= 0) {
+      setSaleError("Please enter a valid price or ensure product has a default price");
       setTimeout(() => setSaleError(null), 3000);
       return;
     }
 
-    const idToken = await user.getIdToken();
-    
-    const saleData: any = {
-      customerId: selectedCustomer.id,
-      amount: totalAmount,
-      saleItems: saleItems.map(item => ({
-        productId: item.productId,
-        quantity: item.quantity,
-        price: item.price,
-      })),
-      date: new Date().toISOString(),
-      paymentMethod: paymentOption.toUpperCase().replace('_', ' '),
-      payments: [],
-      userId: user.uid,
-      userName: user.displayName || user.email || "Unknown User",
-    };
+    const totalStock = getProductStock(currentProduct);
+    const existingItem = saleItems.find(i => i.productId === currentProduct.id);
+    const totalQuantity = (existingItem?.quantity || 0) + currentQuantity;
 
-    // Add payment based on payment option
-    if (paymentOption === 'cash' || paymentOption === 'bank_transfer' || paymentOption === 'till') {
-      saleData.payments.push({
-        amount: totalAmount,
-        method: paymentOption.toUpperCase().replace('_', ' '),
-        status: "CLEARED",
-        paidAt: new Date().toISOString(),
-      });
-      saleData.status = "PAID";
-    } else if (paymentOption === 'partial') {
-      const paidAmount = parseFloat(amountPaid) || 0;
-      
-      // Create payments array based on partial payment breakdown
-      saleData.payments = [];
-      
-      // Add cash payment if any
-      const cashAmount = parseFloat(partialPayment.cash) || 0;
-      if (cashAmount > 0) {
-        saleData.payments.push({
-          amount: cashAmount,
-          method: "CASH",
-          status: "CLEARED",
-          paidAt: new Date().toISOString(),
-        });
-      }
-      
-      // Add bank transfer payment if any
-      const bankAmount = parseFloat(partialPayment.bank_transfer) || 0;
-      if (bankAmount > 0) {
-        saleData.payments.push({
-          amount: bankAmount,
-          method: "BANK TRANSFER",
-          status: "CLEARED",
-          paidAt: new Date().toISOString(),
-        });
-      }
-      
-      // Add till payment if any
-      const tillAmount = parseFloat(partialPayment.till) || 0;
-      if (tillAmount > 0) {
-        saleData.payments.push({
-          amount: tillAmount,
-          method: "TILL",
-          status: "CLEARED",
-          paidAt: new Date().toISOString(),
-        });
-      }
-      
-      saleData.status = "PARTIAL";
-      saleData.partialPayments = partialPayment; // Store the breakdown
-    } else if (paymentOption === 'credit') {
-      saleData.status = "UNPAID";
+    if (totalQuantity > totalStock) {
+      const errorMsg = `Insufficient total stock for ${currentProduct.name}. Total stock: ${totalStock}, Requested: ${totalQuantity}`;
+      setStockError(errorMsg);
+      setSaleError(errorMsg);
+      setTimeout(() => {
+        setStockError(null);
+        setSaleError(null);
+      }, 5000);
+      return;
+    }
+    
+    if (existingItem) {
+      setSaleItems(saleItems.map(item => 
+        item.productId === currentProduct.id 
+          ? { ...item, quantity: item.quantity + currentQuantity, price }
+          : item
+      ));
+    } else {
+      setSaleItems([...saleItems, {
+        productId: currentProduct.id,
+        productName: currentProduct.name,
+        quantity: currentQuantity,
+        price
+      }]);
     }
 
-    setOptimisticSale(saleData);
-
-    const updatedProducts = products.map(product => {
-      const saleItem = saleItems.find(item => item.productId === product.id);
-      if (saleItem) {
-        const currentStock = getProductStock(product);
-        return {
-          ...product,
-          stock: { quantity: Math.max(0, currentStock - saleItem.quantity) },
-        };
-      }
-      return product;
-    });
-
-    setOptimisticProducts(updatedProducts);
-    setIsCreating(true);
+    setCurrentProduct(null);
+    setCurrentQuantity(0);
+    setCurrentPrice("");
+    setProductSearch("");
+    setShowProductDropdown(false);
     setSaleError(null);
-
-    if (createSaleTimeoutRef.current) clearTimeout(createSaleTimeoutRef.current);
-
-    const createSalePromise = new Promise<void>(resolve => {
-      createSaleTimeoutRef.current = setTimeout(async () => {
-        try {
-          const result = await createSaleMutation(saleData, idToken);
-
-          setSaleSuccess("Sale created successfully! 🎉");
-
-          setSelectedCustomer(null);
-          setCustomerSearch("");
-          setSaleItems([]);
-          setCurrentProduct(null);
-          setProductSearch("");
-          setCurrentQuantity(0);
-          setCurrentPrice("");
-          setPaymentOption("cash");
-          setAmountPaid("");
-          setPartialPayment({ cash: "", bank_transfer: "", till: "" });
-
-          setTimeout(() => {
-            fetchDashboardData().catch(console.error);
-            fetchStaffInventory().catch(console.error);
-          }, 1000);
-
-          setTimeout(() => {
-            setSaleSuccess(null);
-            setShowQuickSale(false);
-            setOptimisticSale(null);
-            setOptimisticProducts([]);
-            setIsCreating(false);
-            resolve();
-          }, 1500);
-        } catch (error: any) {
-          setOptimisticSale(null);
-          setOptimisticProducts([]);
-          setSaleError(error.message || "Failed to create sale");
-          setIsCreating(false);
-          resolve();
-        }
-      }, 100);
-    });
-
-    await createSalePromise;
+    setStockError(null);
   };
 
-  const displayProducts = optimisticProducts.length > 0 ? optimisticProducts : products;
+  const removeItem = (productId: number) => {
+    setSaleItems(saleItems.filter(i => i.productId !== productId));
+  };
 
   const openRestockModal = (product: Product) => {
     setRestockingProduct(product);
@@ -1326,116 +1298,214 @@ export default function AdminDashboard() {
     }
   };
 
-  const addItemToSale = () => {
-    if (!currentProduct || currentQuantity <= 0) {
-      setSaleError("Please select a product and enter quantity greater than 0");
+  const handleCreateSaleOptimistic = async () => {
+    if (!selectedCustomer) {
+      setSaleError("Please select a customer");
       setTimeout(() => setSaleError(null), 3000);
       return;
     }
 
-    let price = 0;
-    if (currentPrice && currentPrice.trim() !== "") {
-      price = parseFloat(currentPrice);
-    } else if (currentProduct.price) {
-      price = currentProduct.price;
-    }
-    
-    if (isNaN(price) || price <= 0) {
-      setSaleError("Please enter a valid price or ensure product has a default price");
+    if (saleItems.length === 0) {
+      setSaleError("Please add at least one item to the sale");
       setTimeout(() => setSaleError(null), 3000);
       return;
     }
 
-    // NOW CHECKING TOTAL STOCK INSTEAD OF AVAILABLE
-    const totalStock = getProductStock(currentProduct);
-    const existingItem = saleItems.find(i => i.productId === currentProduct.id);
-    const totalQuantity = (existingItem?.quantity || 0) + currentQuantity;
+    for (const item of saleItems) {
+      const product = products.find(p => p.id === item.productId);
+      if (product) {
+        const totalStock = getProductStock(product);
+        if (totalStock < item.quantity) {
+          setSaleError(`Insufficient total stock for ${product.name}. Total stock: ${totalStock}`);
+          return;
+        }
+      }
+    }
 
-    if (totalQuantity > totalStock) {
-      const errorMsg = `Insufficient total stock for ${currentProduct.name}. Total stock: ${totalStock}, Requested: ${totalQuantity}`;
-      setStockError(errorMsg);
-      setSaleError(errorMsg);
-      setTimeout(() => {
-        setStockError(null);
-        setSaleError(null);
-      }, 5000);
+    const totalAmount = calculateTotalAmount();
+
+    if (paymentOption === "partial") {
+      const totalPartial = Object.values(partialPayment)
+        .reduce((sum, val) => sum + (parseFloat(val) || 0), 0);
+      
+      if (totalPartial <= 0) {
+        setSaleError("Please enter at least one partial payment amount");
+        setTimeout(() => setSaleError(null), 3000);
+        return;
+      }
+      
+      if (totalPartial > totalAmount) {
+        setSaleError("Partial payment cannot exceed total amount");
+        setTimeout(() => setSaleError(null), 3000);
+        return;
+      }
+    }
+
+    if (paymentOption === "partial" && (!amountPaid || isNaN(parseFloat(amountPaid)) || parseFloat(amountPaid) <= 0)) {
+      setSaleError("Please enter a valid payment amount");
+      setTimeout(() => setSaleError(null), 3000);
       return;
     }
-    
-    if (existingItem) {
-      setSaleItems(saleItems.map(item => 
-        item.productId === currentProduct.id 
-          ? { ...item, quantity: item.quantity + currentQuantity, price }
-          : item
-      ));
-    } else {
-      setSaleItems([...saleItems, {
-        productId: currentProduct.id,
-        productName: currentProduct.name,
-        quantity: currentQuantity,
-        price
-      }]);
+
+    if (paymentOption === "partial" && parseFloat(amountPaid) > totalAmount) {
+      setSaleError("Payment amount cannot exceed total amount");
+      setTimeout(() => setSaleError(null), 3000);
+      return;
     }
 
-    setCurrentProduct(null);
-    setCurrentQuantity(0);
-    setCurrentPrice("");
-    setProductSearch("");
-    setShowProductDropdown(false);
+    const auth = getAuth();
+    const user = auth.currentUser;
+    
+    if (!user) {
+      setSaleError("You must be logged in to create a sale");
+      setTimeout(() => setSaleError(null), 3000);
+      return;
+    }
+
+    const idToken = await user.getIdToken();
+    
+    const saleData: any = {
+      customerId: selectedCustomer.id,
+      amount: totalAmount,
+      saleItems: saleItems.map(item => ({
+        productId: item.productId,
+        quantity: item.quantity,
+        price: item.price,
+      })),
+      date: new Date().toISOString(),
+      paymentMethod: paymentOption.toUpperCase().replace('_', ' '),
+      payments: [],
+      userId: user.uid,
+      userName: user.displayName || user.email || "Unknown User",
+    };
+
+    // NEW: Add assigned staff (responsible staff) if selected
+    if (responsibleStaffId) {
+      saleData.assignedStaffId = responsibleStaffId;
+    }
+
+    if (paymentOption === 'cash' || paymentOption === 'bank_transfer' || paymentOption === 'till') {
+      saleData.payments.push({
+        amount: totalAmount,
+        method: paymentOption.toUpperCase().replace('_', ' '),
+        status: "CLEARED",
+        paidAt: new Date().toISOString(),
+      });
+      saleData.status = "PAID";
+    } else if (paymentOption === 'partial') {
+      const paidAmount = parseFloat(amountPaid) || 0;
+      
+      saleData.payments = [];
+      
+      const cashAmount = parseFloat(partialPayment.cash) || 0;
+      if (cashAmount > 0) {
+        saleData.payments.push({
+          amount: cashAmount,
+          method: "CASH",
+          status: "CLEARED",
+          paidAt: new Date().toISOString(),
+        });
+      }
+      
+      const bankAmount = parseFloat(partialPayment.bank_transfer) || 0;
+      if (bankAmount > 0) {
+        saleData.payments.push({
+          amount: bankAmount,
+          method: "BANK TRANSFER",
+          status: "CLEARED",
+          paidAt: new Date().toISOString(),
+        });
+      }
+      
+      const tillAmount = parseFloat(partialPayment.till) || 0;
+      if (tillAmount > 0) {
+        saleData.payments.push({
+          amount: tillAmount,
+          method: "TILL",
+          status: "CLEARED",
+          paidAt: new Date().toISOString(),
+        });
+      }
+      
+      saleData.status = "PARTIAL";
+      saleData.partialPayments = partialPayment;
+    } else if (paymentOption === 'credit') {
+      saleData.status = "UNPAID";
+    }
+
+    setOptimisticSale(saleData);
+
+    const updatedProducts = products.map(product => {
+      const saleItem = saleItems.find(item => item.productId === product.id);
+      if (saleItem) {
+        const currentStock = getProductStock(product);
+        return {
+          ...product,
+          stock: { quantity: Math.max(0, currentStock - saleItem.quantity) },
+        };
+      }
+      return product;
+    });
+
+    setOptimisticProducts(updatedProducts);
+    setIsCreating(true);
     setSaleError(null);
-    setStockError(null);
+
+    if (createSaleTimeoutRef.current) clearTimeout(createSaleTimeoutRef.current);
+
+    const createSalePromise = new Promise<void>(resolve => {
+      createSaleTimeoutRef.current = setTimeout(async () => {
+        try {
+          const result = await createSaleMutation(saleData, idToken);
+
+          setSaleSuccess("Sale created successfully! 🎉");
+
+          setSelectedCustomer(null);
+          setCustomerSearch("");
+          setSaleItems([]);
+          setCurrentProduct(null);
+          setProductSearch("");
+          setCurrentQuantity(0);
+          setCurrentPrice("");
+          setPaymentOption("cash");
+          setAmountPaid("");
+          setPartialPayment({ cash: "", bank_transfer: "", till: "" });
+          setResponsibleStaffId(null);
+          setSelectedAssignedStaff(null);
+          setStaffSearch("");
+
+          setTimeout(() => {
+            fetchDashboardData().catch(console.error);
+            fetchStaffInventory().catch(console.error);
+          }, 1000);
+
+          setTimeout(() => {
+            setSaleSuccess(null);
+            setShowQuickSale(false);
+            setOptimisticSale(null);
+            setOptimisticProducts([]);
+            setIsCreating(false);
+            resolve();
+          }, 1500);
+        } catch (error: any) {
+          setOptimisticSale(null);
+          setOptimisticProducts([]);
+          setSaleError(error.message || "Failed to create sale");
+          setIsCreating(false);
+          resolve();
+        }
+      }, 100);
+    });
+
+    await createSalePromise;
   };
 
-  const removeItem = (productId: number) => {
-    setSaleItems(saleItems.filter(i => i.productId !== productId));
-  };
-
-  const calculateTotalAmount = () => {
-    return saleItems.reduce((sum, item) => sum + (item.quantity * item.price), 0);
-  };
-
-  const getNotificationStyles = (type: string) => {
-    switch (type) {
-      case "critical":
-        return {
-          bg: "bg-red-50",
-          border: "border-red-200",
-          text: "text-red-700",
-          iconBg: "bg-red-100",
-          iconColor: "text-red-600",
-        };
-      case "warning":
-        return {
-          bg: "bg-orange-50",
-          border: "border-orange-200",
-          text: "text-orange-700",
-          iconBg: "bg-orange-100",
-          iconColor: "text-orange-600",
-        };
-      case "success":
-        return {
-          bg: "bg-emerald-50",
-          border: "border-emerald-200",
-          text: "text-emerald-700",
-          iconBg: "bg-emerald-100",
-          iconColor: "text-emerald-600",
-        };
-      default:
-        return {
-          bg: "bg-blue-50",
-          border: "border-blue-200",
-          text: "text-blue-700",
-          iconBg: "bg-blue-100",
-          iconColor: "text-blue-600",
-        };
-    }
-  };
-
-  const notificationCount = useMemo(() => notifications.length, [notifications]);
-
+  // ==========================================================================
+  // RENDER - UI COMPONENT
+  // ==========================================================================
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100">
-      {/* Header - Mobile Optimized */}
+      {/* HEADER SECTION */}
       <div className="bg-white shadow-sm border-b border-slate-200 sticky top-0 z-40">
         <div className="px-3 sm:px-4 py-3">
           <div className="flex items-center justify-between gap-3">
@@ -1456,8 +1526,6 @@ export default function AdminDashboard() {
                 <span className="hidden xs:inline">Sale</span>
               </button>
 
-             
-
               <div className="relative">
                 <button
                   onClick={() => setShowNotifications(!showNotifications)}
@@ -1474,11 +1542,7 @@ export default function AdminDashboard() {
 
                 {showNotifications && (
                   <>
-                    <div 
-                      className="fixed inset-0 z-40 md:hidden"
-                      onClick={() => setShowNotifications(false)}
-                    />
-                    
+                    <div className="fixed inset-0 z-40 md:hidden" onClick={() => setShowNotifications(false)} />
                     <div className="fixed inset-x-3 top-16 md:absolute md:inset-x-auto md:right-0 md:top-auto md:mt-3 w-auto md:w-96 bg-white shadow-2xl rounded-xl border border-slate-200 z-50 max-h-[calc(100vh-5rem)] md:max-h-[600px] flex flex-col">
                       <div className="flex items-center justify-between px-3 py-2 border-b bg-slate-50 rounded-t-xl">
                         <div className="flex items-center gap-2">
@@ -1489,11 +1553,7 @@ export default function AdminDashboard() {
                             </span>
                           )}
                         </div>
-                        <button
-                          onClick={() => setShowNotifications(false)}
-                          type="button"
-                          className="text-slate-500 hover:text-slate-700"
-                        >
+                        <button onClick={() => setShowNotifications(false)} className="text-slate-500 hover:text-slate-700">
                           <X className="w-4 h-4" />
                         </button>
                       </div>
@@ -1508,7 +1568,6 @@ export default function AdminDashboard() {
                           {notifications.map((note) => {
                             const styles = getNotificationStyles(note.type);
                             const Icon = note.icon || Info;
-                            
                             return (
                               <li key={note.id} className={`px-3 py-3 border-b ${styles.bg}`}>
                                 <div className="flex gap-2">
@@ -1519,11 +1578,7 @@ export default function AdminDashboard() {
                                     <p className={`font-semibold text-xs ${styles.text} truncate`}>{note.title}</p>
                                     <p className="text-xs text-black line-clamp-2">{note.message}</p>
                                     {note.link && (
-                                      <Link
-                                        href={note.link}
-                                        onClick={() => setShowNotifications(false)}
-                                        className="text-xs text-blue-600 hover:underline mt-1 inline-block"
-                                      >
+                                      <Link href={note.link} onClick={() => setShowNotifications(false)} className="text-xs text-blue-600 hover:underline mt-1 inline-block">
                                         View details →
                                       </Link>
                                     )}
@@ -1543,7 +1598,7 @@ export default function AdminDashboard() {
         </div>
       </div>
 
-      {/* Staff Inventory Modal */}
+      {/* STAFF INVENTORY MODAL */}
       {showStaffInventory && (
         <div className="fixed inset-0 bg-black/50 flex items-start justify-center p-2 sm:p-4 z-50 overflow-y-auto">
           <div className="bg-white rounded-xl sm:rounded-2xl w-full max-w-4xl max-h-[90vh] overflow-y-auto shadow-2xl mt-4 sm:mt-0">
@@ -1556,21 +1611,13 @@ export default function AdminDashboard() {
                     <p className="text-indigo-100 text-xs sm:text-sm">Manage assigned and unassigned items</p>
                   </div>
                 </div>
-                <button
-                  onClick={() => {
-                    setShowStaffInventory(false);
-                    setAssignProductMode(false);
-                  }}
-                  type="button"
-                  className="text-white hover:bg-white/20 p-1.5 rounded-lg transition-colors"
-                >
+                <button onClick={() => { setShowStaffInventory(false); setAssignProductMode(false); }} className="text-white hover:bg-white/20 p-1.5 rounded-lg transition-colors">
                   <X className="w-5 h-5 sm:w-6 sm:h-6" />
                 </button>
               </div>
             </div>
 
             <div className="p-4 sm:p-6 space-y-6">
-              {/* Assign New Items Section */}
               <div className="bg-indigo-50 border-2 border-indigo-200 rounded-lg p-4">
                 <h3 className="font-semibold text-indigo-900 mb-3 flex items-center gap-2">
                   <Package className="w-4 h-4" />
@@ -1578,20 +1625,14 @@ export default function AdminDashboard() {
                 </h3>
                 
                 {!assignProductMode ? (
-                  <button
-                    onClick={() => setAssignProductMode(true)}
-                    className="w-full py-3 bg-white border-2 border-dashed border-indigo-300 rounded-lg text-indigo-700 hover:bg-indigo-100 transition-colors flex items-center justify-center gap-2"
-                  >
+                  <button onClick={() => setAssignProductMode(true)} className="w-full py-3 bg-white border-2 border-dashed border-indigo-300 rounded-lg text-indigo-700 hover:bg-indigo-100 transition-colors flex items-center justify-center gap-2">
                     <Plus className="w-4 h-4" />
                     Assign New Item
                   </button>
                 ) : (
                   <div className="space-y-3">
-                    {/* Product Selection */}
                     <div>
-                      <label className="block text-sm font-medium text-indigo-900 mb-1">
-                        Select Product *
-                      </label>
+                      <label className="block text-sm font-medium text-indigo-900 mb-1">Select Product *</label>
                       <select
                         value={selectedProductForAssign?.id || ""}
                         onChange={(e) => {
@@ -1612,11 +1653,8 @@ export default function AdminDashboard() {
                       </select>
                     </div>
 
-                    {/* Staff Selection */}
                     <div>
-                      <label className="block text-sm font-medium text-indigo-900 mb-1">
-                        Assign to Staff *
-                      </label>
+                      <label className="block text-sm font-medium text-indigo-900 mb-1">Assign to Staff *</label>
                       <select
                         value={assignStaffId || ""}
                         onChange={(e) => setAssignStaffId(parseInt(e.target.value))}
@@ -1624,18 +1662,13 @@ export default function AdminDashboard() {
                       >
                         <option value="">Select staff member...</option>
                         {staffList.map(staff => (
-                          <option key={staff.id} value={staff.id}>
-                            {staff.name}
-                          </option>
+                          <option key={staff.id} value={staff.id}>{staff.name}</option>
                         ))}
                       </select>
                     </div>
 
-                    {/* Quantity */}
                     <div>
-                      <label className="block text-sm font-medium text-indigo-900 mb-1">
-                        Quantity *
-                      </label>
+                      <label className="block text-sm font-medium text-indigo-900 mb-1">Quantity *</label>
                       <input
                         type="number"
                         min="1"
@@ -1645,30 +1678,15 @@ export default function AdminDashboard() {
                         className="w-full px-3 py-2 border border-indigo-300 rounded-lg focus:border-indigo-500 text-black text-sm"
                       />
                       {selectedProductForAssign && (
-                        <p className="text-xs text-indigo-700 mt-1">
-                          Max available: {getAvailableInventory(selectedProductForAssign)} units
-                        </p>
+                        <p className="text-xs text-indigo-700 mt-1">Max available: {getAvailableInventory(selectedProductForAssign)} units</p>
                       )}
                     </div>
 
-                    {/* Action Buttons */}
                     <div className="flex gap-2 pt-2">
-                      <button
-                        onClick={() => {
-                          setAssignProductMode(false);
-                          setSelectedProductForAssign(null);
-                          setAssignQuantity(1);
-                          setAssignStaffId(null);
-                        }}
-                        className="flex-1 px-3 py-2 border border-indigo-300 text-indigo-700 rounded-lg hover:bg-indigo-100"
-                      >
+                      <button onClick={() => { setAssignProductMode(false); setSelectedProductForAssign(null); setAssignQuantity(1); setAssignStaffId(null); }} className="flex-1 px-3 py-2 border border-indigo-300 text-indigo-700 rounded-lg hover:bg-indigo-100">
                         Cancel
                       </button>
-                      <button
-                        onClick={handleAssignToStaff}
-                        disabled={!selectedProductForAssign || !assignStaffId || assignQuantity <= 0}
-                        className="flex-1 px-3 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50"
-                      >
+                      <button onClick={handleAssignToStaff} disabled={!selectedProductForAssign || !assignStaffId || assignQuantity <= 0} className="flex-1 px-3 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50">
                         Assign
                       </button>
                     </div>
@@ -1676,7 +1694,6 @@ export default function AdminDashboard() {
                 )}
               </div>
 
-              {/* Current Assignments */}
               <div>
                 <h3 className="font-semibold text-gray-900 mb-3 flex items-center gap-2">
                   <Users className="w-4 h-4 text-indigo-600" />
@@ -1698,7 +1715,6 @@ export default function AdminDashboard() {
                     {staffList.map(staff => {
                       const staffItems = staffInventories.filter(inv => inv.staffId === staff.id);
                       if (staffItems.length === 0) return null;
-
                       return (
                         <div key={staff.id} className="border rounded-lg overflow-hidden">
                           <div className="bg-gray-50 px-4 py-2 border-b">
@@ -1712,14 +1728,11 @@ export default function AdminDashboard() {
                                   <div>
                                     <p className="font-medium text-gray-900">{inv.product.name}</p>
                                     <p className="text-xs text-gray-600">
-                                      Given: {inv.quantityGiven} | Sold: {inv.quantitySold} | 
-                                      Returned: {inv.quantityReturned}
+                                      Given: {inv.quantityGiven} | Sold: {inv.quantitySold} | Returned: {inv.quantityReturned}
                                     </p>
                                   </div>
                                   <div className="text-right">
-                                    <span className={`text-sm font-bold ${
-                                      remaining > 0 ? 'text-green-600' : 'text-gray-400'
-                                    }`}>
+                                    <span className={`text-sm font-bold ${remaining > 0 ? 'text-green-600' : 'text-gray-400'}`}>
                                       Remaining: {remaining}
                                     </span>
                                   </div>
@@ -1734,28 +1747,25 @@ export default function AdminDashboard() {
                 )}
               </div>
 
-              {/* Unassigned Inventory Overview */}
               <div className="bg-green-50 border border-green-200 rounded-lg p-4">
                 <h3 className="font-semibold text-green-900 mb-3 flex items-center gap-2">
                   <Package className="w-4 h-4" />
                   Available (Unassigned) Inventory
                 </h3>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  {products
-                    .filter(p => getAvailableInventory(p) > 0)
-                    .map(product => (
-                      <div key={product.id} className="bg-white rounded-lg p-3 border border-green-200">
-                        <div className="flex justify-between items-start">
-                          <div>
-                            <p className="font-medium text-gray-900">{product.name}</p>
-                            <p className="text-xs text-gray-600">Category: {product.category || 'Uncategorized'}</p>
-                          </div>
-                          <span className="bg-green-100 text-green-800 px-2 py-1 rounded-full text-sm font-bold">
-                            {getAvailableInventory(product)} units
-                          </span>
+                  {products.filter(p => getAvailableInventory(p) > 0).map(product => (
+                    <div key={product.id} className="bg-white rounded-lg p-3 border border-green-200">
+                      <div className="flex justify-between items-start">
+                        <div>
+                          <p className="font-medium text-gray-900">{product.name}</p>
+                          <p className="text-xs text-gray-600">Category: {product.category || 'Uncategorized'}</p>
                         </div>
+                        <span className="bg-green-100 text-green-800 px-2 py-1 rounded-full text-sm font-bold">
+                          {getAvailableInventory(product)} units
+                        </span>
                       </div>
-                    ))}
+                    </div>
+                  ))}
                 </div>
               </div>
             </div>
@@ -1763,10 +1773,11 @@ export default function AdminDashboard() {
         </div>
       )}
 
-      {/* Enhanced Quick Sale Modal - Mobile Optimized */}
+      {/* QUICK SALE MODAL */}
       {showQuickSale && (
         <div className="fixed inset-0 bg-black/50 flex items-start justify-center p-2 sm:p-4 z-50 overflow-y-auto">
           <div className="bg-white rounded-xl sm:rounded-2xl w-full max-w-md max-h-[90vh] overflow-y-auto shadow-2xl mt-4 sm:mt-0">
+            {/* Modal Header */}
             <div className="sticky top-0 bg-gradient-to-r from-blue-600 to-blue-700 text-white p-4 sm:p-6 rounded-t-xl sm:rounded-t-2xl z-10">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2 sm:gap-3">
@@ -1785,6 +1796,7 @@ export default function AdminDashboard() {
                     setOptimisticSale(null);
                     setOptimisticProducts([]);
                     setPartialPayment({ cash: "", bank_transfer: "", till: "" });
+                    setResponsibleStaffId(null);
                   }}
                   type="button"
                   className="text-white hover:bg-white/20 p-1.5 rounded-lg transition-colors"
@@ -1795,6 +1807,7 @@ export default function AdminDashboard() {
             </div>
 
             <div className="p-4 sm:p-6 space-y-4 sm:space-y-6">
+              {/* Status Messages */}
               {optimisticSale && (
                 <div className="bg-yellow-50 border-2 border-yellow-300 text-yellow-800 px-3 py-2 rounded-lg flex items-center gap-2 text-sm">
                   <Info className="w-4 h-4 flex-shrink-0" />
@@ -1821,15 +1834,11 @@ export default function AdminDashboard() {
                 </div>
               )}
 
-              {/* Customer Selection - Mobile Optimized */}
+              {/* SECTION 1: CUSTOMER SELECTION */}
               <div className="relative" ref={customerDropdownRef}>
                 <div className="flex items-center justify-between mb-2">
                   <label className="block text-sm font-semibold text-black">Customer *</label>
-                  <button
-                    type="button"
-                    onClick={() => setShowAddCustomer(true)}
-                    className="text-xs text-blue-600 hover:text-blue-800 font-medium flex items-center gap-1"
-                  >
+                  <button type="button" onClick={() => setShowAddCustomer(true)} className="text-xs text-blue-600 hover:text-blue-800 font-medium flex items-center gap-1">
                     <UserPlus className="w-3 h-3" />
                     Add
                   </button>
@@ -1884,16 +1893,110 @@ export default function AdminDashboard() {
                 )}
               </div>
 
-              {/* Add Customer Modal - Mobile Optimized */}
+              {/* SECTION 1.5: RESPONSIBLE STAFF SELECTION (NEW) */}
+              <div className="relative">
+                <div className="flex items-center justify-between mb-2">
+                  <label className="block text-sm font-semibold text-black">
+                    Responsible Staff <span className="text-xs text-gray-500">(Optional)</span>
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowResponsibleStaffDropdown(!showResponsibleStaffDropdown);
+                      setStaffSearch("");
+                    }}
+                    className="text-xs text-blue-600 hover:text-blue-800 font-medium flex items-center gap-1"
+                  >
+                    <Users className="w-3 h-3" />
+                    {responsibleStaffId ? "Change" : "Select"}
+                  </button>
+                </div>
+                
+                <div className="relative">
+                  {responsibleStaffId ? (
+                    <div className="bg-green-50 border border-green-200 rounded-lg px-3 py-2 flex items-center justify-between text-sm">
+                      <div className="min-w-0 flex-1">
+                        <div className="font-medium text-black truncate">
+                          {staffList.find(s => s.id === responsibleStaffId)?.name || "Selected"}
+                        </div>
+                        <div className="text-xs text-gray-500">
+                          Will be responsible for this sale
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => {
+                          setResponsibleStaffId(null);
+                          setSelectedAssignedStaff(null);
+                        }}
+                        type="button"
+                        className="text-red-500 hover:text-red-700 p-1"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="relative">
+                      <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                      <input
+                        type="text"
+                        placeholder="Search staff to assign responsibility..."
+                        value={staffSearch}
+                        onChange={(e) => {
+                          setStaffSearch(e.target.value);
+                          setShowResponsibleStaffDropdown(true);
+                        }}
+                        onFocus={() => setShowResponsibleStaffDropdown(true)}
+                        className="w-full pl-9 pr-4 py-2.5 border-2 border-gray-200 rounded-lg focus:border-blue-500 focus:ring-2 focus:ring-blue-200 transition-all text-black placeholder-gray-400 text-sm"
+                      />
+                    </div>
+                  )}
+
+                  {showResponsibleStaffDropdown && !responsibleStaffId && (
+                    <div className="absolute z-20 w-full mt-1 bg-white border-2 border-gray-200 rounded-lg shadow-xl max-h-48 overflow-y-auto">
+                      {staffList
+                        .filter(staff => 
+                          staff.name.toLowerCase().includes(staffSearch.toLowerCase()) ||
+                          (staff.email && staff.email.toLowerCase().includes(staffSearch.toLowerCase()))
+                        )
+                        .map(staff => (
+                          <button
+                            key={staff.id}
+                            type="button"
+                            onClick={() => {
+                              setResponsibleStaffId(staff.id);
+                              setSelectedAssignedStaff(staff);
+                              setStaffSearch("");
+                              setShowResponsibleStaffDropdown(false);
+                            }}
+                            className="w-full text-left px-3 py-2 hover:bg-blue-50 border-b last:border-b-0 transition-colors text-sm"
+                          >
+                            <div className="font-medium text-black truncate">{staff.name}</div>
+                            {staff.email && <div className="text-xs text-gray-500 truncate">{staff.email}</div>}
+                          </button>
+                        ))}
+                      {staffList.filter(s => s.name.toLowerCase().includes(staffSearch.toLowerCase())).length === 0 && (
+                        <div className="px-3 py-2 text-sm text-gray-500 text-center">
+                          No staff members found
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+                
+                {responsibleStaffId && (
+                  <div className="mt-2 text-xs text-blue-600 flex items-center gap-1">
+                    <Info className="w-3 h-3" />
+                    This sale will be assigned to {staffList.find(s => s.id === responsibleStaffId)?.name}
+                  </div>
+                )}
+              </div>
+
+              {/* SECTION 2: ADD CUSTOMER MODAL */}
               {showAddCustomer && (
                 <div className="bg-blue-50 border-2 border-blue-200 rounded-lg p-3 space-y-3">
                   <div className="flex items-center justify-between">
                     <h4 className="font-semibold text-blue-900 text-sm">Add New Customer</h4>
-                    <button
-                      onClick={() => setShowAddCustomer(false)}
-                      type="button"
-                      className="text-blue-600 hover:text-blue-800"
-                    >
+                    <button onClick={() => setShowAddCustomer(false)} type="button" className="text-blue-600 hover:text-blue-800">
                       <X className="w-4 h-4" />
                     </button>
                   </div>
@@ -1934,46 +2037,27 @@ export default function AdminDashboard() {
                   </div>
                   
                   <div className="flex items-center gap-2 pt-2">
-                    <button
-                      onClick={handleImportFromContacts}
-                      type="button"
-                      className="flex-1 flex items-center justify-center gap-1 px-2 py-1.5 bg-white border border-blue-300 text-blue-700 rounded-lg hover:bg-blue-50 text-xs"
-                    >
+                    <button onClick={handleImportFromContacts} type="button" className="flex-1 flex items-center justify-center gap-1 px-2 py-1.5 bg-white border border-blue-300 text-blue-700 rounded-lg hover:bg-blue-50 text-xs">
                       <Phone className="w-3 h-3" />
                       Import
                     </button>
-                    
-                    <button
-                      onClick={handleCreateCustomer}
-                      disabled={addingCustomer || !newCustomer.name.trim()}
-                      type="button"
-                      className="flex-1 flex items-center justify-center gap-1 px-2 py-1.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 text-xs"
-                    >
+                    <button onClick={handleCreateCustomer} disabled={addingCustomer || !newCustomer.name.trim()} type="button" className="flex-1 flex items-center justify-center gap-1 px-2 py-1.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 text-xs">
                       {addingCustomer ? (
-                        <>
-                          <div className="animate-spin rounded-full h-3 w-3 border-b-2 border-white"></div>
-                          Adding...
-                        </>
+                        <div className="animate-spin rounded-full h-3 w-3 border-b-2 border-white"></div>
                       ) : (
-                        <>
-                          <UserPlus className="w-3 h-3" />
-                          Add Customer
-                        </>
+                        <UserPlus className="w-3 h-3" />
                       )}
+                      Add Customer
                     </button>
                   </div>
                 </div>
               )}
 
-              {/* Product Selection - Mobile Optimized */}
+              {/* SECTION 3: PRODUCT SELECTION & ADD TO CART */}
               <div>
                 <div className="flex items-center justify-between mb-2">
                   <label className="block text-sm font-semibold text-black">Add Products</label>
-                  <button
-                    type="button"
-                    onClick={() => setShowAddProduct(true)}
-                    className="text-xs text-blue-600 hover:text-blue-800 font-medium flex items-center gap-1"
-                  >
+                  <button type="button" onClick={() => setShowAddProduct(true)} className="text-xs text-blue-600 hover:text-blue-800 font-medium flex items-center gap-1">
                     <Plus className="w-3 h-3" />
                     Add
                   </button>
@@ -1989,11 +2073,7 @@ export default function AdminDashboard() {
                         setProductSearch(e.target.value);
                         setShowProductDropdown(true);
                       }}
-                      onFocus={() => {
-                        if (!currentProduct) {
-                          setShowProductDropdown(true);
-                        }
-                      }}
+                      onFocus={() => { if (!currentProduct) setShowProductDropdown(true); }}
                       disabled={!!currentProduct}
                       className="w-full pl-9 pr-4 py-2.5 border-2 border-slate-200 rounded-lg focus:border-blue-500 focus:ring-2 focus:ring-blue-200 transition-all disabled:bg-slate-100 disabled:cursor-not-allowed text-black placeholder-black text-sm"
                     />
@@ -2017,9 +2097,7 @@ export default function AdminDashboard() {
                                 setProductSearch("");
                                 setShowProductDropdown(false);
                                 setStockError(null);
-                                setTimeout(() => {
-                                  document.getElementById('quantity-input')?.focus();
-                                }, 100);
+                                setTimeout(() => document.getElementById('quantity-input')?.focus(), 100);
                               }}
                               className="w-full text-left px-3 py-2 hover:bg-blue-50 border-b last:border-b-0 transition-colors text-sm"
                             >
@@ -2055,36 +2133,17 @@ export default function AdminDashboard() {
 
                   {currentProduct && (
                     <div className="bg-blue-50 border-2 border-blue-200 rounded-lg p-3">
-                      {/* Enhanced Stock Info with Total Stock Display */}
-                      <div className={`mb-3 p-2 rounded-lg border-2 ${
-                        isOutOfStock(currentProduct) 
-                          ? 'bg-red-50 border-red-300' 
-                          : isLowStock(currentProduct)
-                          ? 'bg-orange-50 border-orange-300'
-                          : 'bg-green-50 border-green-300'
-                      }`}>
+                      <div className={`mb-3 p-2 rounded-lg border-2 ${isOutOfStock(currentProduct) ? 'bg-red-50 border-red-300' : isLowStock(currentProduct) ? 'bg-orange-50 border-orange-300' : 'bg-green-50 border-green-300'}`}>
                         <div className="flex items-start justify-between gap-2">
                           <div className="flex items-start gap-1.5 flex-1">
                             {isOutOfStock(currentProduct) || isLowStock(currentProduct) ? (
-                              <AlertTriangle className={`w-4 h-4 mt-0.5 flex-shrink-0 ${
-                                isOutOfStock(currentProduct) ? 'text-red-600' : 'text-orange-600'
-                              }`} />
+                              <AlertTriangle className={`w-4 h-4 mt-0.5 flex-shrink-0 ${isOutOfStock(currentProduct) ? 'text-red-600' : 'text-orange-600'}`} />
                             ) : (
                               <Package className="w-4 h-4 mt-0.5 flex-shrink-0 text-green-600" />
                             )}
                             <div className="flex-1 min-w-0">
-                              <p className={`font-semibold text-xs ${
-                                isOutOfStock(currentProduct) 
-                                  ? 'text-red-800' 
-                                  : isLowStock(currentProduct)
-                                  ? 'text-orange-800'
-                                  : 'text-green-800'
-                              } truncate`}>
-                                {isOutOfStock(currentProduct) 
-                                  ? '⚠️ OUT OF STOCK' 
-                                  : isLowStock(currentProduct)
-                                  ? '⚠️ LOW STOCK'
-                                  : '✓ In Stock'}
+                              <p className={`font-semibold text-xs ${isOutOfStock(currentProduct) ? 'text-red-800' : isLowStock(currentProduct) ? 'text-orange-800' : 'text-green-800'} truncate`}>
+                                {isOutOfStock(currentProduct) ? '⚠️ OUT OF STOCK' : isLowStock(currentProduct) ? '⚠️ LOW STOCK' : '✓ In Stock'}
                               </p>
                               <div className="grid grid-cols-2 gap-x-2 gap-y-1 mt-1">
                                 <div className="text-xs">
@@ -2105,13 +2164,7 @@ export default function AdminDashboard() {
                           <button
                             onClick={() => openRestockModal(currentProduct)}
                             type="button"
-                            className={`px-2 py-1 rounded-lg text-white text-xs font-medium transition-all hover:shadow-md flex items-center gap-1 whitespace-nowrap ${
-                              isOutOfStock(currentProduct)
-                                ? 'bg-red-600 hover:bg-red-700'
-                                : isLowStock(currentProduct)
-                                ? 'bg-orange-600 hover:bg-orange-700'
-                                : 'bg-blue-600 hover:bg-blue-700'
-                            }`}
+                            className={`px-2 py-1 rounded-lg text-white text-xs font-medium transition-all hover:shadow-md flex items-center gap-1 whitespace-nowrap ${isOutOfStock(currentProduct) ? 'bg-red-600 hover:bg-red-700' : isLowStock(currentProduct) ? 'bg-orange-600 hover:bg-orange-700' : 'bg-blue-600 hover:bg-blue-700'}`}
                           >
                             <Package className="w-3 h-3" />
                             Restock
@@ -2123,23 +2176,14 @@ export default function AdminDashboard() {
                         <div className="flex-1 min-w-0">
                           <div className="font-semibold text-blue-900 text-sm truncate">{currentProduct.name}</div>
                           <div className="text-xs text-blue-700">
-                            Total Stock: {getProductStock(currentProduct)} | 
-                            Price: KSh {currentProduct.price?.toLocaleString() || 0}
+                            Total Stock: {getProductStock(currentProduct)} | Price: KSh {currentProduct.price?.toLocaleString() || 0}
                           </div>
                         </div>
-                        <button 
-                          onClick={() => {
-                            setCurrentProduct(null);
-                            setCurrentPrice("");
-                            setCurrentQuantity(0);
-                            setProductSearch("");
-                          }}
-                          type="button"
-                          className="text-blue-600 hover:text-blue-800 p-1 flex-shrink-0"
-                        >
+                        <button onClick={() => { setCurrentProduct(null); setCurrentPrice(""); setCurrentQuantity(0); setProductSearch(""); }} type="button" className="text-blue-600 hover:text-blue-800 p-1 flex-shrink-0">
                           <X className="w-4 h-4" />
                         </button>
                       </div>
+
                       <div className="grid grid-cols-2 gap-2 mb-2">
                         <div>
                           <label className="block text-xs font-semibold text-black mb-1">Quantity *</label>
@@ -2154,15 +2198,9 @@ export default function AdminDashboard() {
                               setCurrentQuantity(isNaN(val) ? 0 : Math.max(0, Math.min(val, getProductStock(currentProduct))));
                             }}
                             className="w-full px-2 py-1.5 border-2 border-slate-200 rounded-lg focus:border-blue-500 text-black placeholder-black text-sm"
-                            onKeyDown={(e) => {
-                              if (e.key === 'Enter' && currentQuantity > 0) {
-                                addItemToSale();
-                              }
-                            }}
+                            onKeyDown={(e) => { if (e.key === 'Enter' && currentQuantity > 0) addItemToSale(); }}
                           />
-                          <p className="text-xs text-gray-500 mt-1">
-                            Max: {getProductStock(currentProduct)}
-                          </p>
+                          <p className="text-xs text-gray-500 mt-1">Max: {getProductStock(currentProduct)}</p>
                         </div>
                         <div>
                           <label className="block text-xs font-semibold text-black mb-1">Unit Price (KSh)</label>
@@ -2174,11 +2212,7 @@ export default function AdminDashboard() {
                               value={currentPrice}
                               onChange={(e) => setCurrentPrice(e.target.value)}
                               placeholder={currentProduct.price?.toString() || "0.00"}
-                              className={`w-full px-2 py-1.5 border-2 rounded-lg focus:border-blue-500 focus:ring-2 focus:ring-blue-200 transition-all text-sm ${
-                                currentPrice === currentProduct.price?.toString() 
-                                  ? 'text-gray-400 italic border-gray-300 bg-gray-50' 
-                                  : 'text-black border-slate-200 bg-white'
-                              }`}
+                              className={`w-full px-2 py-1.5 border-2 rounded-lg focus:border-blue-500 focus:ring-2 focus:ring-blue-200 transition-all text-sm ${currentPrice === currentProduct.price?.toString() ? 'text-gray-400 italic border-gray-300 bg-gray-50' : 'text-black border-slate-200 bg-white'}`}
                             />
                             {currentPrice === currentProduct.price?.toString() && (
                               <div className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-orange-500 font-medium bg-orange-50 px-1 py-0.5 rounded">
@@ -2188,17 +2222,14 @@ export default function AdminDashboard() {
                           </div>
                         </div>
                       </div>
+
                       {currentQuantity > 0 && currentProduct && (
                         <div className="bg-blue-100 text-blue-900 px-2 py-1.5 rounded-lg text-xs font-bold mb-2">
                           Subtotal: KSh {(currentQuantity * (currentPrice && currentPrice.trim() !== "" ? parseFloat(currentPrice) : (currentProduct.price || 0))).toLocaleString()}
                         </div>
                       )}
-                      <button
-                        onClick={addItemToSale}
-                        type="button"
-                        disabled={!currentProduct || currentQuantity <= 0}
-                        className="w-full bg-blue-600 text-white px-3 py-2 rounded-lg hover:bg-blue-700 font-medium flex items-center justify-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed transition-all text-sm"
-                      >
+
+                      <button onClick={addItemToSale} type="button" disabled={!currentProduct || currentQuantity <= 0} className="w-full bg-blue-600 text-white px-3 py-2 rounded-lg hover:bg-blue-700 font-medium flex items-center justify-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed transition-all text-sm">
                         <Plus className="w-4 h-4" />
                         Add to Sale
                       </button>
@@ -2207,7 +2238,7 @@ export default function AdminDashboard() {
                 </div>
               </div>
 
-              {/* Sale Items - Mobile Optimized */}
+              {/* SECTION 4: SALE ITEMS CART */}
               {saleItems.length > 0 && (
                 <div className="border-2 border-slate-200 rounded-lg p-3 bg-slate-50">
                   <h3 className="font-semibold text-black mb-2 flex items-center gap-1.5 text-sm">
@@ -2223,11 +2254,7 @@ export default function AdminDashboard() {
                             {item.quantity} × KSh {item.price.toLocaleString()} = KSh {(item.quantity * item.price).toLocaleString()}
                           </div>
                         </div>
-                        <button
-                          onClick={() => removeItem(item.productId)}
-                          type="button"
-                          className="text-red-600 hover:text-red-800 p-1 hover:bg-red-50 rounded transition-colors flex-shrink-0"
-                        >
+                        <button onClick={() => removeItem(item.productId)} type="button" className="text-red-600 hover:text-red-800 p-1 hover:bg-red-50 rounded transition-colors flex-shrink-0">
                           <Trash2 className="w-4 h-4" />
                         </button>
                       </div>
@@ -2242,7 +2269,7 @@ export default function AdminDashboard() {
                 </div>
               )}
 
-              {/* Payment Options - Mobile Optimized */}
+              {/* SECTION 5: PAYMENT OPTIONS */}
               {saleItems.length > 0 && (
                 <div className="space-y-3">
                   <h3 className="font-semibold text-black flex items-center gap-1.5 text-sm">
@@ -2251,256 +2278,100 @@ export default function AdminDashboard() {
                   </h3>
                   
                   <div className="grid grid-cols-3 gap-2">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setPaymentOption('cash');
-                        setAmountPaid(calculateTotalAmount().toFixed(2));
-                        setPartialPayment({ cash: "", bank_transfer: "", till: "" });
-                      }}
-                      className={`p-3 rounded-lg border-2 flex flex-col items-center justify-center gap-1 transition-all text-xs ${
-                        paymentOption === 'cash'
-                          ? 'border-blue-500 bg-blue-50'
-                          : 'border-gray-200 hover:border-blue-300 hover:bg-blue-25'
-                      }`}
-                    >
-                      <div className={`p-2 rounded-full ${
-                        paymentOption === 'cash' ? 'bg-blue-100' : 'bg-gray-100'
-                      }`}>
-                        <Coins className={`w-5 h-5 ${
-                          paymentOption === 'cash' ? 'text-blue-600' : 'text-gray-400'
-                        }`} />
+                    <button type="button" onClick={() => { setPaymentOption('cash'); setAmountPaid(calculateTotalAmount().toFixed(2)); setPartialPayment({ cash: "", bank_transfer: "", till: "" }); }} className={`p-3 rounded-lg border-2 flex flex-col items-center justify-center gap-1 transition-all text-xs ${paymentOption === 'cash' ? 'border-blue-500 bg-blue-50' : 'border-gray-200 hover:border-blue-300 hover:bg-blue-25'}`}>
+                      <div className={`p-2 rounded-full ${paymentOption === 'cash' ? 'bg-blue-100' : 'bg-gray-100'}`}>
+                        <Coins className={`w-5 h-5 ${paymentOption === 'cash' ? 'text-blue-600' : 'text-gray-400'}`} />
                       </div>
-                      <span className={`font-medium ${
-                        paymentOption === 'cash' ? 'text-blue-700' : 'text-gray-700'
-                      }`}>Cash</span>
+                      <span className={`font-medium ${paymentOption === 'cash' ? 'text-blue-700' : 'text-gray-700'}`}>Cash</span>
                       <span className="text-xs text-gray-500">Full</span>
                     </button>
 
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setPaymentOption('bank_transfer');
-                        setAmountPaid(calculateTotalAmount().toFixed(2));
-                        setPartialPayment({ cash: "", bank_transfer: "", till: "" });
-                      }}
-                      className={`p-3 rounded-lg border-2 flex flex-col items-center justify-center gap-1 transition-all text-xs ${
-                        paymentOption === 'bank_transfer'
-                          ? 'border-green-500 bg-green-50'
-                          : 'border-gray-200 hover:border-green-300 hover:bg-green-25'
-                      }`}
-                    >
-                      <div className={`p-2 rounded-full ${
-                        paymentOption === 'bank_transfer' ? 'bg-green-100' : 'bg-gray-100'
-                      }`}>
-                        <CreditCard className={`w-5 h-5 ${
-                          paymentOption === 'bank_transfer' ? 'text-green-600' : 'text-gray-400'
-                        }`} />
+                    <button type="button" onClick={() => { setPaymentOption('bank_transfer'); setAmountPaid(calculateTotalAmount().toFixed(2)); setPartialPayment({ cash: "", bank_transfer: "", till: "" }); }} className={`p-3 rounded-lg border-2 flex flex-col items-center justify-center gap-1 transition-all text-xs ${paymentOption === 'bank_transfer' ? 'border-green-500 bg-green-50' : 'border-gray-200 hover:border-green-300 hover:bg-green-25'}`}>
+                      <div className={`p-2 rounded-full ${paymentOption === 'bank_transfer' ? 'bg-green-100' : 'bg-gray-100'}`}>
+                        <CreditCard className={`w-5 h-5 ${paymentOption === 'bank_transfer' ? 'text-green-600' : 'text-gray-400'}`} />
                       </div>
-                      <span className={`font-medium ${
-                        paymentOption === 'bank_transfer' ? 'text-green-700' : 'text-gray-700'
-                      }`}>Bank Transfer</span>
+                      <span className={`font-medium ${paymentOption === 'bank_transfer' ? 'text-green-700' : 'text-gray-700'}`}>Bank Transfer</span>
                       <span className="text-xs text-gray-500">Full</span>
                     </button>
 
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setPaymentOption('till');
-                        setAmountPaid(calculateTotalAmount().toFixed(2));
-                        setPartialPayment({ cash: "", bank_transfer: "", till: "" });
-                      }}
-                      className={`p-3 rounded-lg border-2 flex flex-col items-center justify-center gap-1 transition-all text-xs ${
-                        paymentOption === 'till'
-                          ? 'border-purple-500 bg-purple-50'
-                          : 'border-gray-200 hover:border-purple-300 hover:bg-purple-25'
-                      }`}
-                    >
-                      <div className={`p-2 rounded-full ${
-                        paymentOption === 'till' ? 'bg-purple-100' : 'bg-gray-100'
-                      }`}>
-                        <CreditCard className={`w-5 h-5 ${
-                          paymentOption === 'till' ? 'text-purple-600' : 'text-gray-400'
-                        }`} />
+                    <button type="button" onClick={() => { setPaymentOption('till'); setAmountPaid(calculateTotalAmount().toFixed(2)); setPartialPayment({ cash: "", bank_transfer: "", till: "" }); }} className={`p-3 rounded-lg border-2 flex flex-col items-center justify-center gap-1 transition-all text-xs ${paymentOption === 'till' ? 'border-purple-500 bg-purple-50' : 'border-gray-200 hover:border-purple-300 hover:bg-purple-25'}`}>
+                      <div className={`p-2 rounded-full ${paymentOption === 'till' ? 'bg-purple-100' : 'bg-gray-100'}`}>
+                        <CreditCard className={`w-5 h-5 ${paymentOption === 'till' ? 'text-purple-600' : 'text-gray-400'}`} />
                       </div>
-                      <span className={`font-medium ${
-                        paymentOption === 'till' ? 'text-purple-700' : 'text-gray-700'
-                      }`}>Till</span>
+                      <span className={`font-medium ${paymentOption === 'till' ? 'text-purple-700' : 'text-gray-700'}`}>Till</span>
                       <span className="text-xs text-gray-500">Full</span>
                     </button>
 
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setPaymentOption('partial');
-                        setAmountPaid("");
-                        setPartialPayment({ cash: "", bank_transfer: "", till: "" });
-                      }}
-                      className={`p-3 rounded-lg border-2 flex flex-col items-center justify-center gap-1 transition-all text-xs ${
-                        paymentOption === 'partial'
-                          ? 'border-yellow-500 bg-yellow-50'
-                          : 'border-gray-200 hover:border-yellow-300 hover:bg-yellow-25'
-                      }`}
-                    >
-                      <div className={`p-2 rounded-full ${
-                        paymentOption === 'partial' ? 'bg-yellow-100' : 'bg-gray-100'
-                      }`}>
-                        <Wallet className={`w-5 h-5 ${
-                          paymentOption === 'partial' ? 'text-yellow-600' : 'text-gray-400'
-                        }`} />
+                    <button type="button" onClick={() => { setPaymentOption('partial'); setAmountPaid(""); setPartialPayment({ cash: "", bank_transfer: "", till: "" }); }} className={`p-3 rounded-lg border-2 flex flex-col items-center justify-center gap-1 transition-all text-xs ${paymentOption === 'partial' ? 'border-yellow-500 bg-yellow-50' : 'border-gray-200 hover:border-yellow-300 hover:bg-yellow-25'}`}>
+                      <div className={`p-2 rounded-full ${paymentOption === 'partial' ? 'bg-yellow-100' : 'bg-gray-100'}`}>
+                        <Wallet className={`w-5 h-5 ${paymentOption === 'partial' ? 'text-yellow-600' : 'text-gray-400'}`} />
                       </div>
-                      <span className={`font-medium ${
-                        paymentOption === 'partial' ? 'text-yellow-700' : 'text-gray-700'
-                      }`}>Partial</span>
+                      <span className={`font-medium ${paymentOption === 'partial' ? 'text-yellow-700' : 'text-gray-700'}`}>Partial</span>
                       <span className="text-xs text-gray-500">Pay some</span>
                     </button>
 
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setPaymentOption('credit');
-                        setAmountPaid("0");
-                        setPartialPayment({ cash: "", bank_transfer: "", till: "" });
-                      }}
-                      className={`p-3 rounded-lg border-2 flex flex-col items-center justify-center gap-1 transition-all text-xs ${
-                        paymentOption === 'credit'
-                          ? 'border-red-500 bg-red-50'
-                          : 'border-gray-200 hover:border-red-300 hover:bg-red-25'
-                      }`}
-                    >
-                      <div className={`p-2 rounded-full ${
-                        paymentOption === 'credit' ? 'bg-red-100' : 'bg-gray-100'
-                      }`}>
-                        <CreditCard className={`w-5 h-5 ${
-                          paymentOption === 'credit' ? 'text-red-600' : 'text-gray-400'
-                        }`} />
+                    <button type="button" onClick={() => { setPaymentOption('credit'); setAmountPaid("0"); setPartialPayment({ cash: "", bank_transfer: "", till: "" }); }} className={`p-3 rounded-lg border-2 flex flex-col items-center justify-center gap-1 transition-all text-xs ${paymentOption === 'credit' ? 'border-red-500 bg-red-50' : 'border-gray-200 hover:border-red-300 hover:bg-red-25'}`}>
+                      <div className={`p-2 rounded-full ${paymentOption === 'credit' ? 'bg-red-100' : 'bg-gray-100'}`}>
+                        <CreditCard className={`w-5 h-5 ${paymentOption === 'credit' ? 'text-red-600' : 'text-gray-400'}`} />
                       </div>
-                      <span className={`font-medium ${
-                        paymentOption === 'credit' ? 'text-red-700' : 'text-gray-700'
-                      }`}>Credit</span>
+                      <span className={`font-medium ${paymentOption === 'credit' ? 'text-red-700' : 'text-gray-700'}`}>Credit</span>
                       <span className="text-xs text-gray-500">Pay later</span>
                     </button>
                   </div>
 
-                  {/* Enhanced Partial Payment Details */}
                   {paymentOption === 'partial' && (
                     <div className="bg-yellow-50 border-2 border-yellow-200 rounded-lg p-3 space-y-3">
                       <h4 className="text-sm font-semibold text-yellow-900">How was partial payment made?</h4>
-                      
                       <div className="space-y-2">
-                        {/* Cash Payment */}
                         <div>
-                          <label className="block text-xs font-medium text-black mb-1">
-                            Cash Amount (KSh)
-                          </label>
+                          <label className="block text-xs font-medium text-black mb-1">Cash Amount (KSh)</label>
                           <div className="relative">
                             <span className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-500 text-sm">KSh</span>
-                            <input
-                              type="number"
-                              min="0"
-                              step="0.01"
-                              value={partialPayment.cash}
-                              onChange={(e) => {
-                                const newValue = e.target.value;
-                                setPartialPayment({...partialPayment, cash: newValue});
-                                // Auto-calculate total
-                                const total = Object.values({...partialPayment, cash: newValue})
-                                  .reduce((sum, val) => sum + (parseFloat(val) || 0), 0);
-                                setAmountPaid(total.toFixed(2));
-                              }}
-                              placeholder="0.00"
-                              className="w-full pl-10 pr-3 py-2 border border-yellow-300 rounded-lg focus:border-yellow-500 focus:ring-2 focus:ring-yellow-200 text-black placeholder-gray-400 text-sm"
-                            />
+                            <input type="number" min="0" step="0.01" value={partialPayment.cash} onChange={(e) => { const newValue = e.target.value; setPartialPayment({...partialPayment, cash: newValue}); const total = Object.values({...partialPayment, cash: newValue}).reduce((sum, val) => sum + (parseFloat(val) || 0), 0); setAmountPaid(total.toFixed(2)); }} placeholder="0.00" className="w-full pl-10 pr-3 py-2 border border-yellow-300 rounded-lg focus:border-yellow-500 focus:ring-2 focus:ring-yellow-200 text-black placeholder-gray-400 text-sm" />
                           </div>
                         </div>
 
-                        {/* Bank Transfer */}
                         <div>
-                          <label className="block text-xs font-medium text-black mb-1">
-                            Bank Transfer Amount (KSh)
-                          </label>
+                          <label className="block text-xs font-medium text-black mb-1">Bank Transfer Amount (KSh)</label>
                           <div className="relative">
                             <span className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-500 text-sm">KSh</span>
-                            <input
-                              type="number"
-                              min="0"
-                              step="0.01"
-                              value={partialPayment.bank_transfer}
-                              onChange={(e) => {
-                                const newValue = e.target.value;
-                                setPartialPayment({...partialPayment, bank_transfer: newValue});
-                                const total = Object.values({...partialPayment, bank_transfer: newValue})
-                                  .reduce((sum, val) => sum + (parseFloat(val) || 0), 0);
-                                setAmountPaid(total.toFixed(2));
-                              }}
-                              placeholder="0.00"
-                              className="w-full pl-10 pr-3 py-2 border border-yellow-300 rounded-lg focus:border-yellow-500 focus:ring-2 focus:ring-yellow-200 text-black placeholder-gray-400 text-sm"
-                            />
+                            <input type="number" min="0" step="0.01" value={partialPayment.bank_transfer} onChange={(e) => { const newValue = e.target.value; setPartialPayment({...partialPayment, bank_transfer: newValue}); const total = Object.values({...partialPayment, bank_transfer: newValue}).reduce((sum, val) => sum + (parseFloat(val) || 0), 0); setAmountPaid(total.toFixed(2)); }} placeholder="0.00" className="w-full pl-10 pr-3 py-2 border border-yellow-300 rounded-lg focus:border-yellow-500 focus:ring-2 focus:ring-yellow-200 text-black placeholder-gray-400 text-sm" />
                           </div>
                         </div>
 
-                        {/* Till Payment */}
                         <div>
-                          <label className="block text-xs font-medium text-black mb-1">
-                            Till Amount (KSh)
-                          </label>
+                          <label className="block text-xs font-medium text-black mb-1">Till Amount (KSh)</label>
                           <div className="relative">
                             <span className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-500 text-sm">KSh</span>
-                            <input
-                              type="number"
-                              min="0"
-                              step="0.01"
-                              value={partialPayment.till}
-                              onChange={(e) => {
-                                const newValue = e.target.value;
-                                setPartialPayment({...partialPayment, till: newValue});
-                                const total = Object.values({...partialPayment, till: newValue})
-                                  .reduce((sum, val) => sum + (parseFloat(val) || 0), 0);
-                                setAmountPaid(total.toFixed(2));
-                              }}
-                              placeholder="0.00"
-                              className="w-full pl-10 pr-3 py-2 border border-yellow-300 rounded-lg focus:border-yellow-500 focus:ring-2 focus:ring-yellow-200 text-black placeholder-gray-400 text-sm"
-                            />
+                            <input type="number" min="0" step="0.01" value={partialPayment.till} onChange={(e) => { const newValue = e.target.value; setPartialPayment({...partialPayment, till: newValue}); const total = Object.values({...partialPayment, till: newValue}).reduce((sum, val) => sum + (parseFloat(val) || 0), 0); setAmountPaid(total.toFixed(2)); }} placeholder="0.00" className="w-full pl-10 pr-3 py-2 border border-yellow-300 rounded-lg focus:border-yellow-500 focus:ring-2 focus:ring-yellow-200 text-black placeholder-gray-400 text-sm" />
                           </div>
                         </div>
 
-                        {/* Summary of partial payments */}
                         <div className="pt-2 border-t border-yellow-300">
                           <div className="grid grid-cols-2 gap-2 text-xs">
                             <div className="text-black">Total Partial Payment:</div>
-                            <div className="font-bold text-right text-yellow-700">
-                              KSh {amountPaid ? parseFloat(amountPaid).toLocaleString() : "0.00"}
-                            </div>
-                            
+                            <div className="font-bold text-right text-yellow-700">KSh {amountPaid ? parseFloat(amountPaid).toLocaleString() : "0.00"}</div>
                             <div className="text-black">Remaining Balance:</div>
-                            <div className="font-bold text-right text-red-600">
-                              KSh {Math.max(0, calculateTotalAmount() - (parseFloat(amountPaid) || 0)).toLocaleString()}
-                            </div>
+                            <div className="font-bold text-right text-red-600">KSh {Math.max(0, calculateTotalAmount() - (parseFloat(amountPaid) || 0)).toLocaleString()}</div>
                           </div>
                         </div>
 
-                        {/* Breakdown of payments made */}
                         {parseFloat(amountPaid) > 0 && (
                           <div className="bg-white/50 rounded-lg p-2 border border-yellow-200">
                             <p className="text-xs font-medium text-yellow-800 mb-1">Payment Breakdown:</p>
-                            <div className="space-y-1">
-                              {Object.entries(partialPayment).map(([method, amount]) => {
-                                const numAmount = parseFloat(amount || "0");
-                                if (numAmount > 0) {
-                                  const methodName = method === 'bank_transfer' ? 'Bank Transfer' : 
-                                                   method === 'cash' ? 'Cash' : 'Till';
-                                  return (
-                                    <div key={method} className="flex justify-between text-xs">
-                                      <span className="text-gray-700">{methodName}:</span>
-                                      <span className="font-medium text-green-600">
-                                        KSh {numAmount.toLocaleString()}
-                                      </span>
-                                    </div>
-                                  );
-                                }
-                                return null;
-                              })}
-                            </div>
+                            {Object.entries(partialPayment).map(([method, amount]) => {
+                              const numAmount = parseFloat(amount || "0");
+                              if (numAmount > 0) {
+                                const methodName = method === 'bank_transfer' ? 'Bank Transfer' : method === 'cash' ? 'Cash' : 'Till';
+                                return (
+                                  <div key={method} className="flex justify-between text-xs">
+                                    <span className="text-gray-700">{methodName}:</span>
+                                    <span className="font-medium text-green-600">KSh {numAmount.toLocaleString()}</span>
+                                  </div>
+                                );
+                              }
+                              return null;
+                            })}
                           </div>
                         )}
                       </div>
@@ -2514,14 +2385,11 @@ export default function AdminDashboard() {
                           <AlertTriangle className="w-4 h-4" />
                           <span className="font-semibold">Credit Sale - Customer will pay later</span>
                         </div>
-                        <p className="text-xs text-gray-600 mt-1">
-                          Total amount: KSh {calculateTotalAmount().toLocaleString()} will be added to customer's credit
-                        </p>
+                        <p className="text-xs text-gray-600 mt-1">Total amount: KSh {calculateTotalAmount().toLocaleString()} will be added to customer's credit</p>
                       </div>
                     </div>
                   )}
 
-                  {/* Payment Summary */}
                   <div className="bg-gray-50 border-2 border-gray-200 rounded-lg p-3 space-y-2 text-sm">
                     <div className="flex justify-between items-center">
                       <span className="text-black">Total Amount:</span>
@@ -2530,56 +2398,32 @@ export default function AdminDashboard() {
                     
                     <div className="flex justify-between items-center">
                       <span className="text-black">Payment Method:</span>
-                      <span className={`font-bold ${
-                        paymentOption === 'cash' ? 'text-blue-600' :
-                        paymentOption === 'bank_transfer' ? 'text-green-600' :
-                        paymentOption === 'till' ? 'text-purple-600' :
-                        paymentOption === 'partial' ? 'text-yellow-600' :
-                        'text-red-600'
-                      }`}>
-                        {paymentOption === 'cash' ? 'Cash' :
-                         paymentOption === 'bank_transfer' ? 'Bank Transfer' :
-                         paymentOption === 'till' ? 'Till' :
-                         paymentOption === 'partial' ? 'Partial Payment' :
-                         'Credit'}
+                      <span className={`font-bold ${paymentOption === 'cash' ? 'text-blue-600' : paymentOption === 'bank_transfer' ? 'text-green-600' : paymentOption === 'till' ? 'text-purple-600' : paymentOption === 'partial' ? 'text-yellow-600' : 'text-red-600'}`}>
+                        {paymentOption === 'cash' ? 'Cash' : paymentOption === 'bank_transfer' ? 'Bank Transfer' : paymentOption === 'till' ? 'Till' : paymentOption === 'partial' ? 'Partial Payment' : 'Credit'}
                       </span>
                     </div>
                     
                     <div className="flex justify-between items-center">
                       <span className="text-black">Amount Paid:</span>
-                      <span className={`font-bold ${
-                        paymentOption === 'partial' || paymentOption === 'credit' ? 'text-gray-600' : 'text-green-600'
-                      }`}>
-                        {paymentOption === 'cash' || paymentOption === 'bank_transfer' || paymentOption === 'till' 
-                          ? `KSh ${calculateTotalAmount().toLocaleString()}`
-                          : paymentOption === 'partial'
-                          ? `KSh ${(parseFloat(amountPaid) || 0).toLocaleString()}`
-                          : 'KSh 0'}
+                      <span className={`font-bold ${paymentOption === 'partial' || paymentOption === 'credit' ? 'text-gray-600' : 'text-green-600'}`}>
+                        {paymentOption === 'cash' || paymentOption === 'bank_transfer' || paymentOption === 'till' ? `KSh ${calculateTotalAmount().toLocaleString()}` : paymentOption === 'partial' ? `KSh ${(parseFloat(amountPaid) || 0).toLocaleString()}` : 'KSh 0'}
                       </span>
                     </div>
                     
                     {(paymentOption === 'partial' || paymentOption === 'credit') && (
                       <div className="flex justify-between items-center pt-1 border-t border-gray-300">
-                        <span className="font-bold text-black">
-                          {paymentOption === 'partial' ? 'Remaining:' : 'Credit Amount:'}
-                        </span>
-                        <span className={`font-bold ${
-                          paymentOption === 'partial' ? 'text-red-600' : 'text-red-600'
-                        }`}>
-                          KSh {Math.max(0, calculateTotalAmount() - (parseFloat(amountPaid) || 0)).toLocaleString()}
-                        </span>
+                        <span className="font-bold text-black">{paymentOption === 'partial' ? 'Remaining:' : 'Credit Amount:'}</span>
+                        <span className="font-bold text-red-600">KSh {Math.max(0, calculateTotalAmount() - (parseFloat(amountPaid) || 0)).toLocaleString()}</span>
                       </div>
                     )}
 
-                    {/* Partial Payment Breakdown in Summary */}
                     {paymentOption === 'partial' && parseFloat(amountPaid) > 0 && (
                       <div className="space-y-1 pt-2 border-t border-gray-300">
                         <p className="text-xs font-medium text-yellow-700">Partial Payment Breakdown:</p>
                         {Object.entries(partialPayment).map(([method, amount]) => {
                           const numAmount = parseFloat(amount || "0");
                           if (numAmount > 0) {
-                            const methodName = method === 'bank_transfer' ? 'Bank Transfer' : 
-                                             method === 'cash' ? 'Cash' : 'Till';
+                            const methodName = method === 'bank_transfer' ? 'Bank Transfer' : method === 'cash' ? 'Cash' : 'Till';
                             return (
                               <div key={method} className="flex justify-between text-xs pl-2">
                                 <span className="text-gray-600">{methodName}:</span>
@@ -2591,11 +2435,21 @@ export default function AdminDashboard() {
                         })}
                       </div>
                     )}
+
+                    {/* Display Responsible Staff in Summary */}
+                    {responsibleStaffId && (
+                      <div className="flex justify-between items-center pt-1 border-t border-gray-300">
+                        <span className="font-bold text-black">Responsible Staff:</span>
+                        <span className="font-medium text-blue-600">
+                          {staffList.find(s => s.id === responsibleStaffId)?.name || "Selected"}
+                        </span>
+                      </div>
+                    )}
                   </div>
                 </div>
               )}
 
-              {/* Action Buttons - Mobile Optimized */}
+              {/* SECTION 6: ACTION BUTTONS */}
               <div className="flex gap-2 pt-3 border-t-2 border-slate-200">
                 <button
                   onClick={() => {
@@ -2606,6 +2460,7 @@ export default function AdminDashboard() {
                     setOptimisticSale(null);
                     setOptimisticProducts([]);
                     setPartialPayment({ cash: "", bank_transfer: "", till: "" });
+                    setResponsibleStaffId(null);
                   }}
                   type="button"
                   disabled={isCreating}
@@ -2617,8 +2472,7 @@ export default function AdminDashboard() {
                   ref={createSaleButtonRef}
                   onClick={handleCreateSaleOptimistic}
                   type="button"
-                  disabled={isCreating || !selectedCustomer || saleItems.length === 0 || 
-                    (paymentOption === 'partial' && (!amountPaid || parseFloat(amountPaid) <= 0))}
+                  disabled={isCreating || !selectedCustomer || saleItems.length === 0 || (paymentOption === 'partial' && (!amountPaid || parseFloat(amountPaid) <= 0))}
                   className="flex-1 px-3 py-2 bg-gradient-to-r from-blue-600 to-blue-700 text-white rounded-lg hover:from-blue-700 hover:to-blue-800 font-medium transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-1.5 shadow text-sm"
                 >
                   {isCreating ? (
@@ -2639,7 +2493,7 @@ export default function AdminDashboard() {
         </div>
       )}
 
-      {/* Add Product Modal - Mobile Optimized */}
+      {/* ADD PRODUCT MODAL */}
       {showAddProduct && (
         <div className="fixed inset-0 bg-black/50 flex items-start justify-center p-2 sm:p-4 z-50 overflow-y-auto">
           <div className="bg-white rounded-xl sm:rounded-2xl w-full max-w-md shadow-2xl mt-4 sm:mt-0">
@@ -2652,15 +2506,7 @@ export default function AdminDashboard() {
                     <p className="text-purple-100 text-xs sm:text-sm">Create a new product</p>
                   </div>
                 </div>
-                <button
-                  onClick={() => {
-                    setShowAddProduct(false);
-                    setProductError(null);
-                    setProductSuccess(null);
-                  }}
-                  type="button"
-                  className="text-white hover:bg-white/20 p-1.5 rounded-lg transition-colors"
-                >
+                <button onClick={() => { setShowAddProduct(false); setProductError(null); setProductSuccess(null); }} type="button" className="text-white hover:bg-white/20 p-1.5 rounded-lg transition-colors">
                   <X className="w-5 h-5 sm:w-6 sm:h-6" />
                 </button>
               </div>
@@ -2670,12 +2516,8 @@ export default function AdminDashboard() {
               {productError && (
                 <div className="bg-red-50 border border-red-200 text-red-700 px-3 py-2 rounded-lg flex items-start gap-2 text-sm">
                   <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5" />
-                  <div className="flex-1">
-                    <span>{productError}</span>
-                  </div>
-                  <button onClick={() => setProductError(null)} type="button" className="text-red-700 hover:text-red-900">
-                    <X size={14} />
-                  </button>
+                  <div className="flex-1"><span>{productError}</span></div>
+                  <button onClick={() => setProductError(null)} type="button" className="text-red-700 hover:text-red-900"><X size={14} /></button>
                 </div>
               )}
 
@@ -2688,155 +2530,69 @@ export default function AdminDashboard() {
 
               <div className="space-y-3">
                 <div>
-                  <label className="block text-sm font-semibold text-black mb-1">
-                    Product Name *
-                  </label>
-                  <input
-                    type="text"
-                    value={newProduct.name}
-                    onChange={(e) => setNewProduct({...newProduct, name: e.target.value})}
-                    placeholder="Enter product name"
-                    className="w-full px-3 py-2 border-2 border-slate-200 rounded-lg focus:border-purple-500 focus:ring-2 focus:ring-purple-200 transition-all text-black placeholder-gray-400 text-sm"
-                    disabled={addingProduct}
-                  />
+                  <label className="block text-sm font-semibold text-black mb-1">Product Name *</label>
+                  <input type="text" value={newProduct.name} onChange={(e) => setNewProduct({...newProduct, name: e.target.value})} placeholder="Enter product name" className="w-full px-3 py-2 border-2 border-slate-200 rounded-lg focus:border-purple-500 focus:ring-2 focus:ring-purple-200 transition-all text-black placeholder-gray-400 text-sm" disabled={addingProduct} />
                 </div>
 
                 <div>
-                  <label className="block text-sm font-semibold text-black mb-1">
-                    Category *
-                  </label>
+                  <label className="block text-sm font-semibold text-black mb-1">Category *</label>
                   <div className="flex flex-col gap-2">
-                    <select
-                      value={newProduct.category}
-                      onChange={(e) => setNewProduct({...newProduct, category: e.target.value})}
-                      className="w-full px-3 py-2 border-2 border-slate-200 rounded-lg focus:border-purple-500 focus:ring-2 focus:ring-purple-200 text-black text-sm"
-                      disabled={addingProduct}
-                    >
+                    <select value={newProduct.category} onChange={(e) => setNewProduct({...newProduct, category: e.target.value})} className="w-full px-3 py-2 border-2 border-slate-200 rounded-lg focus:border-purple-500 focus:ring-2 focus:ring-purple-200 text-black text-sm" disabled={addingProduct}>
                       <option value="">Select a category</option>
-                      {categories.map((category) => (
-                        <option key={category} value={category}>
-                          {category}
-                        </option>
-                      ))}
+                      {categories.map((category) => (<option key={category} value={category}>{category}</option>))}
                     </select>
-                    <input
-                      type="text"
-                      value={newProduct.category}
-                      onChange={(e) => setNewProduct({...newProduct, category: e.target.value})}
-                      placeholder="Or type new category"
-                      className="w-full px-3 py-2 border-2 border-slate-200 rounded-lg focus:border-purple-500 focus:ring-2 focus:ring-purple-200 text-black placeholder-gray-400 text-sm"
-                      disabled={addingProduct}
-                    />
+                    <input type="text" value={newProduct.category} onChange={(e) => setNewProduct({...newProduct, category: e.target.value})} placeholder="Or type new category" className="w-full px-3 py-2 border-2 border-slate-200 rounded-lg focus:border-purple-500 focus:ring-2 focus:ring-purple-200 text-black placeholder-gray-400 text-sm" disabled={addingProduct} />
                   </div>
                 </div>
 
                 <div>
-                  <label className="block text-sm font-semibold text-black mb-1">
-                    Production Cost (KSh) *
-                  </label>
+                  <label className="block text-sm font-semibold text-black mb-1">Production Cost (KSh) *</label>
                   <div className="relative">
                     <span className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-500 text-sm">KSh</span>
-                    <input
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      value={newProduct.productionCost}
-                      onChange={(e) => setNewProduct({...newProduct, productionCost: e.target.value})}
-                      placeholder="Enter production cost"
-                      className="w-full pl-10 pr-3 py-2 border-2 border-slate-200 rounded-lg focus:border-purple-500 focus:ring-2 focus:ring-purple-200 text-black placeholder-gray-400 text-sm"
-                      disabled={addingProduct}
-                    />
+                    <input type="number" min="0" step="0.01" value={newProduct.productionCost} onChange={(e) => setNewProduct({...newProduct, productionCost: e.target.value})} placeholder="Enter production cost" className="w-full pl-10 pr-3 py-2 border-2 border-slate-200 rounded-lg focus:border-purple-500 focus:ring-2 focus:ring-purple-200 text-black placeholder-gray-400 text-sm" disabled={addingProduct} />
                   </div>
                 </div>
 
                 <div>
-                  <label className="block text-sm font-semibold text-black mb-1">
-                    Selling Price (KSh) *
-                  </label>
+                  <label className="block text-sm font-semibold text-black mb-1">Selling Price (KSh) *</label>
                   <div className="relative">
                     <span className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-500 text-sm">KSh</span>
-                    <input
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      value={newProduct.sellingPrice}
-                      onChange={(e) => setNewProduct({...newProduct, sellingPrice: e.target.value})}
-                      placeholder="Enter selling price"
-                      className="w-full pl-10 pr-3 py-2 border-2 border-slate-200 rounded-lg focus:border-purple-500 focus:ring-2 focus:ring-purple-200 text-black placeholder-gray-400 text-sm"
-                      disabled={addingProduct}
-                    />
+                    <input type="number" min="0" step="0.01" value={newProduct.sellingPrice} onChange={(e) => setNewProduct({...newProduct, sellingPrice: e.target.value})} placeholder="Enter selling price" className="w-full pl-10 pr-3 py-2 border-2 border-slate-200 rounded-lg focus:border-purple-500 focus:ring-2 focus:ring-purple-200 text-black placeholder-gray-400 text-sm" disabled={addingProduct} />
                   </div>
-                  {newProduct.productionCost && newProduct.sellingPrice && (
-                    (() => {
-                      const productionCost = parseFloat(newProduct.productionCost);
-                      const sellingPrice = parseFloat(newProduct.sellingPrice);
-                      if (!isNaN(productionCost) && !isNaN(sellingPrice) && productionCost > 0) {
-                        const profit = sellingPrice - productionCost;
-                        const profitMargin = (profit / productionCost) * 100;
-                        return (
-                          <div className={`mt-1 text-xs ${profit > 0 ? 'text-green-600' : 'text-red-600'}`}>
-                            Profit: KSh {profit.toLocaleString()} ({profitMargin.toFixed(1)}%)
-                          </div>
-                        );
-                      }
-                      return null;
-                    })()
-                  )}
+                  {newProduct.productionCost && newProduct.sellingPrice && (() => {
+                    const productionCost = parseFloat(newProduct.productionCost);
+                    const sellingPrice = parseFloat(newProduct.sellingPrice);
+                    if (!isNaN(productionCost) && !isNaN(sellingPrice) && productionCost > 0) {
+                      const profit = sellingPrice - productionCost;
+                      const profitMargin = (profit / productionCost) * 100;
+                      return <div className={`mt-1 text-xs ${profit > 0 ? 'text-green-600' : 'text-red-600'}`}>Profit: KSh {profit.toLocaleString()} ({profitMargin.toFixed(1)}%)</div>;
+                    }
+                    return null;
+                  })()}
                 </div>
 
                 <div>
-                  <label className="block text-sm font-semibold text-black mb-1">
-                    Initial Stock *
-                  </label>
-                  <input
-                    type="number"
-                    min="0"
-                    value={newProduct.initialStock}
-                    onChange={(e) => setNewProduct({...newProduct, initialStock: e.target.value})}
-                    placeholder="Enter initial stock"
-                    className="w-full px-3 py-2 border-2 border-slate-200 rounded-lg focus:border-purple-500 focus:ring-2 focus:ring-purple-200 text-black placeholder-gray-400 text-sm"
-                    disabled={addingProduct}
-                  />
+                  <label className="block text-sm font-semibold text-black mb-1">Initial Stock *</label>
+                  <input type="number" min="0" value={newProduct.initialStock} onChange={(e) => setNewProduct({...newProduct, initialStock: e.target.value})} placeholder="Enter initial stock" className="w-full px-3 py-2 border-2 border-slate-200 rounded-lg focus:border-purple-500 focus:ring-2 focus:ring-purple-200 text-black placeholder-gray-400 text-sm" disabled={addingProduct} />
                 </div>
 
                 {newProduct.name && newProduct.category && newProduct.productionCost && newProduct.sellingPrice && newProduct.initialStock && (
                   <div className="bg-purple-50 border-2 border-purple-200 rounded-lg p-3 text-sm">
                     <h4 className="font-semibold text-purple-900 mb-1">Product Summary</h4>
                     <div className="space-y-1">
-                      <div className="flex justify-between">
-                        <span className="text-black">Product:</span>
-                        <span className="font-medium truncate ml-2">{newProduct.name}</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-black">Category:</span>
-                        <span className="font-medium text-purple-700 truncate ml-2">{newProduct.category}</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-black">Cost:</span>
-                        <span className="font-medium">KSh {parseFloat(newProduct.productionCost).toLocaleString()}</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-black">Price:</span>
-                        <span className="font-medium text-green-600">KSh {parseFloat(newProduct.sellingPrice).toLocaleString()}</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-black">Stock:</span>
-                        <span className="font-medium">{newProduct.initialStock} units</span>
-                      </div>
+                      <div className="flex justify-between"><span className="text-black">Product:</span><span className="font-medium truncate ml-2">{newProduct.name}</span></div>
+                      <div className="flex justify-between"><span className="text-black">Category:</span><span className="font-medium text-purple-700 truncate ml-2">{newProduct.category}</span></div>
+                      <div className="flex justify-between"><span className="text-black">Cost:</span><span className="font-medium">KSh {parseFloat(newProduct.productionCost).toLocaleString()}</span></div>
+                      <div className="flex justify-between"><span className="text-black">Price:</span><span className="font-medium text-green-600">KSh {parseFloat(newProduct.sellingPrice).toLocaleString()}</span></div>
+                      <div className="flex justify-between"><span className="text-black">Stock:</span><span className="font-medium">{newProduct.initialStock} units</span></div>
                       {(() => {
                         const productionCost = parseFloat(newProduct.productionCost);
                         const sellingPrice = parseFloat(newProduct.sellingPrice);
                         const initialStock = parseInt(newProduct.initialStock || "0");
-                        
                         if (!isNaN(productionCost) && !isNaN(sellingPrice) && !isNaN(initialStock)) {
                           const profit = sellingPrice - productionCost;
                           const totalProfit = profit * initialStock;
-                          return (
-                            <div className="flex justify-between pt-1 border-t border-purple-300">
-                              <span className="font-bold text-black">Total Profit:</span>
-                              <span className="font-bold text-green-700">KSh {totalProfit.toLocaleString()}</span>
-                            </div>
-                          );
+                          return <div className="flex justify-between pt-1 border-t border-purple-300"><span className="font-bold text-black">Total Profit:</span><span className="font-bold text-green-700">KSh {totalProfit.toLocaleString()}</span></div>;
                         }
                         return null;
                       })()}
@@ -2846,35 +2602,9 @@ export default function AdminDashboard() {
               </div>
 
               <div className="flex gap-2 pt-3">
-                <button
-                  onClick={() => {
-                    setShowAddProduct(false);
-                    setProductError(null);
-                    setProductSuccess(null);
-                  }}
-                  type="button"
-                  disabled={addingProduct}
-                  className="flex-1 px-3 py-2 border-2 border-slate-300 text-black rounded-lg hover:bg-slate-50 font-medium transition-colors disabled:opacity-50 text-sm"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={handleCreateProduct}
-                  type="button"
-                  disabled={addingProduct || !newProduct.name.trim() || !newProduct.category.trim() || !newProduct.productionCost || !newProduct.sellingPrice}
-                  className="flex-1 px-3 py-2 bg-gradient-to-r from-purple-600 to-purple-700 text-white rounded-lg hover:from-purple-700 hover:to-purple-800 font-medium transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-1.5 shadow text-sm"
-                >
-                  {addingProduct ? (
-                    <>
-                      <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
-                      Creating...
-                    </>
-                  ) : (
-                    <>
-                      <CheckCircle className="w-4 h-4" />
-                      Add Product
-                    </>
-                  )}
+                <button onClick={() => { setShowAddProduct(false); setProductError(null); setProductSuccess(null); }} type="button" disabled={addingProduct} className="flex-1 px-3 py-2 border-2 border-slate-300 text-black rounded-lg hover:bg-slate-50 font-medium transition-colors disabled:opacity-50 text-sm">Cancel</button>
+                <button onClick={handleCreateProduct} type="button" disabled={addingProduct || !newProduct.name.trim() || !newProduct.category.trim() || !newProduct.productionCost || !newProduct.sellingPrice} className="flex-1 px-3 py-2 bg-gradient-to-r from-purple-600 to-purple-700 text-white rounded-lg hover:from-purple-700 hover:to-purple-800 font-medium transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-1.5 shadow text-sm">
+                  {addingProduct ? <><div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div> Creating...</> : <><CheckCircle className="w-4 h-4" /> Add Product</>}
                 </button>
               </div>
             </div>
@@ -2882,7 +2612,7 @@ export default function AdminDashboard() {
         </div>
       )}
 
-      {/* Restock Modal - Mobile Optimized */}
+      {/* RESTOCK MODAL */}
       {showRestockModal && restockingProduct && (
         <div className="fixed inset-0 bg-black/60 flex items-start justify-center p-2 sm:p-4 z-[60]">
           <div className="bg-white rounded-xl sm:rounded-2xl w-full max-w-md shadow-2xl mt-4 sm:mt-0">
@@ -2895,14 +2625,7 @@ export default function AdminDashboard() {
                     <p className="text-orange-100 text-xs sm:text-sm truncate">{restockingProduct.name}</p>
                   </div>
                 </div>
-                <button
-                  onClick={closeRestockModal}
-                  disabled={restocking}
-                  type="button"
-                  className="text-white hover:bg-white/20 p-1.5 rounded-lg transition-colors disabled:opacity-50"
-                >
-                  <X className="w-5 h-5 sm:w-6 sm:h-6" />
-                </button>
+                <button onClick={closeRestockModal} disabled={restocking} type="button" className="text-white hover:bg-white/20 p-1.5 rounded-lg transition-colors disabled:opacity-50"><X className="w-5 h-5 sm:w-6 sm:h-6" /></button>
               </div>
             </div>
 
@@ -2910,12 +2633,8 @@ export default function AdminDashboard() {
               {restockError && (
                 <div className="bg-red-50 border border-red-200 text-red-700 px-3 py-2 rounded-lg flex items-start gap-2 text-sm">
                   <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5" />
-                  <div className="flex-1">
-                    <span>{restockError}</span>
-                  </div>
-                  <button onClick={() => setRestockError(null)} type="button" className="text-red-700 hover:text-red-900">
-                    <X size={14} />
-                  </button>
+                  <div className="flex-1"><span>{restockError}</span></div>
+                  <button onClick={() => setRestockError(null)} type="button" className="text-red-700 hover:text-red-900"><X size={14} /></button>
                 </div>
               )}
 
@@ -2935,57 +2654,19 @@ export default function AdminDashboard() {
 
               <div className="space-y-3">
                 <div>
-                  <label className="block text-sm font-semibold text-black mb-1">
-                    Quantity to Add *
-                  </label>
-                  <input
-                    type="number"
-                    min="1"
-                    value={restockForm.quantity}
-                    onChange={(e) => setRestockForm({
-                      ...restockForm,
-                      quantity: Math.max(1, parseInt(e.target.value) || 1)
-                    })}
-                    className="w-full px-3 py-2 border-2 border-slate-200 rounded-lg focus:border-orange-500 focus:ring-2 focus:ring-orange-200 transition-all text-black text-sm"
-                    disabled={restocking}
-                  />
+                  <label className="block text-sm font-semibold text-black mb-1">Quantity to Add *</label>
+                  <input type="number" min="1" value={restockForm.quantity} onChange={(e) => setRestockForm({...restockForm, quantity: Math.max(1, parseInt(e.target.value) || 1)})} className="w-full px-3 py-2 border-2 border-slate-200 rounded-lg focus:border-orange-500 focus:ring-2 focus:ring-orange-200 transition-all text-black text-sm" disabled={restocking} />
                 </div>
 
                 <div>
-                  <label className="block text-sm font-semibold text-black mb-1">
-                    Cost Price (KSh) *
-                  </label>
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    value={restockForm.costPrice}
-                    onChange={(e) => setRestockForm({...restockForm, costPrice: e.target.value})}
-                    placeholder="Enter cost price"
-                    className="w-full px-3 py-2 border-2 border-slate-200 rounded-lg focus:border-orange-500 focus:ring-2 focus:ring-orange-200 transition-all text-black placeholder-gray-400 text-sm"
-                    disabled={restocking}
-                  />
-                  {restockForm.costPrice && restockForm.quantity > 0 && (
-                    <p className="text-xs text-gray-600 mt-1">
-                      Total Cost: KSh {(parseFloat(restockForm.costPrice || "0") * restockForm.quantity).toLocaleString()}
-                    </p>
-                  )}
+                  <label className="block text-sm font-semibold text-black mb-1">Cost Price (KSh) *</label>
+                  <input type="number" min="0" step="0.01" value={restockForm.costPrice} onChange={(e) => setRestockForm({...restockForm, costPrice: e.target.value})} placeholder="Enter cost price" className="w-full px-3 py-2 border-2 border-slate-200 rounded-lg focus:border-orange-500 focus:ring-2 focus:ring-orange-200 transition-all text-black placeholder-gray-400 text-sm" disabled={restocking} />
+                  {restockForm.costPrice && restockForm.quantity > 0 && <p className="text-xs text-gray-600 mt-1">Total Cost: KSh {(parseFloat(restockForm.costPrice || "0") * restockForm.quantity).toLocaleString()}</p>}
                 </div>
 
                 <div>
-                  <label className="block text-sm font-semibold text-black mb-1">
-                    Payment Source *
-                  </label>
-                  <select
-                    value={restockForm.paymentSource}
-                    onChange={(e) => setRestockForm({
-                      ...restockForm,
-                      paymentSource: e.target.value as "cash" | "credit",
-                      creditorName: e.target.value === "cash" ? "" : restockForm.creditorName
-                    })}
-                    className="w-full px-3 py-2 border-2 border-slate-200 rounded-lg focus:border-orange-500 focus:ring-2 focus:ring-orange-200 transition-all text-black text-sm"
-                    disabled={restocking}
-                  >
+                  <label className="block text-sm font-semibold text-black mb-1">Payment Source *</label>
+                  <select value={restockForm.paymentSource} onChange={(e) => setRestockForm({...restockForm, paymentSource: e.target.value as "cash" | "credit", creditorName: e.target.value === "cash" ? "" : restockForm.creditorName})} className="w-full px-3 py-2 border-2 border-slate-200 rounded-lg focus:border-orange-500 focus:ring-2 focus:ring-orange-200 transition-all text-black text-sm" disabled={restocking}>
                     <option value="cash">Cash Payment</option>
                     <option value="credit">Credit/Pay Later</option>
                   </select>
@@ -2993,17 +2674,8 @@ export default function AdminDashboard() {
 
                 {restockForm.paymentSource === "credit" && (
                   <div>
-                    <label className="block text-sm font-semibold text-black mb-1">
-                      Creditor Name *
-                    </label>
-                    <input
-                      type="text"
-                      value={restockForm.creditorName}
-                      onChange={(e) => setRestockForm({...restockForm, creditorName: e.target.value})}
-                      placeholder="Enter creditor name"
-                      className="w-full px-3 py-2 border-2 border-slate-200 rounded-lg focus:border-orange-500 focus:ring-2 focus:ring-orange-200 transition-all text-black placeholder-gray-400 text-sm"
-                      disabled={restocking}
-                    />
+                    <label className="block text-sm font-semibold text-black mb-1">Creditor Name *</label>
+                    <input type="text" value={restockForm.creditorName} onChange={(e) => setRestockForm({...restockForm, creditorName: e.target.value})} placeholder="Enter creditor name" className="w-full px-3 py-2 border-2 border-slate-200 rounded-lg focus:border-orange-500 focus:ring-2 focus:ring-orange-200 transition-all text-black placeholder-gray-400 text-sm" disabled={restocking} />
                   </div>
                 )}
 
@@ -3011,43 +2683,17 @@ export default function AdminDashboard() {
                   <div className="bg-green-50 border border-green-200 rounded-lg p-3">
                     <p className="text-xs text-green-700 font-medium mb-1">After Restock:</p>
                     <div className="space-y-1">
-                      <p className="text-lg font-bold text-green-900">
-                        Total: {getProductStock(restockingProduct) + restockForm.quantity} units
-                      </p>
-                      <p className="text-xs text-green-700">
-                        Unassigned will increase by {restockForm.quantity} units
-                      </p>
+                      <p className="text-lg font-bold text-green-900">Total: {getProductStock(restockingProduct) + restockForm.quantity} units</p>
+                      <p className="text-xs text-green-700">Unassigned will increase by {restockForm.quantity} units</p>
                     </div>
                   </div>
                 )}
               </div>
 
               <div className="flex gap-2 pt-3">
-                <button
-                  onClick={closeRestockModal}
-                  disabled={restocking}
-                  type="button"
-                  className="flex-1 px-3 py-2 border-2 border-slate-300 text-black rounded-lg hover:bg-slate-50 font-medium transition-colors disabled:opacity-50 text-sm"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={handleRestockSubmit}
-                  disabled={restocking}
-                  type="button"
-                  className="flex-1 px-3 py-2 bg-gradient-to-r from-orange-600 to-orange-700 text-white rounded-lg hover:from-orange-700 hover:to-orange-800 font-medium transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-1.5 shadow text-sm"
-                >
-                  {restocking ? (
-                    <>
-                      <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
-                      Restocking...
-                    </>
-                  ) : (
-                    <>
-                      <CheckCircle className="w-4 h-4" />
-                      Restock
-                    </>
-                  )}
+                <button onClick={closeRestockModal} disabled={restocking} type="button" className="flex-1 px-3 py-2 border-2 border-slate-300 text-black rounded-lg hover:bg-slate-50 font-medium transition-colors disabled:opacity-50 text-sm">Cancel</button>
+                <button onClick={handleRestockSubmit} disabled={restocking} type="button" className="flex-1 px-3 py-2 bg-gradient-to-r from-orange-600 to-orange-700 text-white rounded-lg hover:from-orange-700 hover:to-orange-800 font-medium transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-1.5 shadow text-sm">
+                  {restocking ? <><div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div> Restocking...</> : <><CheckCircle className="w-4 h-4" /> Restock</>}
                 </button>
               </div>
             </div>
@@ -3055,11 +2701,9 @@ export default function AdminDashboard() {
         </div>
       )}
 
-      {/* Quick Stats - Mobile Optimized */}
+      {/* QUICK STATS & ADMIN SECTIONS */}
       <div className="px-3 sm:px-4 py-4 sm:py-6">
-        <h2 className="text-lg sm:text-xl font-semibold text-slate-900 mb-3 sm:mb-4">
-          Quick Overview
-        </h2>
+        <h2 className="text-lg sm:text-xl font-semibold text-slate-900 mb-3 sm:mb-4">Quick Overview</h2>
         
         {isLoading ? (
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 sm:gap-4">
@@ -3074,68 +2718,34 @@ export default function AdminDashboard() {
         ) : (
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 sm:gap-4">
             {quickStats.map((stat) => (
-              <div
-                key={stat.title}
-                className="bg-white rounded-lg shadow-sm border border-slate-200 p-3 sm:p-4 hover:shadow-md transition-shadow"
-              >
+              <div key={stat.title} className="bg-white rounded-lg shadow-sm border border-slate-200 p-3 sm:p-4 hover:shadow-md transition-shadow">
                 <div className="flex items-center justify-between mb-2 sm:mb-3">
-                  <div
-                    className={`p-1.5 sm:p-2 rounded-lg ${
-                      stat.positive ? "bg-emerald-100" : "bg-orange-100"
-                    }`}
-                  >
-                    <stat.icon
-                      className={`w-4 h-4 sm:w-5 sm:h-5 ${
-                        stat.positive ? "text-emerald-600" : "text-orange-600"
-                      }`}
-                    />
+                  <div className={`p-1.5 sm:p-2 rounded-lg ${stat.positive ? "bg-emerald-100" : "bg-orange-100"}`}>
+                    <stat.icon className={`w-4 h-4 sm:w-5 sm:h-5 ${stat.positive ? "text-emerald-600" : "text-orange-600"}`} />
                   </div>
-                  <span
-                    className={`text-xs font-medium px-1.5 py-0.5 rounded-full whitespace-nowrap ${
-                      stat.positive
-                        ? "bg-emerald-100 text-emerald-700"
-                        : "bg-orange-100 text-orange-700"
-                    }`}
-                  >
-                    {stat.change}
-                  </span>
+                  <span className={`text-xs font-medium px-1.5 py-0.5 rounded-full whitespace-nowrap ${stat.positive ? "bg-emerald-100 text-emerald-700" : "bg-orange-100 text-orange-700"}`}>{stat.change}</span>
                 </div>
-                <div className="text-base sm:text-lg font-bold text-slate-900 mb-0.5 truncate">
-                  {stat.value}
-                </div>
+                <div className="text-base sm:text-lg font-bold text-slate-900 mb-0.5 truncate">{stat.value}</div>
                 <div className="text-black text-xs">{stat.title}</div>
               </div>
             ))}
           </div>
         )}
 
-        {/* Admin Sections - Mobile Optimized */}
         <div className="mt-6 sm:mt-8">
-          <h2 className="text-lg sm:text-xl font-semibold text-slate-900 mb-3 sm:mb-4">
-            Management Sections
-          </h2>
+          <h2 className="text-lg sm:text-xl font-semibold text-slate-900 mb-3 sm:mb-4">Management Sections</h2>
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2 sm:gap-4">
             {adminSections.map((section) => (
-              <Link
-                key={section.title}
-                href={section.href}
-                className="group bg-white rounded-lg shadow-sm border border-slate-200 p-3 sm:p-4 hover:shadow-md hover:scale-[1.02] transition-all"
-              >
+              <Link key={section.title} href={section.href} className="group bg-white rounded-lg shadow-sm border border-slate-200 p-3 sm:p-4 hover:shadow-md hover:scale-[1.02] transition-all">
                 <div className="flex items-start justify-between mb-2 sm:mb-3">
                   <div className={`p-1.5 sm:p-2 rounded-lg ${section.color}`}>
                     <section.icon className="w-4 h-4 sm:w-5 sm:h-5 text-white" />
                   </div>
                   <ChevronRight className="w-3 h-3 sm:w-4 sm:h-4 text-slate-400 group-hover:text-slate-600 transition" />
                 </div>
-                <h3 className="text-sm sm:text-base font-semibold text-slate-900 mb-1 group-hover:text-blue-600 truncate">
-                  {section.title}
-                </h3>
-                <p className="text-xs text-black mb-2 sm:mb-3 line-clamp-2">
-                  {section.description}
-                </p>
-                <div className="text-xs font-medium text-black bg-slate-50 rounded-full px-2 py-0.5 inline-block truncate max-w-full">
-                  {section.stats}
-                </div>
+                <h3 className="text-sm sm:text-base font-semibold text-slate-900 mb-1 group-hover:text-blue-600 truncate">{section.title}</h3>
+                <p className="text-xs text-black mb-2 sm:mb-3 line-clamp-2">{section.description}</p>
+                <div className="text-xs font-medium text-black bg-slate-50 rounded-full px-2 py-0.5 inline-block truncate max-w-full">{section.stats}</div>
               </Link>
             ))}
           </div>

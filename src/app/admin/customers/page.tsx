@@ -1,5 +1,8 @@
 "use client";
 
+// ============================================================================
+// IMPORTS & DEPENDENCIES
+// ============================================================================
 import React, { useState, useEffect, useMemo } from "react";
 import { 
   Plus, Trash2, Pencil, Check, X, Download, FileText, 
@@ -15,6 +18,11 @@ import {
   AlertTriangle, Info, Copy, ExternalLink
 } from "lucide-react";
 
+// ============================================================================
+// TYPE DEFINITIONS & INTERFACES
+// ============================================================================
+
+/** Customer data structure */
 export interface Customer {
   id: number;
   name: string;
@@ -28,6 +36,7 @@ export interface Customer {
   createdAt?: string;
 }
 
+/** Outstanding sale with remaining balance */
 interface OutstandingSale {
   id: number;
   date: string;
@@ -40,6 +49,7 @@ interface OutstandingSale {
   saleitem?: SaleItem[];
 }
 
+/** Individual item in a sale */
 interface SaleItem {
   id: number;
   productId: number;
@@ -52,6 +62,7 @@ interface SaleItem {
   total: number;
 }
 
+/** Payment record structure */
 interface Payment {
   id: number;
   amount: number;
@@ -62,6 +73,7 @@ interface Payment {
   note?: string;
 }
 
+/** How payment is allocated across multiple sales */
 interface PaymentAllocation {
   saleId: number;
   saleDate: string;
@@ -73,6 +85,7 @@ interface PaymentAllocation {
   items?: SaleItem[];
 }
 
+/** Processed sale with payment applied */
 interface ProcessedSale {
   id: number;
   date: string;
@@ -87,6 +100,7 @@ interface ProcessedSale {
   fullyPaid?: boolean;
 }
 
+/** Result of payment processing */
 interface PaymentResult {
   processedSales: { saleId: number; amount: number; fullyPaid: boolean }[];
   failedSales: { saleId: number; reason: string }[];
@@ -101,12 +115,19 @@ interface PaymentResult {
   allocations: PaymentAllocation[];
 }
 
-// Helper function to normalize phone number for duplicate checking
+// ============================================================================
+// HELPER FUNCTIONS
+// ============================================================================
+
+/**
+ * Normalize phone number for duplicate checking
+ * Converts various formats to standard 254XXXXXXXXX format
+ */
 const normalizePhoneNumber = (phone: string): string => {
   if (!phone) return '';
   let cleaned = phone.replace(/\D/g, '');
   
-  // Remove leading 0 or +254
+  // Remove leading 0 and add 254
   if (cleaned.startsWith('0') && cleaned.length === 10) {
     cleaned = '254' + cleaned.slice(1);
   } else if (cleaned.startsWith('254') && cleaned.length === 12) {
@@ -119,7 +140,9 @@ const normalizePhoneNumber = (phone: string): string => {
   return cleaned;
 };
 
-// Function to generate receipt link
+/**
+ * Generate receipt download/view link
+ */
 const generateReceiptLink = (saleId: number): string => {
   const baseUrl = typeof window !== 'undefined' 
     ? window.location.origin 
@@ -128,7 +151,9 @@ const generateReceiptLink = (saleId: number): string => {
   return `${baseUrl}/api/receipt/${saleId}`;
 };
 
-// Format phone to Kenya code
+/**
+ * Format phone number to Kenya international format for WhatsApp/SMS
+ */
 const formatPhoneToKenyaCode = (phone: string): string => {
   if (!phone) return '';
   let cleaned = phone.replace(/\D/g, '');
@@ -148,11 +173,15 @@ const formatPhoneToKenyaCode = (phone: string): string => {
   return '254' + cleaned;
 };
 
-// Format currency
+/**
+ * Format currency values (Kenyan Shillings)
+ */
 const formatCurrency = (amount: number): string =>
   Number(amount || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-// Format date
+/**
+ * Format date for display (short format)
+ */
 const formatDate = (dateString: string): string => {
   return new Date(dateString).toLocaleDateString("en-US", {
     year: "numeric",
@@ -161,7 +190,9 @@ const formatDate = (dateString: string): string => {
   });
 };
 
-// Format date with time
+/**
+ * Format date with time for detailed display
+ */
 const formatDateTime = (dateString: string): string => {
   return new Date(dateString).toLocaleDateString("en-US", {
     year: "numeric",
@@ -172,7 +203,10 @@ const formatDateTime = (dateString: string): string => {
   });
 };
 
-// Generate customer statement message
+/**
+ * Generate detailed customer statement message for WhatsApp/SMS/Email
+ * Includes payment allocation breakdown and receipt links
+ */
 const generateCustomerStatement = (
   customer: Customer,
   outstandingSales: OutstandingSale[],
@@ -187,23 +221,29 @@ const generateCustomerStatement = (
     hour: '2-digit',
     minute: '2-digit'
   });
+  
   let message = `*🏢 SWIFT SUPPLIERS*\n`;
   message += `*Customer Statement*\n`;
   message += `📅 ${date}\n`;
   message += `👤 ${customer.name}\n`;
+  
   const totalOutstanding = outstandingSales.reduce((sum, sale) => sum + sale.remainingBalance, 0);
   const totalPurchases = outstandingSales.reduce((sum, sale) => sum + sale.amount, 0);
   const totalPaid = outstandingSales.reduce((sum, sale) => sum + sale.paidAmount, 0);
   
+  // Section: Payment Received (if this is a payment notification)
   if (paymentAmount && paymentAllocations && paymentAllocations.length > 0) {
     message += `*✅ PAYMENT RECEIVED*\n`;
     message += `Amount: KSh ${formatCurrency(paymentAmount)}\n`;
     if (paymentMethod) message += `Method: ${paymentMethod}\n`;
     message += `*📊 HOW YOUR PAYMENT WAS APPLIED:*\n`;
     message += `─────────────────────\n\n`;
+    
     paymentAllocations.forEach((alloc) => {
       message += `*Sale #${alloc.saleId}* - ${alloc.saleDate}\n`;
       message += `─────────────────────\n`;
+      
+      // List items in this sale
       if (alloc.items && alloc.items.length > 0) {
         alloc.items.forEach(item => {
           if (item.product) {
@@ -212,27 +252,34 @@ const generateCustomerStatement = (
           }
         });
       }
+      
       message += `\n`;
       message += `Subtotal: KSh ${formatCurrency(alloc.originalAmount)}\n`;
       message += `Previously Paid: KSh ${formatCurrency(alloc.paidAmount)}\n`;
       message += `Paid Today: KSh ${formatCurrency(alloc.amount)}\n`;
+      
       if (alloc.fullyPaid) {
         message += `Status: *✅ FULLY PAID*\n`;
       } else {
         message += `Remaining: KSh ${formatCurrency(alloc.remainingAfter)}\n`;
         message += `Status: *⏳ PARTIAL PAYMENT*\n`;
       }
+      
       message += `🔗 Receipt: ${generateReceiptLink(alloc.saleId)}\n`;
       message += `─────────────────────\n\n`;
     });
   }
   
+  // Section: Outstanding Sales Summary
   if (outstandingSales.length > 0) {
     message += `*📋 OUTSTANDING SALES SUMMARY*\n`;
     message += `─────────────────────\n\n`;
+    
     outstandingSales.forEach((sale) => {
       message += `*Sale #${sale.id}* - ${new Date(sale.date).toLocaleDateString()}\n`;
       message += `─────────────────────\n`;      
+      
+      // List items in this sale
       if (sale.saleitem && sale.saleitem.length > 0) {
         sale.saleitem.forEach(item => {
           if (item.product) {
@@ -241,10 +288,13 @@ const generateCustomerStatement = (
           }
         });
       }     
+      
       message += `\n`;
       message += `Total: KSh ${formatCurrency(sale.amount)}\n`;
       message += `Paid: KSh ${formatCurrency(sale.paidAmount)}\n`;
       message += `Balance: KSh ${formatCurrency(sale.remainingBalance)}\n`;    
+      
+      // Show due date and overdue status
       if (sale.dueDate) {
         const dueDate = new Date(sale.dueDate);
         const today = new Date();
@@ -254,13 +304,17 @@ const generateCustomerStatement = (
           message += `Due: ${new Date(sale.dueDate).toLocaleDateString()}\n`;
         }
       } 
+      
       message += `🔗 View Receipt: ${generateReceiptLink(sale.id)}\n`;
       message += `─────────────────────\n\n`;
     });
+    
+    // Summary totals
     message += `*💰 SUMMARY*\n`;
     message += `─────────────────────\n`;
     message += `Total Purchases: KSh ${formatCurrency(totalPurchases)}\n`;
     message += `Total Paid: KSh ${formatCurrency(totalPaid)}\n`;   
+    
     if (totalOutstanding > 0) {
       message += `*Total Outstanding: KSh ${formatCurrency(totalOutstanding)}*\n`;     
     } else {
@@ -270,6 +324,7 @@ const generateCustomerStatement = (
     message += `─────────────────────\n\n`;
   }
 
+  // Thank you message
   message += `*🙏 THANK YOU*\n`;
   message += `─────────────────────\n`;
   
@@ -282,7 +337,9 @@ const generateCustomerStatement = (
   return message;
 };
 
-// Generate thank you message
+/**
+ * Generate thank you message for customers with good standing
+ */
 const generateThankYouMessage = (
   customer: Customer, 
   outstandingSales: OutstandingSale[]
@@ -292,8 +349,10 @@ const generateThankYouMessage = (
     month: 'long',
     day: 'numeric'
   });
+  
   const totalOutstanding = outstandingSales.reduce((sum, sale) => sum + sale.remainingBalance, 0);
   const hasOutstanding = outstandingSales.length > 0 && totalOutstanding > 0;
+  
   let message = `*🏢 SWIFT SUPPLIERS*\n`;
   message += `📅 ${date}\n`;
   message += `👤 ${customer.name}\n`; 
@@ -301,10 +360,12 @@ const generateThankYouMessage = (
   message += `*✨ Thank you for your purchase at SwiftMetals!! ✨*\n\n`; 
   
   if (hasOutstanding) {
+    // Account summary for customers with outstanding balance
     message += `*📊 ACCOUNT SUMMARY*\n`;
     message += `─────────────────────\n`;
     message += `*Outstanding Balance: KSh ${formatCurrency(totalOutstanding)}*\n\n`; 
     message += `*Outstanding Sales:*\n`;
+    
     outstandingSales.forEach((sale) => {
       message += `• *Sale #${sale.id}* - ${new Date(sale.date).toLocaleDateString()}\n`;
       message += `  Amount: KSh ${formatCurrency(sale.amount)}\n`;
@@ -313,17 +374,21 @@ const generateThankYouMessage = (
       message += `  🔗 Receipt: ${generateReceiptLink(sale.id)}\n`;
       message += `\n`;
     });
+    
     message += `*⚠️ Payment Reminder*\n`;
     message += `Please help us clear your outstanding balance at your earliest convenience.\n`;    
+    
     if (outstandingSales.some(s => s.dueDate && new Date(s.dueDate) < new Date())) {
       message += `\n*❗ Some payments are overdue*\n`;
     }
     message += `\n`;
   } else {
+    // Account in good standing
     message += `*🎉 Account Status: GOOD STANDING*\n`;
     message += `• No outstanding balance\n`;
     message += `• Account fully paid up\n`;
     message += `• Eligible for loyalty benefits\n\n`;   
+    
     const recentPaidSales = outstandingSales.filter(s => s.status === 'PAID').slice(0, 3);
     if (recentPaidSales.length > 0) {
       message += `*📋 Recent Transactions:*\n`;
@@ -335,6 +400,7 @@ const generateThankYouMessage = (
       message += `\n`;
     }
   }
+  
   message += `Thank you once again for being part of the Swift Suppliers family.\n`;
   message += `We look forward to serving you again soon!\n\n`;
   message += `Warm regards,\n`;
@@ -343,7 +409,13 @@ const generateThankYouMessage = (
   return message;
 };
 
-// Search and Filter Bar Component
+// ============================================================================
+// COMPONENTS
+// ============================================================================
+
+// ----------------------------------------------------------------------------
+// SearchBar Component - Global search and filter controls
+// ----------------------------------------------------------------------------
 const SearchBar = ({ onSearch, onFilter }: { onSearch: (query: string) => void; onFilter: () => void }) => {
   const [searchQuery, setSearchQuery] = useState("");
 
@@ -356,6 +428,7 @@ const SearchBar = ({ onSearch, onFilter }: { onSearch: (query: string) => void; 
   return (
     <div className="bg-white dark:bg-gray-800 p-4 rounded-xl shadow-sm border border-slate-100 dark:border-gray-700 mb-6">
       <div className="flex flex-col md:flex-row gap-4">
+        {/* Search Input */}
         <div className="flex-1 relative">
           <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-slate-400 w-5 h-5" />
           <input
@@ -366,6 +439,8 @@ const SearchBar = ({ onSearch, onFilter }: { onSearch: (query: string) => void; 
             className="w-full pl-10 pr-4 py-3 border border-slate-200 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-black dark:focus:ring-blue-500 focus:border-black dark:focus:border-blue-500 text-black dark:text-white bg-white dark:bg-gray-700 transition-all"
           />
         </div>
+        
+        {/* Action Buttons */}
         <div className="flex gap-2">
           <button
             onClick={onFilter}
@@ -386,7 +461,10 @@ const SearchBar = ({ onSearch, onFilter }: { onSearch: (query: string) => void; 
   );
 };
 
-// Message Preview Component
+// ----------------------------------------------------------------------------
+// MessagePreview Component - Preview and edit messages before sending
+// Supports WhatsApp, SMS, and Email delivery
+// ----------------------------------------------------------------------------
 const MessagePreview = ({
   customer,
   message,
@@ -414,6 +492,7 @@ const MessagePreview = ({
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
       <div className="bg-white dark:bg-gray-800 rounded-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+        {/* Modal Header */}
         <div className="p-6 border-b border-slate-200 dark:border-gray-700 sticky top-0 bg-white dark:bg-gray-800">
           <div className="flex justify-between items-center">
             <div>
@@ -486,7 +565,7 @@ const MessagePreview = ({
             />
           </div>
 
-          {/* Character Count */}
+          {/* Character Count (especially important for SMS) */}
           <div className="flex justify-between items-center text-sm">
             <span className="text-slate-500 dark:text-gray-400">
               Characters: {editedMessage.length}
@@ -520,7 +599,7 @@ const MessagePreview = ({
             </button>
           </div>
 
-          {/* Delivery Info */}
+          {/* Delivery Information */}
           <div className="bg-slate-50 dark:bg-gray-700 rounded-lg p-4 text-sm">
             <p className="font-medium text-black dark:text-white mb-2">📱 Delivery Information:</p>
             {messageType === 'whatsapp' && customer.phone && (
@@ -539,7 +618,10 @@ const MessagePreview = ({
   );
 };
 
-// Credit Management Component - Updated with TILL instead of MPESA
+// ----------------------------------------------------------------------------
+// CreditManagement Component - Core payment processing
+// Features: View outstanding sales, process payments, allocate funds, send statements
+// ----------------------------------------------------------------------------
 const CreditManagement = ({ 
   customer, 
   onPaymentComplete 
@@ -547,6 +629,7 @@ const CreditManagement = ({
   customer: Customer | null;
   onPaymentComplete: () => void;
 }) => {
+  // State Management
   const [outstandingSales, setOutstandingSales] = useState<OutstandingSale[]>([]);
   const [allSales, setAllSales] = useState<OutstandingSale[]>([]);
   const [loading, setLoading] = useState(false);
@@ -558,13 +641,14 @@ const CreditManagement = ({
   const [processingSaleId, setProcessingSaleId] = useState<number | null>(null);
   const [expanded, setExpanded] = useState(true);
   
-  // States for message flow
+  // Message flow states
   const [showMessagePreview, setShowMessagePreview] = useState(false);
   const [pendingPaymentResult, setPendingPaymentResult] = useState<PaymentResult | null>(null);
   const [messageType, setMessageType] = useState<'whatsapp' | 'sms' | 'email'>('whatsapp');
   const [processedSales, setProcessedSales] = useState<ProcessedSale[]>([]);
   const [generatedMessage, setGeneratedMessage] = useState<string>("");
 
+  // Fetch data when customer changes
   useEffect(() => {
     if (customer) {
       fetchOutstandingSales();
@@ -572,6 +656,9 @@ const CreditManagement = ({
     }
   }, [customer]);
 
+  /**
+   * Fetch sales with outstanding balances (not fully paid)
+   */
   const fetchOutstandingSales = async () => {
     if (!customer) return;
     
@@ -583,6 +670,7 @@ const CreditManagement = ({
       
       const sales = Array.isArray(data) ? data : (data.data || []);
       
+      // Process each sale to calculate paid amount and remaining balance
       const outstanding = sales
         .map((sale: any) => {
           const totalPaid = sale.payment?.reduce((sum: number, p: Payment) => 
@@ -603,13 +691,14 @@ const CreditManagement = ({
             }))
           };
         })
-        .filter((sale: OutstandingSale) => sale.remainingBalance > 0)
+        .filter((sale: OutstandingSale) => sale.remainingBalance > 0) // Only unpaid/partial
         .sort((a: OutstandingSale, b: OutstandingSale) => 
-          new Date(a.date).getTime() - new Date(b.date).getTime()
+          new Date(a.date).getTime() - new Date(b.date).getTime() // Oldest first
         );
       
       setOutstandingSales(outstanding);
       
+      // Recalculate preview if payment amount exists
       if (paymentAmount && parseFloat(paymentAmount) > 0) {
         calculatePreview(parseFloat(paymentAmount), outstanding);
       }
@@ -620,6 +709,9 @@ const CreditManagement = ({
     }
   };
 
+  /**
+   * Fetch all sales for this customer (including paid ones)
+   */
   const fetchAllSales = async () => {
     if (!customer) return;
     
@@ -649,7 +741,7 @@ const CreditManagement = ({
           }))
         };
       }).sort((a: OutstandingSale, b: OutstandingSale) => 
-        new Date(b.date).getTime() - new Date(a.date).getTime()
+        new Date(b.date).getTime() - new Date(a.date).getTime() // Newest first
       );
       
       setAllSales(all);
@@ -658,6 +750,10 @@ const CreditManagement = ({
     }
   };
 
+  /**
+   * Calculate how payment will be allocated across outstanding sales
+   * Uses oldest-first allocation strategy
+   */
   const calculatePreview = (amount: number, sales = outstandingSales) => {
     let remaining = amount;
     const preview: PaymentAllocation[] = [];
@@ -699,6 +795,10 @@ const CreditManagement = ({
     return outstandingSales.reduce((sum, sale) => sum + sale.remainingBalance, 0);
   };
 
+  /**
+   * Process payment - allocate to oldest sales first
+   * Updates each sale with the payment amount
+   */
   const processPayment = async () => {
     if (!customer) {
       alert("Please select a customer");
@@ -728,6 +828,7 @@ const CreditManagement = ({
       // Calculate previous balance
       const previousBalance = outstandingSales.reduce((sum, sale) => sum + sale.remainingBalance, 0);
 
+      // Process each outstanding sale in order (oldest first)
       for (const sale of outstandingSales) {
         if (remainingAmount <= 0) break;
         
@@ -736,6 +837,7 @@ const CreditManagement = ({
 
         setProcessingSaleId(sale.id);
 
+        // Fetch current sale data
         const saleRes = await fetch(`/api/sales/${sale.id}`);
         if (!saleRes.ok) {
           failedSales.push({ saleId: sale.id, reason: "Failed to fetch sale" });
@@ -744,6 +846,7 @@ const CreditManagement = ({
         
         const saleData = await saleRes.json();
 
+        // Create payment record
         const newPayment = {
           amount: paymentForThisSale,
           method: paymentMethod,
@@ -751,6 +854,7 @@ const CreditManagement = ({
           note: paymentNote || `Payment of KSh ${paymentForThisSale} received`
         };
 
+        // Update sale with new payment
         const updateRes = await fetch(`/api/sales/${sale.id}`, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
@@ -784,6 +888,7 @@ const CreditManagement = ({
         remainingAmount -= paymentForThisSale;
       }
 
+      // Handle excess payment (adds to customer credit)
       let creditUpdate: { amount: number; newTotal: number } | null = null;
       
       if (remainingAmount > 0) {
@@ -826,7 +931,7 @@ const CreditManagement = ({
       
       setPendingPaymentResult(result);
 
-      // Generate message
+      // Generate customer statement message
       const message = generateCustomerStatement(
         customer,
         outstandingSales.map(sale => {
@@ -845,10 +950,11 @@ const CreditManagement = ({
       setGeneratedMessage(message);
       setShowMessagePreview(true);
 
-      setPaymentAmount("");
+      // Reset form      setPaymentAmount("");
       setPaymentNote("");
       setAllocationPreview([]);
       
+      // Refresh data
       await fetchOutstandingSales();
       await fetchAllSales();
       
@@ -861,6 +967,9 @@ const CreditManagement = ({
     }
   };
 
+  /**
+   * Send thank you message to customer
+   */
   const sendThankYouMessage = () => {
     if (!customer) return;
     
@@ -869,6 +978,9 @@ const CreditManagement = ({
     setShowMessagePreview(true);
   };
 
+  /**
+   * Send statement message to customer
+   */
   const sendStatementMessage = () => {
     if (!customer) return;
     
@@ -877,6 +989,9 @@ const CreditManagement = ({
     setShowMessagePreview(true);
   };
 
+  /**
+   * Handle sending message via selected channel (WhatsApp/SMS/Email)
+   */
   const handleSendMessage = () => {
     if (!customer || !generatedMessage) return;
 
@@ -915,6 +1030,9 @@ const CreditManagement = ({
     window.open(receiptLink, '_blank');
   };
 
+  /**
+   * Download outstanding statement as CSV
+   */
   const downloadOutstandingStatement = () => {
     if (!customer) return;
     
@@ -971,6 +1089,7 @@ const CreditManagement = ({
 
   return (
     <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-slate-100 dark:border-gray-700 overflow-hidden mb-6">
+      {/* Expandable Header */}
       <div 
         className="p-6 cursor-pointer hover:bg-slate-50 dark:hover:bg-gray-700 transition-colors"
         onClick={() => setExpanded(!expanded)}
@@ -1011,7 +1130,7 @@ const CreditManagement = ({
             />
           )}
 
-          {/* Action Buttons */}
+          {/* Action Buttons Row */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-6">
             <button
               onClick={sendStatementMessage}
@@ -1091,6 +1210,7 @@ const CreditManagement = ({
                       >
                         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                           <div className="flex-1">
+                            {/* Sale Header */}
                             <div className="flex items-center gap-3 mb-2 flex-wrap">
                               <span className="text-sm font-medium text-black dark:text-white">Sale #{sale.id}</span>
                               <span className={`px-2 py-1 rounded-full text-xs font-medium ${
@@ -1108,6 +1228,7 @@ const CreditManagement = ({
                               )}
                             </div>
                             
+                            {/* Sale Amounts Grid */}
                             <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-sm">
                               <div>
                                 <p className="text-xs text-slate-500 dark:text-gray-400">Date</p>
@@ -1127,7 +1248,7 @@ const CreditManagement = ({
                               </div>
                             </div>
 
-                            {/* Progress bar */}
+                            {/* Payment Progress Bar */}
                             <div className="mt-3">
                               <div className="flex justify-between text-xs mb-1">
                                 <span className="text-slate-500 dark:text-gray-400">Payment Progress</span>
@@ -1172,6 +1293,7 @@ const CreditManagement = ({
                             )}
                           </div>
 
+                          {/* Processing Indicator */}
                           {processingSaleId === sale.id && (
                             <div className="flex items-center gap-2 text-xs text-blue-600 dark:text-blue-400 bg-blue-100 dark:bg-blue-900/50 px-3 py-2 rounded-lg">
                               <div className="animate-spin rounded-full h-3 w-3 border-2 border-blue-600 border-t-transparent"></div>
@@ -1185,12 +1307,13 @@ const CreditManagement = ({
                 )}
               </div>
 
-              {/* Payment Form - Updated with TILL instead of MPESA */}
+              {/* Payment Form */}
               {outstandingSales.length > 0 && !showMessagePreview && (
                 <div className="border-t border-slate-200 dark:border-gray-700 pt-6">
                   <h3 className="font-semibold text-black dark:text-white mb-4">Process Payment</h3>
                   
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    {/* Left Column - Payment Inputs */}
                     <div className="space-y-4">
                       <div>
                         <label className="block text-sm font-medium text-black dark:text-white mb-2">
@@ -1240,7 +1363,7 @@ const CreditManagement = ({
                       </div>
                     </div>
 
-                    {/* Allocation Preview */}
+                    {/* Right Column - Allocation Preview */}
                     <div>
                       {allocationPreview.length > 0 ? (
                         <div className="bg-blue-50 dark:bg-blue-900/20 rounded-lg p-4 border border-blue-100 dark:border-blue-800 h-full">
@@ -1279,6 +1402,7 @@ const CreditManagement = ({
                                   </div>
                                 )}
                                 
+                                {/* Payment Progress Bar */}
                                 <div className="flex items-center gap-2">
                                   <div className="flex-1 h-1.5 bg-blue-200 dark:bg-blue-700 rounded-full overflow-hidden">
                                     <div 
@@ -1302,6 +1426,7 @@ const CreditManagement = ({
                               </div>
                             ))}
                             
+                            {/* Excess Payment Notification */}
                             {parseFloat(paymentAmount) > getTotalOutstanding() && (
                               <div className="mt-4 pt-3 border-t border-blue-200 dark:border-blue-700">
                                 <p className="text-sm text-blue-700 dark:text-blue-300 flex items-center gap-1">
@@ -1323,6 +1448,7 @@ const CreditManagement = ({
                     </div>
                   </div>
 
+                  {/* Process Payment Button */}
                   <button
                     onClick={processPayment}
                     disabled={allocating || !paymentAmount || parseFloat(paymentAmount) <= 0}
@@ -1354,7 +1480,9 @@ const CreditManagement = ({
   );
 };
 
-// Payment History Component
+// ----------------------------------------------------------------------------
+// PaymentHistory Component - Display all past payments for a customer
+// ----------------------------------------------------------------------------
 const PaymentHistory = ({ customerId }: { customerId: number | null }) => {
   const [payments, setPayments] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
@@ -1377,6 +1505,7 @@ const PaymentHistory = ({ customerId }: { customerId: number | null }) => {
       
       const sales = Array.isArray(data) ? data : (data.data || []);
       
+      // Extract all payments from all sales
       const allPayments = sales.flatMap((sale: any) => 
         (sale.payment || []).map((p: any) => ({
           ...p,
@@ -1440,6 +1569,7 @@ const PaymentHistory = ({ customerId }: { customerId: number | null }) => {
                 <div key={payment.id} className="bg-slate-50 dark:bg-gray-700 rounded-lg p-4 border border-slate-200 dark:border-gray-600 hover:border-slate-300 dark:hover:border-gray-500 transition-colors">
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                     <div className="flex items-start gap-3">
+                      {/* Payment Status Icon */}
                       <div className={`p-2 rounded-lg ${
                         payment.status === 'CLEARED' ? 'bg-green-100 dark:bg-green-900' : 
                         payment.status === 'PENDING' ? 'bg-yellow-100 dark:bg-yellow-900' : 'bg-red-100 dark:bg-red-900'
@@ -1498,7 +1628,10 @@ const PaymentHistory = ({ customerId }: { customerId: number | null }) => {
   );
 };
 
-// Customer Selector
+// ----------------------------------------------------------------------------
+// CustomerSelector Component - Dropdown to select a customer
+// Also supports importing from phone contacts
+// ----------------------------------------------------------------------------
 const CustomerSelector = ({ 
   customers, 
   onSelect,
@@ -1533,6 +1666,9 @@ const CustomerSelector = ({
     }
   };
 
+  /**
+   * Use browser's Contact Picker API to import from phone contacts
+   */
   const handlePickContact = async () => {
     try {
       if (!('contacts' in navigator) || !('ContactsManager' in window)) {
@@ -1543,7 +1679,7 @@ const CustomerSelector = ({
       const props = ['name', 'tel', 'email'];
       const opts = { multiple: false };
 
-      // @ts-ignore
+      // @ts-ignore - Contact Picker API
       const contacts = await navigator.contacts.select(props, opts);
       
       if (contacts && contacts.length > 0) {
@@ -1577,7 +1713,7 @@ const CustomerSelector = ({
             />
           </div>
 
-          {/* Customer select */}
+          {/* Customer select dropdown */}
           <select
             value={selectedId}
             onChange={handleSelect}
@@ -1618,7 +1754,9 @@ const CustomerSelector = ({
   );
 };
 
-// Add Customer Form with Duplicate Prevention
+// ----------------------------------------------------------------------------
+// AddCustomerForm Component - Create new customers with duplicate prevention
+// ----------------------------------------------------------------------------
 const AddCustomerForm = ({ 
   onAddCustomer,
   initialData
@@ -1633,6 +1771,7 @@ const AddCustomerForm = ({
   const [duplicateError, setDuplicateError] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<{ phone?: string; email?: string }>({});
 
+  // Populate form when importing a contact
   useEffect(() => {
     if (initialData) {
       setName(initialData.name || "");
@@ -1641,7 +1780,7 @@ const AddCustomerForm = ({
     }
   }, [initialData]);
 
-  // Real-time validation for phone and email
+  // Real-time validation functions
   const validatePhone = (value: string): boolean => {
     if (!value) return true; // Optional field
     const normalized = normalizePhoneNumber(value);
@@ -1654,6 +1793,7 @@ const AddCustomerForm = ({
     return emailRegex.test(value);
   };
 
+  // Input handlers with real-time validation
   const handlePhoneChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const value = e.target.value;
     setPhone(value);
@@ -1681,6 +1821,9 @@ const AddCustomerForm = ({
     setDuplicateError(null);
   };
 
+  /**
+   * Submit new customer to API with duplicate checking
+   */
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     
@@ -1718,7 +1861,7 @@ const AddCustomerForm = ({
       const response = await res.json();
 
       if (!res.ok) {
-        // Check for duplicate error
+        // Check for duplicate error from API
         if (response.error && (
           response.error.includes("duplicate") || 
           response.error.includes("already exists") ||
@@ -1768,6 +1911,7 @@ const AddCustomerForm = ({
         )}
         
         <div className="space-y-4">
+          {/* Name Field */}
           <div>
             <label className="block text-sm font-medium text-black dark:text-white mb-2">
               Customer Name <span className="text-red-500">*</span>
@@ -1784,6 +1928,7 @@ const AddCustomerForm = ({
             />
           </div>
 
+          {/* Phone Field */}
           <div>
             <label className="text-sm font-medium text-black dark:text-white mb-2 flex items-center gap-2">
               <Phone className="w-4 h-4" /> Phone (Optional)
@@ -1805,6 +1950,7 @@ const AddCustomerForm = ({
             </p>
           </div>
 
+          {/* Email Field */}
           <div>
             <label className="text-sm font-medium text-black dark:text-white mb-2 flex items-center gap-2">
               <Mail className="w-4 h-4" /> Email (Optional)
@@ -1823,6 +1969,7 @@ const AddCustomerForm = ({
             )}
           </div>
 
+          {/* Submit Button */}
           <button
             onClick={handleSubmit}
             disabled={isSubmitting}
@@ -1845,7 +1992,9 @@ const AddCustomerForm = ({
   );
 };
 
-// Customer List Component
+// ----------------------------------------------------------------------------
+// CustomerList Component - Display customers in a grid with edit/delete options
+// ----------------------------------------------------------------------------
 const CustomerList = ({
   customers,
   onDelete,
@@ -1924,7 +2073,7 @@ const CustomerList = ({
 
   return (
     <div className="space-y-4">
-      {/* Search */}
+      {/* Search Input */}
       <div className="relative">
         <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-slate-400 w-5 h-5" />
         <input
@@ -1936,14 +2085,14 @@ const CustomerList = ({
         />
       </div>
 
-      {/* Customer count */}
+      {/* Customer Count */}
       <div className="flex items-center justify-between">
         <p className="text-sm text-slate-500 dark:text-gray-400">
           Showing {filteredCustomers.length} of {customers.length} customers
         </p>
       </div>
 
-      {/* Customer grid */}
+      {/* Customer Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         {filteredCustomers.map((customer) => (
           <div
@@ -1951,6 +2100,7 @@ const CustomerList = ({
             className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-slate-100 dark:border-gray-700 overflow-hidden hover:shadow-md transition-all duration-200"
           >
             {editingId === customer.id ? (
+              // Edit Mode
               <div className="p-4 space-y-3">
                 <input
                   type="text"
@@ -1989,6 +2139,7 @@ const CustomerList = ({
                 </div>
               </div>
             ) : (
+              // View Mode
               <>
                 <div 
                   className="p-4 cursor-pointer"
@@ -2032,6 +2183,7 @@ const CustomerList = ({
                     </div>
                   </div>
 
+                  {/* Sales Stats */}
                   {customer.totalSales !== undefined && (
                     <div className="mt-3 pt-3 border-t border-slate-100 dark:border-gray-700">
                       <div className="flex justify-between items-center text-sm">
@@ -2052,6 +2204,7 @@ const CustomerList = ({
                   )}
                 </div>
 
+                {/* Footer - Select Button */}
                 <div className="bg-slate-50 dark:bg-gray-700 px-4 py-2 border-t border-slate-100 dark:border-gray-600 flex justify-between items-center">
                   <span className="text-xs text-slate-500 dark:text-gray-400">
                     ID: #{customer.id}
@@ -2069,6 +2222,7 @@ const CustomerList = ({
         ))}
       </div>
 
+      {/* No Results */}
       {filteredCustomers.length === 0 && searchQuery && (
         <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-slate-100 dark:border-gray-700 p-8 text-center">
           <Search className="w-12 h-12 text-slate-300 dark:text-gray-600 mx-auto mb-3" />
@@ -2082,12 +2236,17 @@ const CustomerList = ({
   );
 };
 
-// Customer Report Component
+// ----------------------------------------------------------------------------
+// CustomerReport Component - Generate and download outstanding reports
+// ----------------------------------------------------------------------------
 const CustomerReport = ({ customer }: { customer: Customer | null }) => {
   const [loading, setLoading] = useState(false);
   const [reportData, setReportData] = useState<any>(null);
   const [showPreview, setShowPreview] = useState(false);
 
+  /**
+   * Generate outstanding sales report for selected customer
+   */
   const generateReport = async () => {
     if (!customer) {
       alert('Please select a customer first');
@@ -2105,6 +2264,7 @@ const CustomerReport = ({ customer }: { customer: Customer | null }) => {
       
       const sales = Array.isArray(salesData) ? salesData : (salesData.data || []);
       
+      // Process sales data for report
       const processedSales = sales.map((sale: any) => {
         const totalPaid = sale.payment?.reduce((sum: number, p: any) => 
           p.status === "CLEARED" ? sum + p.amount : sum, 0) || 0;
@@ -2127,6 +2287,7 @@ const CustomerReport = ({ customer }: { customer: Customer | null }) => {
         };
       });
 
+      // Filter only outstanding sales
       const outstandingSales = processedSales.filter((s: any) => s.status !== 'PAID');
       const totalOutstanding = outstandingSales.reduce((sum: number, s: any) => sum + s.remainingBalance, 0);
       const totalPurchases = outstandingSales.reduce((sum: number, s: any) => sum + s.amount, 0);
@@ -2158,6 +2319,9 @@ const CustomerReport = ({ customer }: { customer: Customer | null }) => {
     }
   };
 
+  /**
+   * Download report as CSV file
+   */
   const downloadCSV = () => {
     if (!reportData || !customer) return;
     
@@ -2269,8 +2433,12 @@ const CustomerReport = ({ customer }: { customer: Customer | null }) => {
   );
 };
 
-// Main CustomerPage Component
+// ============================================================================
+// MAIN COMPONENT: CustomerPage
+// This is the main exported component that orchestrates all customer management
+// ============================================================================
 const CustomerPage = () => {
+  // State Management
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
   const [importedContact, setImportedContact] = useState<{ name: string; phone: string; email: string } | null>(null);
@@ -2279,6 +2447,7 @@ const CustomerPage = () => {
   const [refreshKey, setRefreshKey] = useState(0);
   const [globalSearchQuery, setGlobalSearchQuery] = useState("");
 
+  // Fetch customers on component mount and when refreshKey changes
   useEffect(() => {
     const fetchCustomers = async () => {
       try {
@@ -2307,6 +2476,7 @@ const CustomerPage = () => {
     fetchCustomers();
   }, [refreshKey]);
 
+  // Handlers
   const handleAddCustomer = (customer: Customer) => {
     setCustomers(prev => [customer, ...prev]);
     setImportedContact(null);
@@ -2344,6 +2514,7 @@ const CustomerPage = () => {
   const handlePaymentComplete = () => {
     setRefreshKey(prev => prev + 1);
     
+    // Refresh selected customer data
     if (selectedCustomer) {
       fetch(`/api/customer?id=${selectedCustomer.id}`)
         .then(res => res.json())
@@ -2360,6 +2531,7 @@ const CustomerPage = () => {
     }
   };
 
+  // Loading State
   if (loading) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100 dark:from-gray-900 dark:to-gray-800 flex items-center justify-center">
@@ -2371,6 +2543,7 @@ const CustomerPage = () => {
     );
   }
 
+  // Error State
   if (error) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100 dark:from-gray-900 dark:to-gray-800 flex items-center justify-center p-4">
@@ -2389,10 +2562,11 @@ const CustomerPage = () => {
     );
   }
 
+  // Main Render
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100 dark:from-gray-900 dark:to-gray-800">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {/* Header */}
+        {/* Page Header */}
         <div className="mb-8">
           <h1 className="text-3xl font-bold text-black dark:text-white">Customer Management</h1>
           <p className="text-slate-500 dark:text-gray-400 mt-1">Manage customers, track credit, process payments, and send statements</p>
@@ -2404,6 +2578,7 @@ const CustomerPage = () => {
           onFilter={() => {}}
         />
 
+        {/* Two-Column Layout */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           {/* Left Column - Customer Selection & Add Form */}
           <div className="lg:col-span-1 space-y-6">
@@ -2413,6 +2588,7 @@ const CustomerPage = () => {
               onImportFromPhone={handleImportFromPhone}
             />
             
+            {/* Import Success Message */}
             {importedContact && (
               <div className="bg-blue-50 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-800 text-blue-700 dark:text-blue-300 p-4 rounded-lg">
                 <p className="font-medium mb-1">Contact imported!</p>
@@ -2458,21 +2634,21 @@ const CustomerPage = () => {
                   </div>
                 </div>
 
-                {/* Credit Management */}
+                {/* Credit Management Component */}
                 <CreditManagement 
                   customer={selectedCustomer} 
                   onPaymentComplete={handlePaymentComplete}
                 />
 
-                {/* Payment History */}
+                {/* Payment History Component */}
                 <PaymentHistory customerId={selectedCustomer.id} />
 
-                {/* Customer Report */}
+                {/* Customer Report Component */}
                 <CustomerReport customer={selectedCustomer} />
               </>
             )}
 
-            {/* Customer List */}
+            {/* Customer List Component */}
             <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-slate-100 dark:border-gray-700 overflow-hidden">
               <div className="p-6">
                 <h2 className="text-lg font-semibold text-black dark:text-white mb-4">All Customers</h2>

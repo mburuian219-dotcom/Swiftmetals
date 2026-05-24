@@ -1,16 +1,28 @@
 "use client";
-import { useEffect, useState, useMemo } from "react";
-import { TrendingUp, Wallet, CreditCard, Users, Package, DollarSign, Download, BookOpen, Search, X, Edit2, Check } from "lucide-react";
 
-// Import separated components
+// ============================================================================
+// IMPORTS & DEPENDENCIES
+// ============================================================================
+import { useEffect, useState, useMemo } from "react";
+import { 
+  TrendingUp, Wallet, CreditCard, Users, Package, DollarSign, 
+  Download, BookOpen, Search, X, Edit2, Check 
+} from "lucide-react";
+
+// Import separated components for modular architecture
 import DailyTransactionsTracker from "../CashLedger"; 
 import CreditorsSection from "../CreditorsSection";
 import DebtorsSection from "../DebtorsSection";
 import BalanceSheetSection from "../BalanceSheetSection";
 import InventorySection from "../inventory";
 import MoneyTracker from "../cash";
-import SalesIncomeReport from "../SalesIncomeReport"; // Add this import
+import SalesIncomeReport from "../SalesIncomeReport";
 
+// ============================================================================
+// TYPE DEFINITIONS & INTERFACES
+// ============================================================================
+
+/** Cash transaction record from ledger */
 type CashTransaction = {
   id: string;
   date: string;
@@ -23,6 +35,7 @@ type CashTransaction = {
   affectedAccounts?: string;
 };
 
+/** Creditor (supplier) data structure */
 type Creditor = {
   id: string | number;
   name: string;
@@ -33,6 +46,7 @@ type Creditor = {
   payments: Array<{ date: string; amount: number; method: string }>;
 };
 
+/** Debtor (customer) data structure */
 type Debtor = {
   id: string;
   name: string;
@@ -45,6 +59,7 @@ type Debtor = {
   payments: Array<{ date: string; amount: number; method: string }>;
 };
 
+/** Inventory item structure */
 type InventoryItem = {
   id: number;
   name: string;
@@ -55,12 +70,15 @@ type InventoryItem = {
   supplier?: string;
   dateAdded: string;
 };
+
+/** Cash ledger component props */
 export type CashLedgerProps = {
   transactions: CashTransaction[];
   cashBalance: number;
   onDownload: () => void;
 };
 
+/** Complete balance sheet structure */
 type BalanceSheet = {
   assets: {
     currentAssets: {
@@ -92,24 +110,37 @@ type BalanceSheet = {
   date: string;
 };
 
+// ============================================================================
+// MAIN COMPONENT: AccountingSystem
+// ============================================================================
 export default function AccountingSystem() {
+  // ==========================================================================
+  // STATE MANAGEMENT
+  // ==========================================================================
+  
+  // --- UI State ---
   const [activeTab, setActiveTab] = useState<"overview" | "cash" | "creditors" | "debtors" | "inventory" | "balance-sheet" | "sales-income">("overview");
+  const [loading, setLoading] = useState(true);
+  const [searchTerm, setSearchTerm] = useState("");
+  const [isEditingOpeningCash, setIsEditingOpeningCash] = useState(false);
+  const [tempOpeningCash, setTempOpeningCash] = useState(0);
+  const [showCash, setShowCash] = useState(false);
+  
+  // --- Financial Data State ---
   const [cashTransactions, setCashTransactions] = useState<CashTransaction[]>([]);
   const [creditors, setCreditors] = useState<Creditor[]>([]);
   const [debtors, setDebtors] = useState<Debtor[]>([]);
   const [inventory, setInventory] = useState<InventoryItem[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [searchTerm, setSearchTerm] = useState("");
   const [balanceSheet, setBalanceSheet] = useState<BalanceSheet | null>(null);
   const [openingCash, setOpeningCash] = useState(0);
-  const [isEditingOpeningCash, setIsEditingOpeningCash] = useState(false);
-  const [tempOpeningCash, setTempOpeningCash] = useState(0);
   const [rawData, setRawData] = useState<any>(null);
+  
+  // --- Inventory Detail State ---
   const [selectedInventoryItem, setSelectedInventoryItem] = useState<InventoryItem | null>(null);
   const [inventoryHistory, setInventoryHistory] = useState<any[]>([]);
   const [loadingHistory, setLoadingHistory] = useState(false);
-  const [showCash, setShowCash] = useState(false);
-
+  
+  // --- Summary Statistics ---
   const [stats, setStats] = useState({
     cashBalance: 0,
     totalCreditors: 0,
@@ -123,11 +154,37 @@ export default function AccountingSystem() {
     grossProfit: 0,
   });
 
+  // ==========================================================================
+  // INITIALIZATION & DATA FETCHING
+  // ==========================================================================
+  
+  /**
+   * Load opening cash balance and all financial data on component mount
+   */
   useEffect(() => {
     loadOpeningCash();
     fetchAllData();
   }, []);
 
+  /**
+   * Process accounting data whenever raw data or opening cash changes
+   */
+  useEffect(() => {
+    if (rawData) {
+      const salesData = rawData.sales || [];
+      const expensesData = rawData.expenses || [];
+      const stockData = rawData.stock || [];
+      const customersData = rawData.customers || [];
+      const creditorsData = rawData.creditors || [];
+      
+      processAccountingData(salesData, expensesData, stockData, customersData, creditorsData);
+    }
+  }, [rawData, openingCash]);
+
+  /**
+   * Load opening cash balance from API
+   * Defaults to 50,000 KES if not set
+   */
   const loadOpeningCash = async () => {
     try {
       const res = await fetch("/api/opening-balance");
@@ -153,22 +210,15 @@ export default function AccountingSystem() {
     }
   };
 
-  useEffect(() => {
-    if (rawData) {
-      const salesData = rawData.sales || [];
-      const expensesData = rawData.expenses || [];
-      const stockData = rawData.stock || [];
-      const customersData = rawData.customers || [];
-      const creditorsData = rawData.creditors || [];
-      
-      processAccountingData(salesData, expensesData, stockData, customersData, creditorsData);
-    }
-  }, [rawData, openingCash]);
-
+  /**
+   * Fetch all financial data from multiple API endpoints
+   * Uses safeFetch to handle errors gracefully
+   */
   const fetchAllData = async () => {
     try {
       setLoading(true);
 
+      // Safe fetch wrapper with error handling
       const safeFetch = async (url: string) => {
         try {
           const res = await fetch(url);
@@ -184,6 +234,7 @@ export default function AccountingSystem() {
         }
       };
 
+      // Parallel API calls for all financial data
       const [sales, expenses, stock, customers, creditors] = await Promise.all([
         safeFetch("/api/sales"),
         safeFetch("/api/expenses"),
@@ -192,11 +243,11 @@ export default function AccountingSystem() {
         safeFetch("/api/creditors"),
       ]);
 
+      // Extract data arrays from responses
       const salesData = Array.isArray(sales) ? sales : sales?.data || [];
       const expensesData = Array.isArray(expenses?.expenses)
         ? expenses.expenses
         : [];
-
       const stockData = Array.isArray(stock) ? stock : stock?.data || [];
       const customersData = Array.isArray(customers) ? customers : customers?.data || [];
       const creditorsData = Array.isArray(creditors) ? creditors : creditors?.data || [];
@@ -224,13 +275,29 @@ export default function AccountingSystem() {
     }
   };
 
+  // ==========================================================================
+  // CORE ACCOUNTING LOGIC
+  // ==========================================================================
+  
+  /**
+   * Process raw API data into financial statements
+   * Calculates:
+   * - Cash ledger with running balance
+   * - Creditor and debtor balances
+   * - Inventory valuation
+   * - COGS (Cost of Goods Sold) using production costs
+   * - Income statement (Gross Profit, Net Income)
+   * - Balance sheet
+   */
   const processAccountingData = (sales: any, expenses: any, stock: any, customers: any, creditorsApiData: any) => {
+    // Normalize data arrays
     const salesArray = Array.isArray(sales) ? sales : [];
     const expensesArray = Array.isArray(expenses) ? expenses : [];
     const stockArray = Array.isArray(stock) ? stock : [];
     const customersArray = Array.isArray(customers) ? customers : [];
     const creditorsArray = Array.isArray(creditorsApiData) ? creditorsApiData : [];
 
+    // Initialize accumulators
     let cashBalance = openingCash;
     const cashTxns: CashTransaction[] = [];
     const creditorMap: Map<string, Creditor> = new Map();
@@ -240,6 +307,9 @@ export default function AccountingSystem() {
     let totalInventoryValue = 0;
     let totalCostOfGoodsSold = 0;
 
+    // ========================================================================
+    // 1. ADD OPENING BALANCE AS FIRST TRANSACTION
+    // ========================================================================
     cashTxns.push({
       id: "OPENING-BALANCE",
       date: new Date(new Date().setMonth(new Date().getMonth() - 6)).toISOString(),
@@ -251,13 +321,16 @@ export default function AccountingSystem() {
       affectedAccounts: "Cash (+) | Capital (+)",
     });
 
-    // Process creditors
+    // ========================================================================
+    // 2. PROCESS CREDITORS (Accounts Payable)
+    // ========================================================================
     creditorsArray.forEach((creditor: any) => {
       const creditorId = String(creditor?.id || creditor?.name || Math.random());
       const totalOwed = Number(creditor?.totalOwed || 0);
       const paid = Number(creditor?.paid || 0);
       const balance = totalOwed - paid;
 
+      // Map purchases
       let purchases = [];
       if (creditor?.purchases && Array.isArray(creditor.purchases)) {
         purchases = creditor.purchases.map((p: any) => ({
@@ -267,6 +340,7 @@ export default function AccountingSystem() {
         }));
       }
 
+      // Map payments
       let payments = [];
       if (creditor?.payments && Array.isArray(creditor.payments)) {
         payments = creditor.payments.map((p: any) => ({
@@ -286,6 +360,7 @@ export default function AccountingSystem() {
         payments,
       });
 
+      // Record payment transactions in cash ledger
       if (paid > 0) {
         cashBalance -= paid;
         cashTxns.push({
@@ -302,12 +377,17 @@ export default function AccountingSystem() {
       }
     });
 
-    // Build product cost map for COGS calculation - CORRECTED: Use productionCost from product model
+    // ========================================================================
+    // 3. BUILD PRODUCT COST MAP FOR COGS CALCULATION
+    // ✅ CORRECT: Uses productionCost from product model
+    // ========================================================================
     const productCostMap = new Map<number, number>();
     stockArray.forEach((stock: any) => {
       const prodId = Number(stock?.productId || stock?.id || 0);
       
-      // ✅ CORRECT: Try to get productionCost first, fall back to costPrice
+      // Priority order for cost:
+      // 1. productionCost from product relation
+      // 2. costPrice from stock table
       const productionCost = Number(
         stock?.productionCost ||           // From product relation
         stock?.product?.productionCost ||  // Nested product data
@@ -320,31 +400,33 @@ export default function AccountingSystem() {
       }
     });
 
-    // Process sales - CORRECTED COGS CALCULATION
+    // ========================================================================
+    // 4. PROCESS SALES & CALCULATE COGS
+    // ✅ CORRECT COGS CALCULATION: quantity × productionCost
+    // ========================================================================
     salesArray.forEach((sale: any) => {
       const saleAmount = Number(sale?.amount || 0);
       totalSalesRevenue += saleAmount;
 
+      // Calculate COGS for this sale
       let saleCOGS = 0;
       if (sale?.saleitem && Array.isArray(sale.saleitem)) {
         sale.saleitem.forEach((item: any) => {
           const quantity = Number(item?.quantity || 0);
           const productId = Number(item?.productId || 0);
           
-          // ✅ CORRECT: Get production cost from map first
+          // Get production cost (priority: map → nested product → fallback)
           let productionCost = productCostMap.get(productId) || 0;
           
-          // ✅ CORRECT: Try to get from nested product data
           if (productionCost === 0 && item?.product?.productionCost) {
             productionCost = Number(item.product.productionCost);
           }
           
-          // ✅ CORRECT: Fall back to costPrice if productionCost not available
           if (productionCost === 0 && item?.product?.costPrice) {
             productionCost = Number(item.product.costPrice);
           }
           
-          // ✅ CORRECT COGS CALCULATION: quantity × productionCost
+          // ✅ CORRECT COGS: quantity × productionCost
           const itemCost = quantity * productionCost;
           saleCOGS += itemCost;
         });
@@ -352,10 +434,12 @@ export default function AccountingSystem() {
       
       totalCostOfGoodsSold += saleCOGS;
 
+      // Build items list string for display
       const itemsList = sale?.saleitem?.map((item: any) => 
         `${item?.product?.name || "Product"} (${item?.quantity || 0})`
       ).join(", ") || "Items";
 
+      // Process debtor (customer) data
       const customerId = Number(sale?.customerId || 0);
       if (!debtorMap.has(customerId)) {
         const customer = customersArray.find(c => c?.id === customerId) || {
@@ -387,6 +471,7 @@ export default function AccountingSystem() {
         amount: saleAmount,
       });
 
+      // Handle paid sales (cash inflow)
       if (sale?.status === "PAID" || sale?.status === "COMPLETED") {
         cashBalance += saleAmount;
         debtor.paid += saleAmount;
@@ -403,9 +488,11 @@ export default function AccountingSystem() {
           affectedAccounts: "Cash (+) | Revenue (+)",
         });
       } else {
+        // Credit sale (add to accounts receivable)
         debtor.balance += saleAmount;
       }
 
+      // Process payments on this sale
       if (sale?.payment && Array.isArray(sale.payment)) {
         sale.payment.forEach((payment: any) => {
           const payAmount = Number(payment?.amount || 0);
@@ -437,7 +524,9 @@ export default function AccountingSystem() {
       }
     });
 
-    // Process expenses
+    // ========================================================================
+    // 5. PROCESS EXPENSES (Cash Outflows)
+    // ========================================================================
     expensesArray.forEach((expense: any) => {
       const expAmount = Number(expense?.amount || 0);
       totalExpenses += expAmount;
@@ -456,7 +545,9 @@ export default function AccountingSystem() {
       });
     });
 
-    // Sort and recalculate running balances
+    // ========================================================================
+    // 6. SORT TRANSACTIONS & RECALCULATE RUNNING BALANCES
+    // ========================================================================
     cashTxns.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
 
     let runningBal = 0;
@@ -469,7 +560,9 @@ export default function AccountingSystem() {
       txn.runningBalance = runningBal;
     });
 
-    // Process inventory - CORRECTED CALCULATION
+    // ========================================================================
+    // 7. PROCESS INVENTORY VALUATION
+    // ========================================================================
     const invItems: InventoryItem[] = stockArray.map((item: any) => {
       const quantity = Number(item?.quantity || 0);
       const costPrice = Number(item?.costPrice || 0);
@@ -481,18 +574,21 @@ export default function AccountingSystem() {
         quantity,
         costPrice,
         sellingPrice,
-        totalValue: quantity * costPrice, // This is the cost value
+        totalValue: quantity * costPrice, // Cost-based valuation
         supplier: item?.supplier || "",
         dateAdded: item?.createdAt || new Date().toISOString(),
       };
     });
 
-    // Calculate inventory values correctly
-    totalInventoryValue = invItems.reduce((sum, item) => sum + item.totalValue, 0); // Total cost
+    // Calculate inventory values
+    totalInventoryValue = invItems.reduce((sum, item) => sum + item.totalValue, 0);
     const estimatedInventoryValue = invItems.reduce((sum, item) => {
-      return sum + (item.quantity * item.sellingPrice); // Total potential revenue at selling price
+      return sum + (item.quantity * item.sellingPrice); // Potential revenue
     }, 0);
 
+    // ========================================================================
+    // 8. CALCULATE TOTALS FOR FINANCIAL STATEMENTS
+    // ========================================================================
     const totalCreditorBalance = Array.from(creditorMap.values()).reduce((sum, c) => sum + c.balance, 0);
     const totalDebtorBalance = Array.from(debtorMap.values()).reduce((sum, d) => sum + d.balance, 0);
     
@@ -500,12 +596,15 @@ export default function AccountingSystem() {
     const totalLiabilities = totalCreditorBalance;
     const capital = openingCash;
     
-    // ✅ CORRECT Profit calculations
+    // Income statement calculations
     const grossProfit = totalSalesRevenue - totalCostOfGoodsSold;
     const netIncome = grossProfit - totalExpenses;
     const retainedEarnings = netIncome;
     const totalEquity = capital + retainedEarnings;
 
+    // ========================================================================
+    // 9. BUILD BALANCE SHEET
+    // ========================================================================
     const balanceSheetData: BalanceSheet = {
       assets: {
         currentAssets: {
@@ -537,6 +636,9 @@ export default function AccountingSystem() {
       date: new Date().toISOString(),
     };
 
+    // ========================================================================
+    // 10. UPDATE ALL STATE VARIABLES
+    // ========================================================================
     setCashTransactions(cashTxns);
     setCreditors(Array.from(creditorMap.values()));
     setDebtors(Array.from(debtorMap.values()));
@@ -556,6 +658,13 @@ export default function AccountingSystem() {
     });
   };
 
+  // ==========================================================================
+  // OPENING CASH MANAGEMENT
+  // ==========================================================================
+  
+  /**
+   * Save updated opening cash balance to API
+   */
   const handleSaveOpeningCash = async () => {
     const newAmount = Number(tempOpeningCash);
     if (isNaN(newAmount) || newAmount < 0) {
@@ -583,7 +692,14 @@ export default function AccountingSystem() {
     }
   };
 
-  // ✅ CORRECTED: Download COGS Ledger function with proper production cost calculation
+  // ==========================================================================
+  // REPORT GENERATION FUNCTIONS
+  // ==========================================================================
+  
+  /**
+   * Download COGS (Cost of Goods Sold) Ledger as CSV
+   * ✅ CORRECTED: Uses production cost from product model for accurate COGS
+   */
   const downloadCOGSLedger = async () => {
     try {
       console.log("🔄 Starting COGS ledger download...");
@@ -614,14 +730,14 @@ export default function AccountingSystem() {
         return;
       }
 
-      // ✅ CORRECT: Create CSV with proper COGS calculation using schema field names
+      // CSV Headers with correct columns
       const headers = [
         "Date", 
         "Sale ID", 
         "Product ID", 
         "Product Name", 
         "Quantity Sold", 
-        "Unit Production Cost",  // From product.productionCost or stock.costPrice
+        "Unit Production Cost",  // From product.productionCost
         "Total Production Cost", // COGS = productionCost × quantity
         "Unit Selling Price",    // From saleitem.price
         "Sale Amount",           // Revenue = sellingPrice × quantity
@@ -631,7 +747,7 @@ export default function AccountingSystem() {
       ];
       
       const rows = cogsData.map((item) => {
-        // ✅ CORRECT: Get production cost from the right fields based on your schema
+        // ✅ CORRECT: Get production cost from the right fields
         const unitProductionCost = Number(
           item.productionCost ||           // From product model
           item.costPrice ||                // From stock model
@@ -640,7 +756,6 @@ export default function AccountingSystem() {
           0
         );
         
-        // ✅ CORRECT: Get selling price from the right fields
         const unitSellingPrice = Number(
           item.price ||                    // From saleitem model
           item.sellingPrice ||             // From stock model
@@ -650,16 +765,10 @@ export default function AccountingSystem() {
         
         const quantitySold = Number(item.quantity || item.quantitySold || 0);
         
-        // ✅ CORRECT COGS CALCULATION: productionCost × quantitySold
+        // ✅ CORRECT COGS CALCULATION
         const totalProductionCost = unitProductionCost * quantitySold;
-        
-        // ✅ CORRECT Revenue calculation: sellingPrice × quantitySold
         const saleAmount = unitSellingPrice * quantitySold;
-        
-        // ✅ CORRECT Profit calculation: Revenue - COGS
         const grossProfit = saleAmount - totalProductionCost;
-        
-        // ✅ Profit margin percentage
         const profitMargin = saleAmount > 0 ? (grossProfit / saleAmount) * 100 : 0;
         
         return [
@@ -678,6 +787,7 @@ export default function AccountingSystem() {
         ];
       });
 
+      // Build CSV content
       const csvContent = [headers, ...rows]
         .map(row => row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(","))
         .join("\n");
@@ -702,6 +812,9 @@ export default function AccountingSystem() {
     }
   };
 
+  /**
+   * Generate printable receipt for a sale
+   */
   const generateReceipt = (debtor: Debtor, sale: any) => {
     const receiptWindow = window.open("", "_blank");
     if (receiptWindow) {
@@ -742,8 +855,10 @@ export default function AccountingSystem() {
     }
   };
 
+  /**
+   * Download inventory report as CSV
+   */
   const downloadInventoryReport = () => {
-    // Validate inventory data
     if (!Array.isArray(inventory) || inventory.length === 0) {
       alert("No inventory data available to download");
       return;
@@ -780,6 +895,9 @@ export default function AccountingSystem() {
     setTimeout(() => URL.revokeObjectURL(url), 100);
   };
 
+  /**
+   * Fetch restock history for a specific product
+   */
   const fetchInventoryHistory = async (productId: number) => {
     setLoadingHistory(true);
     try {
@@ -800,13 +918,18 @@ export default function AccountingSystem() {
     }
   };
 
+  /**
+   * Open inventory item details modal
+   */
   const handleViewItemDetails = (item: InventoryItem) => {
     setSelectedInventoryItem(item);
     fetchInventoryHistory(item.id);
   };
 
+  /**
+   * Download inventory item history as CSV
+   */
   const downloadItemHistory = (item: InventoryItem) => {
-    // Validate history data
     if (!Array.isArray(inventoryHistory) || inventoryHistory.length === 0) {
       alert("No history data available for this item");
       return;
@@ -841,7 +964,9 @@ export default function AccountingSystem() {
     setTimeout(() => URL.revokeObjectURL(url), 100);
   };
 
-  // Memoized filtered data for better performance
+  // ==========================================================================
+  // FILTERED DATA (Memoized for performance)
+  // ==========================================================================
   const filteredCashTxns = useMemo(() => 
     Array.isArray(cashTransactions) 
       ? cashTransactions.filter(txn =>
@@ -877,6 +1002,11 @@ export default function AccountingSystem() {
       : [], [inventory, searchTerm]
   );
 
+  // ==========================================================================
+  // RENDER - UI COMPONENT
+  // ==========================================================================
+  
+  // Loading State
   if (loading) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-50 to-blue-50 flex items-center justify-center p-4">
@@ -891,11 +1021,21 @@ export default function AccountingSystem() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-blue-50 p-3 sm:p-6">
       <div className="max-w-7xl mx-auto">
+        {/* ====================================================================
+          SECTION 1: HEADER
+        ===================================================================== */}
         <div className="mb-6 sm:mb-8">
-          <h1 className="text-2xl sm:text-3xl lg:text-4xl font-bold text-gray-900 mb-2">Financial Management System</h1>
-          <p className="text-sm sm:text-base lg:text-lg text-gray-600">Complete cash flow tracking, creditor/debtor management & inventory control</p>
+          <h1 className="text-2xl sm:text-3xl lg:text-4xl font-bold text-gray-900 mb-2">
+            Financial Management System
+          </h1>
+          <p className="text-sm sm:text-base lg:text-lg text-gray-600">
+            Complete cash flow tracking, creditor/debtor management & inventory control
+          </p>
         </div>
 
+        {/* ====================================================================
+          SECTION 2: OPENING CASH BALANCE EDITOR
+        ===================================================================== */}
         <div className="bg-white rounded-xl shadow-lg p-4 sm:p-6 mb-6 sm:mb-8 border-2 border-blue-200">
           <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
             <div>
@@ -949,7 +1089,9 @@ export default function AccountingSystem() {
           </div>
         </div>
 
-        {/* UPDATED: Download Section in Overview - Added Sales Income Report Button */}
+        {/* ====================================================================
+          SECTION 3: REPORT DOWNLOAD SECTION (Overview Tab Only)
+        ===================================================================== */}
         {activeTab === "overview" && (
           <div className="bg-white rounded-xl shadow-lg p-4 sm:p-6 mb-6 sm:mb-8 border-2 border-green-200">
             <h3 className="text-lg sm:text-xl font-bold text-gray-800 mb-4">Download Reports</h3>
@@ -980,7 +1122,11 @@ export default function AccountingSystem() {
           </div>
         )}
 
+        {/* ====================================================================
+          SECTION 4: STATS CARDS - Financial Summary
+        ===================================================================== */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6 mb-6 sm:mb-8">
+          {/* Creditors Card */}
           <div className="bg-white rounded-xl shadow-lg p-4 sm:p-6 border-l-4 border-red-500">
             <div className="flex items-center justify-between mb-2">
               <span className="text-xs sm:text-sm font-medium text-gray-600">Creditors (Payable)</span>
@@ -992,6 +1138,7 @@ export default function AccountingSystem() {
             <p className="text-xs text-gray-500 mt-1">{Array.isArray(creditors) ? creditors.length : 0} suppliers</p>
           </div>
 
+          {/* Debtors Card */}
           <div className="bg-white rounded-xl shadow-lg p-4 sm:p-6 border-l-4 border-amber-500">
             <div className="flex items-center justify-between mb-2">
               <span className="text-xs sm:text-sm font-medium text-gray-600">Debtors (Receivable)</span>
@@ -1003,6 +1150,7 @@ export default function AccountingSystem() {
             <p className="text-xs text-gray-500 mt-1">{Array.isArray(debtors) ? debtors.length : 0} customers</p>
           </div>
 
+          {/* Inventory Value Card */}
           <div className="bg-white rounded-xl shadow-lg p-4 sm:p-6 border-l-4 border-blue-500">
             <div className="flex items-center justify-between mb-2">
               <span className="text-xs sm:text-sm font-medium text-gray-600">Inventory Value</span>
@@ -1015,7 +1163,11 @@ export default function AccountingSystem() {
           </div>
         </div>
 
+        {/* ====================================================================
+          SECTION 5: MAIN CONTENT - TABS & SECTIONS
+        ===================================================================== */}
         <div className="bg-white rounded-xl shadow-lg mb-8">
+          {/* Tab Navigation */}
           <div className="border-b border-gray-200">
             <nav className="flex gap-2 sm:gap-4 p-4 overflow-x-auto">
               {[
@@ -1046,6 +1198,7 @@ export default function AccountingSystem() {
             </nav>
           </div>
 
+          {/* Search Bar (for non-overview tabs that need search) */}
           {activeTab !== "overview" && activeTab !== "balance-sheet" && activeTab !== "sales-income" && (
             <div className="p-4 border-b border-gray-200">
               <div className="relative">
@@ -1069,10 +1222,13 @@ export default function AccountingSystem() {
             </div>
           )}
 
+          {/* Tab Content */}
           <div className="p-4 sm:p-6">
+            {/* Overview Tab - Financial Dashboard */}
             {activeTab === "overview" && (
               <div className="space-y-6">
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
+                  {/* Income Statement Preview */}
                   <div className="bg-gradient-to-br from-green-50 to-emerald-50 rounded-xl p-4 sm:p-6 border border-green-200">
                     <h3 className="text-lg sm:text-xl font-bold text-gray-800 mb-4">Income Statement</h3>
                     <div className="space-y-3">
@@ -1111,6 +1267,7 @@ export default function AccountingSystem() {
                     </div>
                   </div>
 
+                  {/* Balance Sheet Preview */}
                   <div className="bg-gradient-to-br from-blue-50 to-indigo-50 rounded-xl p-4 sm:p-6 border border-blue-200">
                     <h3 className="text-lg sm:text-xl font-bold text-black mb-4">Balance Sheet Summary</h3>
                     <div className="space-y-3">
@@ -1142,6 +1299,7 @@ export default function AccountingSystem() {
                   </div>
                 </div>
 
+                {/* View Full Balance Sheet Button */}
                 <button
                   onClick={() => setActiveTab("balance-sheet")}
                   className="w-full bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white font-semibold py-3 sm:py-4 px-4 sm:px-6 rounded-lg transition-all flex items-center justify-center gap-3 shadow-lg hover:shadow-xl text-sm sm:text-base"
@@ -1152,22 +1310,27 @@ export default function AccountingSystem() {
               </div>
             )}
 
+            {/* Cash Ledger Tab - Uses external component */}
             {activeTab === "cash" && (
               <DailyTransactionsTracker />
             )}
 
+            {/* Creditors Tab - Uses external component */}
             {activeTab === "creditors" && (
               <CreditorsSection />
             )}
 
+            {/* Debtors Tab - Uses external component */}
             {activeTab === "debtors" && (
               <DebtorsSection />
             )}
 
+            {/* Inventory Tab - Uses external component */}
             {activeTab === "inventory" && (
               <InventorySection/>
             )}
 
+            {/* Balance Sheet Tab - Uses external component */}
             {activeTab === "balance-sheet" && (
               <BalanceSheetSection 
                 balanceSheet={
@@ -1247,13 +1410,16 @@ export default function AccountingSystem() {
               />
             )}
 
-            {/* NEW: Sales Income Report Tab */}
+            {/* Sales Income Report Tab */}
             {activeTab === "sales-income" && (
               <SalesIncomeReport />
             )}
           </div>
         </div>
 
+        {/* ====================================================================
+          SECTION 6: CASH LEDGER MODAL (Pop-up for detailed view)
+        ===================================================================== */}
         {showCash && (
           <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
             <div className="bg-white w-full max-w-4xl p-6 rounded-lg shadow-xl overflow-auto max-h-[90vh]">
@@ -1271,6 +1437,9 @@ export default function AccountingSystem() {
           </div>
         )}
 
+        {/* ====================================================================
+          SECTION 7: FOOTER
+        ===================================================================== */}
         <div className="text-center text-gray-500 text-xs sm:text-sm mt-8">
           <p>Integrated Financial Management System • Last updated: {new Date().toLocaleString()}</p>
         </div>

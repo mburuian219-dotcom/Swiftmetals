@@ -284,24 +284,40 @@ model sale {
   saleitem         saleitem[]
   smsreminder      smsreminder[]
   cashledger       cashledger[]
-  auditLogs        saleauditlog[]      // Added relation for audit logs
+  auditLogs        saleauditlog[]
 
   customer         customer @relation(fields: [customerId], references: [id])
 
-  // Audit fields
+  // =========================
+  // AUDIT FIELDS
+  // =========================
+
   updatedBy        String?
   createdBy        String?
 
-  // Relation to staff
+  // =========================
+  // SYSTEM CREATOR
+  // =========================
+
   createdById      Int?
-  staff            staff? @relation("StaffSales", fields: [createdById], references: [id])
+  createdByStaff   staff? @relation("CreatedSales", fields: [createdById], references: [id])
+
+  // =========================
+  // RESPONSIBLE SALESPERSON
+  // =========================
+
+  assignedStaffId  Int?
+  assignedStaff    staff? @relation("AssignedSales", fields: [assignedStaffId], references: [id])
+
+  @@index([assignedStaffId])
+  @@index([createdById])
 
   @@index([checkDepositDate])
   @@index([customerId])
   @@index([dueDate])
   @@index([paymentMethod])
   @@index([status])
-  @@index([isDeleted])      // Added index for soft delete queries
+  @@index([isDeleted])
   @@index([deletedAt])
 }
 
@@ -339,7 +355,11 @@ model staff {
   email            String?
   phone            String?
   staffInventories staffInventory[]
-  sales            sale[]            @relation("StaffSales")
+  // Sales physically created by this staff
+createdSales sale[] @relation("CreatedSales")
+
+// Sales owned/responsible by this staff
+assignedSales sale[] @relation("AssignedSales")
    // =========================
   // EXPENSE TRACKING
   // =========================

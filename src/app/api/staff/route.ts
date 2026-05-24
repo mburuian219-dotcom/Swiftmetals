@@ -1,6 +1,21 @@
 import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 
+// ================== Type Definitions ==================
+interface StaffWithRelations {
+  id: number;
+  name: string;
+  email: string | null;
+  phone: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+  staffInventories?: any[];
+  createdSales?: any[];
+  assignedSales?: any[];
+  createdExpenses?: any[];
+  updatedExpenses?: any[];
+}
+
 // Helper function to normalize email
 function normalizeEmail(email: string): string {
   if (!email) return '';
@@ -13,8 +28,7 @@ async function findStaffByEmailCaseInsensitive(email: string) {
   
   const normalizedEmail = normalizeEmail(email);
   
-  // For MySQL, we need to handle case-insensitive search differently
-  // First try exact match
+  // Try exact match first
   let staff = await prisma.staff.findFirst({
     where: { 
       email: normalizedEmail 
@@ -40,33 +54,166 @@ async function findStaffByEmailCaseInsensitive(email: string) {
 // GET all staff with their inventory and sales
 export async function GET(req: NextRequest) {
   try {
-    const staff = await prisma.staff.findMany({
-      include: {
-        staffInventories: {
-          include: {
-            product: true
+    const { searchParams } = new URL(req.url);
+    const email = searchParams.get('email');
+    const includeInventory = searchParams.get('includeInventory') === 'true';
+    const includeSales = searchParams.get('includeSales') === 'true';
+    const includeExpenses = searchParams.get('includeExpenses') === 'true';
+
+    // If email is provided, return single staff member
+    if (email) {
+      const staff = await prisma.staff.findFirst({
+        where: {
+          email: {
+            equals: email.toLowerCase(),
+            mode: 'insensitive'
           }
         },
-        sales: {
-          include: {
-            saleitem: {
-              include: {
-                product: true
+        include: {
+          staffInventories: includeInventory ? {
+            include: {
+              product: true,
+              saleItems: {
+                include: {
+                  sale: true,
+                  product: true
+                }
               }
+            }
+          } : false,
+          createdSales: includeSales ? {
+            include: {
+              customer: true,
+              saleitem: {
+                include: {
+                  product: true,
+                  staffInventory: true
+                }
+              },
+              payment: true,
+              invoice: true,
+              paymentschedule: true
+            },
+            orderBy: { createdAt: "desc" },
+            take: 50
+          } : false,
+          assignedSales: includeSales ? {
+            include: {
+              customer: true,
+              saleitem: {
+                include: {
+                  product: true,
+                  staffInventory: true
+                }
+              },
+              payment: true,
+              invoice: true,
+              paymentschedule: true
+            },
+            orderBy: { createdAt: "desc" },
+            take: 50
+          } : false,
+          createdExpenses: includeExpenses ? {
+            include: {
+              cashledger: true
+            }
+          } : false,
+          updatedExpenses: includeExpenses ? {
+            include: {
+              cashledger: true
+            }
+          } : false
+        }
+      });
+
+      if (!staff) {
+        return NextResponse.json({ error: "Staff not found" }, { status: 404 });
+      }
+
+      // Transform for backward compatibility
+      const transformedStaff = {
+        ...staff,
+        sales: includeSales ? [...(staff.createdSales || []), ...(staff.assignedSales || [])] : undefined
+      };
+
+      return NextResponse.json(transformedStaff);
+    }
+
+    // Build include object for all staff
+    const include: any = {
+      staffInventories: includeInventory ? {
+        include: {
+          product: true,
+          saleItems: {
+            include: {
+              sale: true,
+              product: true
             }
           }
         }
-      },
+      } : false,
+      createdSales: includeSales ? {
+        include: {
+          customer: true,
+          saleitem: {
+            include: {
+              product: true,
+              staffInventory: true
+            }
+          },
+          payment: true,
+          invoice: true,
+          paymentschedule: true
+        },
+        orderBy: { createdAt: "desc" },
+        take: 10
+      } : false,
+      assignedSales: includeSales ? {
+        include: {
+          customer: true,
+          saleitem: {
+            include: {
+              product: true,
+              staffInventory: true
+            }
+          },
+          payment: true,
+          invoice: true,
+          paymentschedule: true
+        },
+        orderBy: { createdAt: "desc" },
+        take: 10
+      } : false,
+      createdExpenses: includeExpenses ? {
+        include: {
+          cashledger: true
+        }
+      } : false,
+      updatedExpenses: includeExpenses ? {
+        include: {
+          cashledger: true
+        }
+      } : false
+    };
+
+    const staff = await prisma.staff.findMany({
+      include,
       orderBy: {
         createdAt: "desc"
       }
     });
 
-    return NextResponse.json(staff);
+    // Transform for backward compatibility
+    const transformedStaff = staff.map(member => ({
+      ...member,
+      sales: includeSales ? [...(member.createdSales || []), ...(member.assignedSales || [])] : undefined
+    }));
+
+    return NextResponse.json(transformedStaff);
   } catch (error: any) {
     console.error("Error fetching staff:", error);
     return NextResponse.json(
-      { error: "Failed to fetch staff data" },
+      { error: "Failed to fetch staff data", details: error.message },
       { status: 500 }
     );
   }
@@ -88,7 +235,7 @@ export async function POST(req: NextRequest) {
     if (data.email) {
       normalizedEmail = normalizeEmail(data.email);
       
-      // Check if email already exists (case-insensitive for MySQL)
+      // Check if email already exists
       const existingStaff = await findStaffByEmailCaseInsensitive(normalizedEmail);
 
       if (existingStaff) {
@@ -109,7 +256,7 @@ export async function POST(req: NextRequest) {
     const newStaff = await prisma.staff.create({
       data: {
         name: data.name,
-        email: normalizedEmail, // Store normalized email
+        email: normalizedEmail,
         phone: data.phone ? data.phone.trim() : null
       }
     });
@@ -142,7 +289,7 @@ export async function PUT(req: NextRequest) {
     if (data.email) {
       normalizedEmail = normalizeEmail(data.email);
       
-      // Check if another staff has this email (case-insensitive)
+      // Check if another staff has this email
       const existingStaff = await findStaffByEmailCaseInsensitive(normalizedEmail);
 
       if (existingStaff && existingStaff.id !== data.id) {
@@ -184,27 +331,63 @@ export async function PUT(req: NextRequest) {
 // DELETE staff (with cascade deletion of related records)
 export async function DELETE(req: NextRequest) {
   try {
-    const data = await req.json();
+    const { searchParams } = new URL(req.url);
+    const id = searchParams.get('id');
     
-    if (!data.id) {
+    if (!id) {
       return NextResponse.json(
         { error: "Staff ID is required" },
         { status: 400 }
       );
     }
 
-    // Check if staff exists first
+    const staffId = parseInt(id);
+    if (isNaN(staffId)) {
+      return NextResponse.json(
+        { error: "Invalid staff ID" },
+        { status: 400 }
+      );
+    }
+
+    // Check if staff exists
     const staff = await prisma.staff.findUnique({
-      where: { id: data.id },
+      where: { id: staffId },
       include: {
-        staffInventories: true,
-        sales: {
+        staffInventories: {
+          include: {
+            product: true,
+            saleItems: true
+          }
+        },
+        createdSales: {
           include: {
             saleitem: true,
             invoice: true,
             payment: true,
             paymentschedule: true,
             smsreminder: true,
+            cashledger: true,
+            auditLogs: true
+          }
+        },
+        assignedSales: {
+          include: {
+            saleitem: true,
+            invoice: true,
+            payment: true,
+            paymentschedule: true,
+            smsreminder: true,
+            cashledger: true,
+            auditLogs: true
+          }
+        },
+        createdExpenses: {
+          include: {
+            cashledger: true
+          }
+        },
+        updatedExpenses: {
+          include: {
             cashledger: true
           }
         }
@@ -221,13 +404,25 @@ export async function DELETE(req: NextRequest) {
     console.log(`🗑️ Starting cascade deletion for staff: ${staff.name} (ID: ${staff.id})`);
     console.log("=".repeat(60));
     
+    // Combine all sales from both relations
+    const allSales = [...(staff.createdSales || []), ...(staff.assignedSales || [])];
+    const uniqueSaleIds = [...new Set(allSales.map((sale: any) => sale.id))];
+    
     // Get counts for logging
-    const inventoryCount = staff.staffInventories.length;
-    const salesCount = staff.sales.length;
+    const inventoryCount = staff.staffInventories?.length || 0;
+    const salesCount = allSales.length;
+    const createdSalesCount = staff.createdSales?.length || 0;
+    const assignedSalesCount = staff.assignedSales?.length || 0;
+    const createdExpensesCount = staff.createdExpenses?.length || 0;
+    const updatedExpensesCount = staff.updatedExpenses?.length || 0;
     
     console.log(`📊 Related records found:`);
     console.log(`   📦 Staff Inventories: ${inventoryCount}`);
-    console.log(`   💰 Sales: ${salesCount}`);
+    console.log(`   💰 Created Sales: ${createdSalesCount}`);
+    console.log(`   📋 Assigned Sales: ${assignedSalesCount}`);
+    console.log(`   💸 Total Sales: ${salesCount}`);
+    console.log(`   📝 Created Expenses: ${createdExpensesCount}`);
+    console.log(`   ✏️ Updated Expenses: ${updatedExpensesCount}`);
     
     let totalSaleItems = 0;
     let totalInvoices = 0;
@@ -235,15 +430,17 @@ export async function DELETE(req: NextRequest) {
     let totalSchedules = 0;
     let totalSMS = 0;
     let totalLedgerEntries = 0;
+    let totalAuditLogs = 0;
     
-    // Count related sales items
-    staff.sales.forEach(sale => {
+    // Count related items from all sales
+    allSales.forEach((sale: any) => {
       totalSaleItems += sale.saleitem?.length || 0;
       totalInvoices += sale.invoice?.length || 0;
       totalPayments += sale.payment?.length || 0;
       totalSchedules += sale.paymentschedule?.length || 0;
       totalSMS += sale.smsreminder?.length || 0;
       totalLedgerEntries += sale.cashledger?.length || 0;
+      totalAuditLogs += sale.auditLogs?.length || 0;
     });
     
     console.log(`   📝 Sale Items: ${totalSaleItems}`);
@@ -252,6 +449,7 @@ export async function DELETE(req: NextRequest) {
     console.log(`   📅 Payment Schedules: ${totalSchedules}`);
     console.log(`   📱 SMS Reminders: ${totalSMS}`);
     console.log(`   📒 Ledger Entries: ${totalLedgerEntries}`);
+    console.log(`   📜 Audit Logs: ${totalAuditLogs}`);
     console.log("=".repeat(60));
 
     // Use a transaction to ensure all deletions succeed or none do
@@ -264,90 +462,140 @@ export async function DELETE(req: NextRequest) {
         paymentSchedules: 0,
         smsReminders: 0,
         ledgerEntries: 0,
+        auditLogs: 0,
         sales: 0,
+        createdExpenses: 0,
+        updatedExpenses: 0,
         staff: false
       };
 
-      // Get all sale IDs for this staff
-      const staffSaleIds = staff.sales.map(sale => sale.id);
-      
       // 1. Delete sale items that belong to staff's sales
-      if (staffSaleIds.length > 0) {
+      if (uniqueSaleIds.length > 0) {
         const saleItemDeletion = await tx.saleitem.deleteMany({
           where: {
-            saleId: { in: staffSaleIds }
+            saleId: { in: uniqueSaleIds }
           }
         });
         results.saleItems = saleItemDeletion.count;
         console.log(`✅ Deleted ${results.saleItems} sale items`);
       }
 
-      // 2. Delete invoices
-      const invoiceDeletion = await tx.invoice.deleteMany({
-        where: {
-          saleId: { in: staffSaleIds }
-        }
-      });
-      results.invoices = invoiceDeletion.count;
-      console.log(`✅ Deleted ${results.invoices} invoices`);
+      // 2. Delete audit logs
+      if (uniqueSaleIds.length > 0) {
+        const auditLogDeletion = await tx.saleauditlog.deleteMany({
+          where: {
+            saleId: { in: uniqueSaleIds }
+          }
+        });
+        results.auditLogs = auditLogDeletion.count;
+        console.log(`✅ Deleted ${results.auditLogs} audit logs`);
+      }
 
-      // 3. Delete payments
-      const paymentDeletion = await tx.payment.deleteMany({
-        where: {
-          saleId: { in: staffSaleIds }
-        }
-      });
-      results.payments = paymentDeletion.count;
-      console.log(`✅ Deleted ${results.payments} payments`);
+      // 3. Delete invoices
+      if (uniqueSaleIds.length > 0) {
+        const invoiceDeletion = await tx.invoice.deleteMany({
+          where: {
+            saleId: { in: uniqueSaleIds }
+          }
+        });
+        results.invoices = invoiceDeletion.count;
+        console.log(`✅ Deleted ${results.invoices} invoices`);
+      }
 
-      // 4. Delete payment schedules
-      const scheduleDeletion = await tx.paymentschedule.deleteMany({
-        where: {
-          saleId: { in: staffSaleIds }
-        }
-      });
-      results.paymentSchedules = scheduleDeletion.count;
-      console.log(`✅ Deleted ${results.paymentSchedules} payment schedules`);
+      // 4. Delete payments
+      if (uniqueSaleIds.length > 0) {
+        const paymentDeletion = await tx.payment.deleteMany({
+          where: {
+            saleId: { in: uniqueSaleIds }
+          }
+        });
+        results.payments = paymentDeletion.count;
+        console.log(`✅ Deleted ${results.payments} payments`);
+      }
 
-      // 5. Delete SMS reminders
-      const smsDeletion = await tx.smsreminder.deleteMany({
-        where: {
-          saleId: { in: staffSaleIds }
-        }
-      });
-      results.smsReminders = smsDeletion.count;
-      console.log(`✅ Deleted ${results.smsReminders} SMS reminders`);
+      // 5. Delete payment schedules
+      if (uniqueSaleIds.length > 0) {
+        const scheduleDeletion = await tx.paymentschedule.deleteMany({
+          where: {
+            saleId: { in: uniqueSaleIds }
+          }
+        });
+        results.paymentSchedules = scheduleDeletion.count;
+        console.log(`✅ Deleted ${results.paymentSchedules} payment schedules`);
+      }
 
-      // 6. Delete ledger entries related to these sales
-      const ledgerDeletion = await tx.cashledger.deleteMany({
-        where: {
-          saleId: { in: staffSaleIds }
-        }
-      });
-      results.ledgerEntries = ledgerDeletion.count;
-      console.log(`✅ Deleted ${results.ledgerEntries} ledger entries`);
+      // 6. Delete SMS reminders
+      if (uniqueSaleIds.length > 0) {
+        const smsDeletion = await tx.smsreminder.deleteMany({
+          where: {
+            saleId: { in: uniqueSaleIds }
+          }
+        });
+        results.smsReminders = smsDeletion.count;
+        console.log(`✅ Deleted ${results.smsReminders} SMS reminders`);
+      }
 
-      // 7. Now delete the sales themselves
-      const saleDeletion = await tx.sale.deleteMany({
-        where: {
-          id: { in: staffSaleIds }
-        }
-      });
-      results.sales = saleDeletion.count;
-      console.log(`✅ Deleted ${results.sales} sales`);
+      // 7. Delete ledger entries related to these sales
+      if (uniqueSaleIds.length > 0) {
+        const ledgerDeletion = await tx.cashledger.deleteMany({
+          where: {
+            saleId: { in: uniqueSaleIds }
+          }
+        });
+        results.ledgerEntries = ledgerDeletion.count;
+        console.log(`✅ Deleted ${results.ledgerEntries} ledger entries`);
+      }
 
-      // 8. Delete staff inventories (unlink from sale items first if needed)
+      // 8. Delete the sales themselves
+      if (uniqueSaleIds.length > 0) {
+        const saleDeletion = await tx.sale.deleteMany({
+          where: {
+            id: { in: uniqueSaleIds }
+          }
+        });
+        results.sales = saleDeletion.count;
+        console.log(`✅ Deleted ${results.sales} sales`);
+      }
+
+      // 9. Delete expenses created by this staff
+      if (staff.createdExpenses && staff.createdExpenses.length > 0) {
+        const expenseIds = staff.createdExpenses.map((e: any) => e.id);
+        const expenseDeletion = await tx.expense.deleteMany({
+          where: {
+            id: { in: expenseIds }
+          }
+        });
+        results.createdExpenses = expenseDeletion.count;
+        console.log(`✅ Deleted ${results.createdExpenses} expenses created by staff`);
+      }
+
+      // 10. Update expenses where staff is the updater (set to null)
+      if (staff.updatedExpenses && staff.updatedExpenses.length > 0) {
+        const updatedExpenseIds = staff.updatedExpenses.map((e: any) => e.id);
+        await tx.expense.updateMany({
+          where: {
+            id: { in: updatedExpenseIds }
+          },
+          data: {
+            updatedById: null
+          }
+        });
+        results.updatedExpenses = staff.updatedExpenses.length;
+        console.log(`✅ Updated ${results.updatedExpenses} expenses (removed staff as updater)`);
+      }
+
+      // 11. Delete staff inventories
       const inventoryDeletion = await tx.staffInventory.deleteMany({
         where: {
-          staffId: data.id
+          staffId: staffId
         }
       });
       results.staffInventory = inventoryDeletion.count;
       console.log(`✅ Deleted ${results.staffInventory} staff inventory items`);
 
-      // 9. Finally delete the staff member
+      // 12. Finally delete the staff member
       await tx.staff.delete({
-        where: { id: data.id }
+        where: { id: staffId }
       });
       results.staff = true;
       console.log(`✅ Deleted staff member: ${staff.name}`);
@@ -364,11 +612,14 @@ export async function DELETE(req: NextRequest) {
       deletionResults.paymentSchedules +
       deletionResults.smsReminders +
       deletionResults.ledgerEntries +
+      deletionResults.auditLogs +
+      deletionResults.createdExpenses +
+      deletionResults.updatedExpenses +
       1; // +1 for the staff member
 
     console.log("=".repeat(60));
     console.log(`🎉 COMPLETE: Deleted ${totalDeleted} total records for staff ${staff.name}`);
-    console.log(`🏁 Staff ${staff.name} (ID: ${staff.id}) has been completely removed from the system`);
+    console.log(`🏁 Staff ${staff.name} (ID: ${staff.id}) has been completely removed`);
     console.log("=".repeat(60));
 
     return NextResponse.json({ 
@@ -381,13 +632,18 @@ export async function DELETE(req: NextRequest) {
         breakdown: {
           staff: 1,
           staffInventory: deletionResults.staffInventory,
-          sales: deletionResults.sales,
+          createdSales: createdSalesCount,
+          assignedSales: assignedSalesCount,
+          totalSales: deletionResults.sales,
           saleItems: deletionResults.saleItems,
           invoices: deletionResults.invoices,
           payments: deletionResults.payments,
           paymentSchedules: deletionResults.paymentSchedules,
           smsReminders: deletionResults.smsReminders,
-          ledgerEntries: deletionResults.ledgerEntries
+          ledgerEntries: deletionResults.ledgerEntries,
+          auditLogs: deletionResults.auditLogs,
+          createdExpenses: deletionResults.createdExpenses,
+          updatedExpenses: deletionResults.updatedExpenses
         },
         timestamp: new Date().toISOString()
       }
@@ -440,7 +696,7 @@ export async function PATCH(req: NextRequest) {
     
     console.log(`👥 Found ${allStaff.length} staff with emails`);
     
-    const results = [];
+    const results: any[] = [];
     let updatedCount = 0;
     
     for (const staff of allStaff) {

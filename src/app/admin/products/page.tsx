@@ -1,14 +1,27 @@
 "use client";
 
+// ============================================================================
+// IMPORTS & DEPENDENCIES
+// ============================================================================
 import { useEffect, useState, useMemo, useRef } from "react";
-import { Search, Package, Edit2, Trash2, Plus, X, DollarSign, TrendingUp, Minus, AlertTriangle, Trash2 as TrashIcon, Loader, Eye, CheckCircle } from "lucide-react";
+import { 
+  Search, Package, Edit2, Trash2, Plus, X, DollarSign, 
+  TrendingUp, Minus, AlertTriangle, Trash2 as TrashIcon, 
+  Loader, Eye, CheckCircle 
+} from "lucide-react";
 import { auth } from "@/lib/firebase";
 
+// ============================================================================
+// TYPE DEFINITIONS & INTERFACES
+// ============================================================================
+
+/** Stock entry structure */
 interface Stock {
   quantity: number;
   costPrice: number;
 }
 
+/** Product data structure from API */
 interface Product {
   id: number;
   name: string;
@@ -16,10 +29,11 @@ interface Product {
   price: number;
   productionCost?: number;
   category?: string;
-  stock: Stock[];
-  stockQuantity?: number;
+  stock: Stock[];           // Array of stock entries (for weighted average)
+  stockQuantity?: number;   // Computed total stock quantity
 }
 
+/** Stock operation summary after restock */
 interface StockSummary {
   previousQuantity: number;
   restockedQuantity: number;
@@ -30,11 +44,21 @@ interface StockSummary {
   newWeightedCostPrice: number;
 }
 
+// ============================================================================
+// MAIN COMPONENT: ProductsPage
+// ============================================================================
 export default function ProductsPage() {
-  const [products, setProducts] = useState<Product[]>([]);
-  const [searchQuery, setSearchQuery] = useState("");
-  const [selectedCategory, setSelectedCategory] = useState("all");
-  const [form, setForm] = useState({
+  // ==========================================================================
+  // STATE MANAGEMENT
+  // ==========================================================================
+  
+  // --- Product Data State ---
+  const [products, setProducts] = useState<Product[]>([]);        // All products
+  const [searchQuery, setSearchQuery] = useState("");             // Search input
+  const [selectedCategory, setSelectedCategory] = useState("all"); // Category filter
+  
+  // --- Form State ---
+  const [form, setForm] = useState({                             // Product add/edit form
     name: "",
     description: "",
     productionCost: "",
@@ -42,6 +66,8 @@ export default function ProductsPage() {
     stock: "",
     category: "",
   });
+  
+  /** Stock operation state (add/remove stock from existing product) */
   const [stockOperation, setStockOperation] = useState({
     mode: 'add' as 'add' | 'remove',
     quantity: "",
@@ -51,31 +77,44 @@ export default function ProductsPage() {
     creditorEmail: "",
     reason: "",
   });
-  const [editingId, setEditingId] = useState<number | null>(null);
-  const [showForm, setShowForm] = useState(false);
-  const [loading, setLoading] = useState(true);
-  const [submitting, setSubmitting] = useState(false);
-  const [processingStock, setProcessingStock] = useState(false);
-  const [deleting, setDeleting] = useState<number | null>(null);
-  const [creditors, setCreditors] = useState<any[]>([]);
-  const [loadingCreditors, setLoadingCreditors] = useState(false);
   
-  // ========== SECRET RESET BUTTON STATE ==========
-  const [showSecretReset, setShowSecretReset] = useState(false);
-  const [clickCount, setClickCount] = useState(0);
-  const [clickTimer, setClickTimer] = useState<NodeJS.Timeout | null>(null);
-  const [resetLoading, setResetLoading] = useState(false);
-  const [resetConfirmText, setResetConfirmText] = useState("");
-  const [resetReason, setResetReason] = useState("");
-  const [resetError, setResetError] = useState<string | null>(null);
-  const [resetSuccess, setResetSuccess] = useState<string | null>(null);
-  const [previewData, setPreviewData] = useState<any>(null);
-  const [showPreview, setShowPreview] = useState(false);
-  const [currentUser, setCurrentUser] = useState<any>(null);
+  // --- UI State ---
+  const [editingId, setEditingId] = useState<number | null>(null); // Product being edited
+  const [showForm, setShowForm] = useState(false);                 // Form visibility
+  const [loading, setLoading] = useState(true);                    // Initial loading
+  const [submitting, setSubmitting] = useState(false);             // Form submission loading
+  const [processingStock, setProcessingStock] = useState(false);   // Stock operation loading
+  const [deleting, setDeleting] = useState<number | null>(null);   // Delete operation loading
+  
+  // --- Creditor Management State ---
+  const [creditors, setCreditors] = useState<any[]>([]);           // List of saved creditors
+  const [loadingCreditors, setLoadingCreditors] = useState(false); // Creditors loading state
+  
+  // ========== SECRET RESET BUTTON STATE (Hidden Admin Feature) ==========
+  const [showSecretReset, setShowSecretReset] = useState(false);    // Reset modal visibility
+  const [clickCount, setClickCount] = useState(0);                 // Triple-click counter
+  const [clickTimer, setClickTimer] = useState<NodeJS.Timeout | null>(null); // Click timer
+  const [resetLoading, setResetLoading] = useState(false);         // Reset operation loading
+  const [resetConfirmText, setResetConfirmText] = useState("");    // Confirmation text input
+  const [resetReason, setResetReason] = useState("");              // Reason for reset
+  const [resetError, setResetError] = useState<string | null>(null); // Reset error message
+  const [resetSuccess, setResetSuccess] = useState<string | null>(null); // Reset success message
+  const [previewData, setPreviewData] = useState<any>(null);       // Preview of what will be deleted
+  const [showPreview, setShowPreview] = useState(false);           // Preview modal visibility
+  
+  // --- Authentication State ---
+  const [currentUser, setCurrentUser] = useState<any>(null);       // Currently logged in user
 
-  const formRef = useRef<HTMLDivElement>(null);
+  // Refs
+  const formRef = useRef<HTMLDivElement>(null);                    // Reference for smooth scroll
 
-  // Get current user
+  // ==========================================================================
+  // AUTHENTICATION & INITIALIZATION
+  // ==========================================================================
+  
+  /**
+   * Get current authenticated user on component mount
+   */
   useEffect(() => {
     const unsubscribe = auth.onAuthStateChanged((user) => {
       if (user) {
@@ -89,13 +128,17 @@ export default function ProductsPage() {
     return () => unsubscribe();
   }, []);
 
-  // Fetch products and creditors on mount
+  /**
+   * Fetch products and creditors on component mount
+   */
   useEffect(() => {
     fetchProducts();
     fetchCreditors();
   }, []);
 
-  // Scroll to form when editing starts
+  /**
+   * Scroll to form when editing starts (mobile optimization)
+   */
   useEffect(() => {
     if (showForm && formRef.current) {
       formRef.current.scrollIntoView({ 
@@ -105,116 +148,33 @@ export default function ProductsPage() {
     }
   }, [showForm]);
 
-  // ========== SECRET TRIPLE-CLICK HANDLER ==========
-  const handleSecretTripleClick = () => {
-    setClickCount(prev => prev + 1);
-    
-    // Reset timer after 500ms of no clicks
-    if (clickTimer) clearTimeout(clickTimer);
-    
-    const timer = setTimeout(() => {
-      setClickCount(0);
-    }, 500);
-    setClickTimer(timer);
-    
-    // If triple-click detected (3 clicks in 500ms)
-    if (clickCount + 1 === 3) {
-      setShowSecretReset(true);
-      setClickCount(0);
-      // Auto-hide after 15 seconds
-      setTimeout(() => {
-        setShowSecretReset(false);
-        setResetConfirmText("");
-        setResetReason("");
-        setResetError(null);
-        setResetSuccess(null);
-      }, 15000);
-    }
-  };
-
-  // ========== INVENTORY RESET FUNCTIONS ==========
-  const fetchInventoryPreview = async () => {
-    setResetLoading(true);
-    setResetError(null);
-    
+  // ==========================================================================
+  // CRUD OPERATIONS
+  // ==========================================================================
+  
+  /**
+   * Fetch all products from API
+   * Computes stockQuantity by summing all stock entries
+   */
+  const fetchProducts = async () => {
     try {
-      const response = await fetch('/api/inventory/reset?preview=true');
-      const data = await response.json();
-      
-      if (response.ok) {
-        setPreviewData(data);
-        setShowPreview(true);
-      } else {
-        throw new Error(data.error || 'Failed to fetch preview');
-      }
-    } catch (err: any) {
-      setResetError(err.message || 'Failed to fetch inventory preview');
+      const res = await fetch("/api/products");
+      const data: Product[] = await res.json();
+      const normalized = data.map((p) => ({
+        ...p,
+        stockQuantity: p.stock?.reduce((sum, s) => sum + s.quantity, 0) || 0,
+      }));
+      setProducts(normalized);
+    } catch (err) {
+      console.error("Failed to fetch products:", err);
     } finally {
-      setResetLoading(false);
+      setLoading(false);
     }
   };
 
-  const handleInventoryReset = async () => {
-    if (resetConfirmText !== 'CONFIRM_DELETE_ALL_INVENTORY') {
-      setResetError('Please type CONFIRM_DELETE_ALL_INVENTORY to confirm');
-      return;
-    }
-
-    if (!resetReason.trim()) {
-      setResetError('Please provide a reason for resetting inventory');
-      return;
-    }
-
-    if (!currentUser) {
-      setResetError('Please log in to reset inventory');
-      return;
-    }
-
-    setResetLoading(true);
-    setResetError(null);
-    setResetSuccess(null);
-
-    try {
-      const ipResponse = await fetch('https://api.ipify.org?format=json');
-      const ipData = await ipResponse.json();
-      
-      const response = await fetch('/api/inventory/reset', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          confirm: resetConfirmText,
-          preserveSalesItems: true,
-          performedBy: currentUser.name,
-          performedByEmail: currentUser.email,
-          ipAddress: ipData.ip,
-          reason: resetReason
-        })
-      });
-
-      const data = await response.json();
-
-      if (response.ok) {
-        setResetSuccess(`Inventory reset completed! Deleted ${data.results.products} products, ${data.results.stock} stock records.`);
-        // Refresh products
-        await fetchProducts();
-        // Close after 2 seconds
-        setTimeout(() => {
-          setShowSecretReset(false);
-          setResetConfirmText("");
-          setResetReason("");
-          setResetSuccess(null);
-          setShowPreview(false);
-        }, 2000);
-      } else {
-        throw new Error(data.error || 'Failed to reset inventory');
-      }
-    } catch (err: any) {
-      setResetError(err.message || 'Failed to reset inventory');
-    } finally {
-      setResetLoading(false);
-    }
-  };
-
+  /**
+   * Fetch all creditors for credit purchase selection
+   */
   const fetchCreditors = async () => {
     setLoadingCreditors(true);
     try {
@@ -233,59 +193,15 @@ export default function ProductsPage() {
     }
   };
 
-  const fetchProducts = async () => {
-    try {
-      const res = await fetch("/api/products");
-      const data: Product[] = await res.json();
-      const normalized = data.map((p) => ({
-        ...p,
-        stockQuantity: p.stock?.reduce((sum, s) => sum + s.quantity, 0) || 0,
-      }));
-      setProducts(normalized);
-    } catch (err) {
-      console.error("Failed to fetch products:", err);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // Get unique categories
-  const categories = useMemo(() => {
-    const cats = new Set(products.map((p) => p.category).filter(Boolean));
-    return Array.from(cats);
-  }, [products]);
-
-  // Filter products based on search and category
-  const filteredProducts = useMemo(() => {
-    return products.filter((p) => {
-      if (!p.name) return false;
-      
-      const matchesSearch =
-        p.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        p.description?.toLowerCase().includes(searchQuery.toLowerCase());
-      const matchesCategory =
-        selectedCategory === "all" || p.category === selectedCategory;
-      return matchesSearch && matchesCategory;
-    });
-  }, [products, searchQuery, selectedCategory]);
-
-  // Calculate total cost based on quantity and production cost
-  const calculateTotalCost = useMemo(() => {
-    if (!editingId || !stockOperation.quantity) return 0;
-    
-    const currentProduct = products.find(p => p.id === editingId);
-    const productionCost = currentProduct?.productionCost || 0;
-    const quantity = parseInt(stockOperation.quantity);
-    
-    if (isNaN(quantity) || quantity <= 0 || productionCost <= 0) return 0;
-    
-    return quantity * productionCost;
-  }, [editingId, stockOperation.quantity, products]);
-
-  // Add or update product
+  /**
+   * Add or update a product
+   * For new products: includes initial stock
+   * For updates: preserves existing stock
+   */
   const handleSubmit = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
 
+    // Validation
     if (!form.name.trim()) {
       return alert("Product name is required");
     }
@@ -296,6 +212,7 @@ export default function ProductsPage() {
 
     setSubmitting(true);
 
+    // Build payload
     const payload: any = {
       name: form.name.trim(),
       description: form.description.trim() || undefined,
@@ -304,6 +221,7 @@ export default function ProductsPage() {
       category: form.category.trim() || undefined,
     };
 
+    // Add stock only for new products
     if (!editingId) {
       payload.stockQuantity = form.stock ? parseInt(form.stock) : 0;
     } else {
@@ -327,6 +245,7 @@ export default function ProductsPage() {
       const savedProduct: Product = await res.json();
       savedProduct.stockQuantity = savedProduct.stock?.reduce((sum, s) => sum + s.quantity, 0) || 0;
 
+      // Update local state
       if (editingId) {
         setProducts((prev) =>
           prev.map((p) => (p.id === editingId ? savedProduct : p))
@@ -345,7 +264,11 @@ export default function ProductsPage() {
     }
   };
 
-  // Handle stock operation (add or remove)
+  /**
+   * Handle stock operation (add or remove stock)
+   * - ADD: Uses weighted average cost calculation, supports cash/credit payment
+   * - REMOVE: Simply reduces stock with optional reason
+   */
   const handleStockOperation = async () => {
     if (!editingId) return;
 
@@ -354,6 +277,7 @@ export default function ProductsPage() {
     const currentStock = currentProduct?.stockQuantity || 0;
     const productionCost = currentProduct?.productionCost || 0;
 
+    // Validation
     if (isNaN(quantity) || quantity <= 0) {
       return alert("Please enter a valid quantity");
     }
@@ -370,6 +294,7 @@ export default function ProductsPage() {
 
     try {
       if (stockOperation.mode === 'add') {
+        // ========== ADD STOCK (RESTOCK) ==========
         const totalCost = calculateTotalCost;
 
         if (totalCost <= 0) {
@@ -380,6 +305,7 @@ export default function ProductsPage() {
           return alert("Please select a payment source");
         }
 
+        // Credit purchase validation
         if (stockOperation.paymentSource === "credit") {
           if (!stockOperation.creditorName.trim()) {
             return alert("Please enter the creditor name");
@@ -389,6 +315,7 @@ export default function ProductsPage() {
           }
         }
 
+        // API call to restock
         const res = await fetch("/api/restock", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -415,20 +342,24 @@ export default function ProductsPage() {
           stockQuantity: updatedProduct.stock?.reduce((sum: number, s: Stock) => sum + s.quantity, 0) || 0,
         };
 
+        // Update local state
         setProducts((prev) =>
           prev.map((p) => p.id === editingId ? normalizedProduct : p)
         );
 
+        // Refresh creditors list if credit purchase
         if (stockOperation.paymentSource === "credit") {
           await fetchCreditors();
         }
 
+        // Show success message with detailed summary
         const successMessage = stockOperation.paymentSource === "cash"
           ? `✅ Stock Added Successfully!\n\nPrevious Stock: ${stockSummary.previousQuantity} units\nAdded: ${stockSummary.restockedQuantity} units\nNew Total: ${stockSummary.newTotalQuantity} units\n\nCash deducted: KSh ${totalCost.toFixed(2)}\nNew Weighted Cost Price: KSh ${stockSummary.newWeightedCostPrice.toFixed(2)}/unit`
           : `✅ Stock Added Successfully!\n\nPrevious Stock: ${stockSummary.previousQuantity} units\nAdded: ${stockSummary.restockedQuantity} units\nNew Total: ${stockSummary.newTotalQuantity} units\n\nAdded to ${stockOperation.creditorName}'s balance: KSh ${totalCost.toFixed(2)}\nNew Weighted Cost Price: KSh ${stockSummary.newWeightedCostPrice.toFixed(2)}/unit`;
 
         alert(successMessage);
       } else {
+        // ========== REMOVE STOCK ==========
         const res = await fetch("/api/restock", {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
@@ -457,6 +388,7 @@ export default function ProductsPage() {
         alert(`✅ Successfully removed ${quantity} units from ${currentProduct?.name}\nReason: ${stockOperation.reason || "Stock adjustment"}`);
       }
 
+      // Reset form and refresh data
       resetFormAndClose();
       await fetchProducts();
     } catch (error) {
@@ -467,6 +399,9 @@ export default function ProductsPage() {
     }
   };
 
+  /**
+   * Reset form and close modal/panel
+   */
   const resetFormAndClose = () => {
     setForm({
       name: "",
@@ -489,6 +424,9 @@ export default function ProductsPage() {
     setShowForm(false);
   };
 
+  /**
+   * Edit product - populate form with existing data
+   */
   const handleEdit = (product: Product) => {
     setForm({
       name: product.name,
@@ -511,6 +449,9 @@ export default function ProductsPage() {
     setShowForm(true);
   };
 
+  /**
+   * Delete a product
+   */
   const handleDelete = async (id: number) => {
     if (!confirm("Are you sure you want to delete this product?")) return;
 
@@ -538,6 +479,14 @@ export default function ProductsPage() {
     }
   };
 
+  // ==========================================================================
+  // CONTACT IMPORT FUNCTIONALITY
+  // ==========================================================================
+  
+  /**
+   * Import contact from device contacts (mobile) or clipboard
+   * Uses Browser Contact Picker API
+   */
   const importContact = async () => {
     try {
       if (!("contacts" in navigator && "ContactsManager" in window)) {
@@ -566,6 +515,188 @@ export default function ProductsPage() {
     }
   };
 
+  // ==========================================================================
+  // SECRET INVENTORY RESET FUNCTIONS (Hidden Admin Feature)
+  // ==========================================================================
+  
+  /**
+   * Triple-click detection on header to reveal secret reset button
+   */
+  const handleSecretTripleClick = () => {
+    setClickCount(prev => prev + 1);
+    
+    // Reset timer after 500ms of no clicks
+    if (clickTimer) clearTimeout(clickTimer);
+    
+    const timer = setTimeout(() => {
+      setClickCount(0);
+    }, 500);
+    setClickTimer(timer);
+    
+    // If triple-click detected (3 clicks in 500ms)
+    if (clickCount + 1 === 3) {
+      setShowSecretReset(true);
+      setClickCount(0);
+      // Auto-hide after 15 seconds
+      setTimeout(() => {
+        setShowSecretReset(false);
+        setResetConfirmText("");
+        setResetReason("");
+        setResetError(null);
+        setResetSuccess(null);
+      }, 15000);
+    }
+  };
+
+  /**
+   * Fetch preview of what will be deleted during inventory reset
+   */
+  const fetchInventoryPreview = async () => {
+    setResetLoading(true);
+    setResetError(null);
+    
+    try {
+      const response = await fetch('/api/inventory/reset?preview=true');
+      const data = await response.json();
+      
+      if (response.ok) {
+        setPreviewData(data);
+        setShowPreview(true);
+      } else {
+        throw new Error(data.error || 'Failed to fetch preview');
+      }
+    } catch (err: any) {
+      setResetError(err.message || 'Failed to fetch inventory preview');
+    } finally {
+      setResetLoading(false);
+    }
+  };
+
+  /**
+   * Execute inventory reset (DEletes all products and stock)
+   * Preserves sales and customer data
+   */
+  const handleInventoryReset = async () => {
+    // Confirmation validation
+    if (resetConfirmText !== 'CONFIRM_DELETE_ALL_INVENTORY') {
+      setResetError('Please type CONFIRM_DELETE_ALL_INVENTORY to confirm');
+      return;
+    }
+
+    if (!resetReason.trim()) {
+      setResetError('Please provide a reason for resetting inventory');
+      return;
+    }
+
+    if (!currentUser) {
+      setResetError('Please log in to reset inventory');
+      return;
+    }
+
+    setResetLoading(true);
+    setResetError(null);
+    setResetSuccess(null);
+
+    try {
+      // Get IP address for audit log
+      const ipResponse = await fetch('https://api.ipify.org?format=json');
+      const ipData = await ipResponse.json();
+      
+      // API call to reset inventory
+      const response = await fetch('/api/inventory/reset', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          confirm: resetConfirmText,
+          preserveSalesItems: true,
+          performedBy: currentUser.name,
+          performedByEmail: currentUser.email,
+          ipAddress: ipData.ip,
+          reason: resetReason
+        })
+      });
+
+      const data = await response.json();
+
+      if (response.ok) {
+        setResetSuccess(`Inventory reset completed! Deleted ${data.results.products} products, ${data.results.stock} stock records.`);
+        // Refresh products list
+        await fetchProducts();
+        // Close modal after 2 seconds
+        setTimeout(() => {
+          setShowSecretReset(false);
+          setResetConfirmText("");
+          setResetReason("");
+          setResetSuccess(null);
+          setShowPreview(false);
+        }, 2000);
+      } else {
+        throw new Error(data.error || 'Failed to reset inventory');
+      }
+    } catch (err: any) {
+      setResetError(err.message || 'Failed to reset inventory');
+    } finally {
+      setResetLoading(false);
+    }
+  };
+
+  // ==========================================================================
+  // COMPUTED VALUES & UTILITIES
+  // ==========================================================================
+  
+  /**
+   * Get unique categories from all products for filter dropdown
+   */
+  const categories = useMemo(() => {
+    const cats = new Set(products.map((p) => p.category).filter(Boolean));
+    return Array.from(cats);
+  }, [products]);
+
+  /**
+   * Filter products based on search query and selected category
+   */
+  const filteredProducts = useMemo(() => {
+    return products.filter((p) => {
+      if (!p.name) return false;
+      
+      const matchesSearch =
+        p.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        p.description?.toLowerCase().includes(searchQuery.toLowerCase());
+      const matchesCategory =
+        selectedCategory === "all" || p.category === selectedCategory;
+      return matchesSearch && matchesCategory;
+    });
+  }, [products, searchQuery, selectedCategory]);
+
+  /**
+   * Calculate total cost of restock operation
+   * Formula: Quantity × Production Cost
+   */
+  const calculateTotalCost = useMemo(() => {
+    if (!editingId || !stockOperation.quantity) return 0;
+    
+    const currentProduct = products.find(p => p.id === editingId);
+    const productionCost = currentProduct?.productionCost || 0;
+    const quantity = parseInt(stockOperation.quantity);
+    
+    if (isNaN(quantity) || quantity <= 0 || productionCost <= 0) return 0;
+    
+    return quantity * productionCost;
+  }, [editingId, stockOperation.quantity, products]);
+
+  // Current product being edited (for stock management)
+  const currentProduct = editingId ? products.find(p => p.id === editingId) : null;
+  const currentStock = currentProduct?.stockQuantity || 0;
+  const productionCost = currentProduct?.productionCost || 0;
+
+  /**
+   * Format number with thousand separators
+   */
+  const formatNumber = (num: number) => {
+    return new Intl.NumberFormat().format(num);
+  };
+
+  // Loading state
   if (loading) {
     return (
       <div className="flex items-center justify-center h-screen">
@@ -574,22 +705,20 @@ export default function ProductsPage() {
     );
   }
 
-  const currentProduct = editingId ? products.find(p => p.id === editingId) : null;
-  const currentStock = currentProduct?.stockQuantity || 0;
-  const productionCost = currentProduct?.productionCost || 0;
-
-  const formatNumber = (num: number) => {
-    return new Intl.NumberFormat().format(num);
-  };
-
+  // ==========================================================================
+  // RENDER - UI COMPONENT
+  // ==========================================================================
   return (
     <div className="min-h-screen bg-gray-50 p-6">
       <div className="max-w-7xl mx-auto">
-        {/* Header with SECRET TRIPLE-CLICK AREA */}
+        {/* ====================================================================
+          SECTION 1: HEADER WITH SECRET TRIPLE-CLICK AREA
+          Triple-click on the header to reveal inventory reset button (admin only)
+        ===================================================================== */}
         <div 
           className="flex justify-between items-center mb-6 cursor-pointer"
           onClick={handleSecretTripleClick}
-          title="Products Management"
+          title="Products Management (Triple-click for admin tools)"
         >
           <h1 className="text-3xl font-bold text-black flex items-center gap-2 select-none">
             <Package className="w-8 h-8" />
@@ -609,14 +738,15 @@ export default function ProductsPage() {
           </button>
         </div>
 
-        {/* ========== SECRET INVENTORY RESET BUTTON ========== */}
-        {/* 
+        {/* ====================================================================
+          SECTION 2: SECRET INVENTORY RESET BUTTON (Admin Emergency Tool)
           🔐 SECRET ACCESS: Triple-click on the "Products Management" header above!
-          The button will appear here in the top-right corner.
-        */}
+          This allows administrators to reset all inventory in case of data corruption
+        ===================================================================== */}
         {showSecretReset && (
           <div className="fixed top-20 right-6 z-50">
             <div className="bg-white rounded-lg shadow-2xl border-2 border-red-500 p-4 w-96 animate-in slide-in-from-top duration-300">
+              {/* Modal Header */}
               <div className="flex justify-between items-start mb-3">
                 <div className="flex items-center gap-2">
                   <div className="bg-red-100 p-1 rounded-full">
@@ -640,6 +770,7 @@ export default function ProductsPage() {
               </div>
 
               {resetSuccess ? (
+                // Success State
                 <div className="bg-green-50 border border-green-200 rounded-lg p-3 mb-3">
                   <div className="flex items-center gap-2">
                     <CheckCircle className="text-green-600" size={16} />
@@ -648,8 +779,10 @@ export default function ProductsPage() {
                 </div>
               ) : (
                 <>
+                  {/* Warning Message */}
                   <p className="text-sm text-gray-600 mb-3">
-                    This will permanently delete ALL products, stock records, and inventory data. Sales and customer data will be preserved.
+                    This will permanently delete ALL products, stock records, and inventory data. 
+                    Sales and customer data will be preserved.
                   </p>
 
                   {/* Preview Button */}
@@ -763,9 +896,12 @@ export default function ProductsPage() {
           </div>
         )}
 
-        {/* Search and Filter */}
+        {/* ====================================================================
+          SECTION 3: SEARCH AND FILTER BAR
+        ===================================================================== */}
         <div className="bg-white rounded-lg shadow-sm p-4 mb-6">
           <div className="flex flex-col md:flex-row gap-4">
+            {/* Search Input */}
             <div className="flex-1 relative">
               <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-5 h-5" />
               <input
@@ -776,6 +912,8 @@ export default function ProductsPage() {
                 className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
               />
             </div>
+            
+            {/* Category Filter */}
             <select
               value={selectedCategory}
               onChange={(e) => setSelectedCategory(e.target.value)}
@@ -789,18 +927,24 @@ export default function ProductsPage() {
               ))}
             </select>
           </div>
+          
+          {/* Results Count */}
           <div className="mt-2 text-sm text-gray-600">
             Showing {filteredProducts.length} of {products.length} products
           </div>
         </div>
 
-        {/* Add/Edit Form */}
+        {/* ====================================================================
+          SECTION 4: ADD/EDIT PRODUCT FORM
+        ===================================================================== */}
         {showForm && (
           <div ref={formRef} className="bg-white rounded-lg shadow-sm p-6 mb-6">
             <h2 className="text-xl font-semibold mb-4 text-black">
               {editingId ? `Edit Product: ${currentProduct?.name}` : "Add New Product"}
             </h2>
+            
             <div className="grid md:grid-cols-2 gap-4">
+              {/* Product Name */}
               <input
                 placeholder="Product Name *"
                 required
@@ -808,18 +952,24 @@ export default function ProductsPage() {
                 value={form.name}
                 onChange={(e) => setForm({ ...form, name: e.target.value })}
               />
+              
+              {/* Category */}
               <input
                 placeholder="Category"
                 className="border border-gray-300 p-3 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-black"
                 value={form.category}
                 onChange={(e) => setForm({ ...form, category: e.target.value })}
               />
+              
+              {/* Description (full width) */}
               <input
                 placeholder="Description"
                 className="border border-gray-300 p-3 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent md:col-span-2 text-black"
                 value={form.description}
                 onChange={(e) => setForm({ ...form, description: e.target.value })}
               />
+              
+              {/* Production Cost */}
               <input
                 placeholder="Production Cost *"
                 type="number"
@@ -829,6 +979,7 @@ export default function ProductsPage() {
                 value={form.productionCost}
                 onChange={(e) => {
                   setForm({ ...form, productionCost: e.target.value });
+                  // Update local product state when editing
                   if (editingId) {
                     const currentProduct = products.find(p => p.id === editingId);
                     if (currentProduct) {
@@ -843,6 +994,8 @@ export default function ProductsPage() {
                   }
                 }}
               />
+              
+              {/* Selling Price */}
               <input
                 placeholder="Selling Price *"
                 type="number"
@@ -853,6 +1006,7 @@ export default function ProductsPage() {
                 onChange={(e) => setForm({ ...form, price: e.target.value })}
               />
               
+              {/* Initial Stock (only for new products) */}
               {!editingId && (
                 <div className="md:col-span-2">
                   <label className="block text-sm font-medium text-gray-700 mb-2">
@@ -869,11 +1023,15 @@ export default function ProductsPage() {
                 </div>
               )}
 
+              {/* ==============================================================
+                STOCK MANAGEMENT SECTION (Only for existing products)
+              ============================================================== */}
               {editingId && (
                 <div className="md:col-span-2">
                   <div className="border-t pt-4 mt-4">
                     <h3 className="text-lg font-semibold mb-4 text-black">Stock Management</h3>
                     
+                    {/* Current Stock Summary Cards */}
                     <div className="mb-4 p-4 bg-gray-50 rounded-lg">
                       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                         <div>
@@ -899,6 +1057,7 @@ export default function ProductsPage() {
                       </div>
                     </div>
 
+                    {/* Mode Toggle Buttons */}
                     <div className="flex gap-2 mb-4">
                       <button
                         type="button"
@@ -926,7 +1085,9 @@ export default function ProductsPage() {
                       </button>
                     </div>
 
+                    {/* Stock Operation Form */}
                     <div className="space-y-4">
+                      {/* Quantity Input */}
                       <div>
                         <label className="block text-sm font-medium text-gray-700 mb-1">
                           Quantity to {stockOperation.mode === 'add' ? 'Add' : 'Remove'} *
@@ -942,8 +1103,10 @@ export default function ProductsPage() {
                         />
                       </div>
 
+                      {/* ADD STOCK SPECIFIC FIELDS */}
                       {stockOperation.mode === 'add' && (
                         <>
+                          {/* Total Cost Display */}
                           <div className="p-4 bg-blue-50 rounded-lg border border-blue-200">
                             <div className="flex justify-between items-center">
                               <div>
@@ -963,6 +1126,7 @@ export default function ProductsPage() {
                             </div>
                           </div>
 
+                          {/* Payment Source Selection */}
                           <div>
                             <label className="block text-sm font-medium text-gray-700 mb-1">
                               Payment Source *
@@ -983,6 +1147,7 @@ export default function ProductsPage() {
                               <option value="other">Other</option>
                             </select>
 
+                            {/* Credit Purchase Fields */}
                             {stockOperation.paymentSource === "credit" && (
                               <div className="mt-4 space-y-4 p-4 bg-blue-50 rounded-lg">
                                 <div className="flex items-center justify-between mb-2">
@@ -996,6 +1161,7 @@ export default function ProductsPage() {
                                   </button>
                                 </div>
 
+                                {/* Existing Creditors Dropdown */}
                                 {Array.isArray(creditors) && creditors.length > 0 && (
                                   <div>
                                     <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -1032,6 +1198,7 @@ export default function ProductsPage() {
                                   </div>
                                 )}
 
+                                {/* Creditor Name */}
                                 <div>
                                   <label className="block text-sm font-medium text-gray-700 mb-1">
                                     Creditor Name *
@@ -1046,6 +1213,7 @@ export default function ProductsPage() {
                                   />
                                 </div>
 
+                                {/* Creditor Phone */}
                                 <div>
                                   <label className="block text-sm font-medium text-gray-700 mb-1">
                                     Phone Number *
@@ -1060,6 +1228,7 @@ export default function ProductsPage() {
                                   />
                                 </div>
 
+                                {/* Creditor Email (Optional) */}
                                 <div>
                                   <label className="block text-sm font-medium text-gray-700 mb-1">
                                     Email (optional)
@@ -1078,6 +1247,7 @@ export default function ProductsPage() {
                         </>
                       )}
 
+                      {/* REMOVE STOCK SPECIFIC FIELDS */}
                       {stockOperation.mode === 'remove' && (
                         <div>
                           <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -1093,16 +1263,20 @@ export default function ProductsPage() {
                         </div>
                       )}
 
+                      {/* Stock Change Preview */}
                       {stockOperation.quantity && (
                         <div className={`p-3 rounded-lg border ${
                           stockOperation.mode === 'add' ? 'bg-green-50 border-green-200' : 'bg-red-50 border-red-200'
                         }`}>
                           <div className="grid grid-cols-3 gap-4 text-sm">
+                            {/* Current Stock */}
                             <div>
                               <p className="text-gray-600 font-medium">Current Stock</p>
                               <p className="text-2xl font-bold text-gray-800">{currentStock}</p>
                               <p className="text-xs text-gray-500">units</p>
                             </div>
+                            
+                            {/* Operation */}
                             <div className="flex items-center justify-center">
                               <div className={stockOperation.mode === 'add' ? 'text-green-600' : 'text-red-600'}>
                                 {stockOperation.mode === 'add' ? <Plus className="w-6 h-6" /> : <Minus className="w-6 h-6" />}
@@ -1115,6 +1289,8 @@ export default function ProductsPage() {
                                 <p className="text-xs text-gray-500">units</p>
                               </div>
                             </div>
+                            
+                            {/* New Total */}
                             <div className={`bg-white rounded-lg p-2 border-2 ${
                               stockOperation.mode === 'add' ? 'border-green-500' : 'border-red-500'
                             }`}>
@@ -1131,6 +1307,7 @@ export default function ProductsPage() {
                         </div>
                       )}
 
+                      {/* Submit Stock Operation Button */}
                       <button
                         type="button"
                         onClick={handleStockOperation}
@@ -1156,6 +1333,7 @@ export default function ProductsPage() {
                 </div>
               )}
 
+              {/* Submit Product Form Button */}
               <button
                 onClick={handleSubmit}
                 disabled={submitting}
@@ -1167,8 +1345,11 @@ export default function ProductsPage() {
           </div>
         )}
 
-        {/* Products Grid */}
+        {/* ====================================================================
+          SECTION 5: PRODUCTS GRID / LIST
+        ===================================================================== */}
         {filteredProducts.length === 0 ? (
+          // Empty State
           <div className="bg-white rounded-lg shadow-sm p-12 text-center">
             <Package className="w-16 h-16 text-gray-300 mx-auto mb-4" />
             <p className="text-gray-500 text-lg">
@@ -1178,8 +1359,10 @@ export default function ProductsPage() {
             </p>
           </div>
         ) : (
+          // Products List
           <div className="grid gap-4">
             {filteredProducts.map((p) => {
+              // Calculate profit metrics
               const profit = p.productionCost ? p.price - p.productionCost : null;
               const profitMargin = profit && p.price ? ((profit / p.price) * 100).toFixed(1) : null;
               const isLowStock = (p.stockQuantity || 0) < 10;
@@ -1188,6 +1371,7 @@ export default function ProductsPage() {
               return (
                 <div key={p.id} className="bg-white rounded-lg shadow-sm p-5 hover:shadow-md transition">
                   <div className="flex justify-between items-start">
+                    {/* Product Info */}
                     <div className="flex-1">
                       <div className="flex items-start justify-between mb-2">
                         <div>
@@ -1199,28 +1383,38 @@ export default function ProductsPage() {
                           )}
                         </div>
                       </div>
+                      
+                      {/* Product Description */}
                       {p.description && <p className="text-gray-600 mb-3">{p.description}</p>}
+                      
+                      {/* Product Stats Grid */}
                       <div className="grid grid-cols-2 md:grid-cols-5 gap-3 text-sm">
                         <div>
                           <span className="text-gray-500">Production Cost:</span>
                           <p className="font-semibold text-black">KSh {p.productionCost?.toFixed(2) || "N/A"}</p>
                         </div>
+                        
                         {avgCostPrice && (
                           <div>
                             <span className="text-gray-500">Avg. Cost Price:</span>
                             <p className="font-semibold text-purple-600">KSh {avgCostPrice.toFixed(2)}</p>
                           </div>
                         )}
+                        
                         <div>
                           <span className="text-gray-500">Selling Price:</span>
                           <p className="font-semibold text-black">KSh {p.price.toFixed(2)}</p>
                         </div>
+                        
                         {profit !== null && (
                           <div>
                             <span className="text-gray-500">Profit/Unit:</span>
-                            <p className="font-semibold text-green-600">KSh {profit.toFixed(2)} ({profitMargin}%)</p>
+                            <p className="font-semibold text-green-600">
+                              KSh {profit.toFixed(2)} ({profitMargin}%)
+                            </p>
                           </div>
                         )}
+                        
                         <div>
                           <span className="text-gray-500">Stock:</span>
                           <p className={`font-semibold ${isLowStock ? "text-red-600" : "text-black"}`}>
@@ -1229,6 +1423,8 @@ export default function ProductsPage() {
                         </div>
                       </div>
                     </div>
+                    
+                    {/* Action Buttons */}
                     <div className="flex gap-2 ml-4">
                       <button
                         onClick={() => handleEdit(p)}

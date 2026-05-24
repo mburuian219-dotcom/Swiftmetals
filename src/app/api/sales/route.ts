@@ -1,9 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 
-// ================== Helper Functions ==================
+// ================== Type Definitions ==================
+interface StaffRecord {
+  id: number;
+  name: string;
+  email: string | null;
+  phone: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
 
-// Define interfaces
 interface AvailabilityCheckResult {
   productId: number;
   productName: string;
@@ -54,7 +61,7 @@ function isFirebaseUid(str: string): boolean {
 }
 
 // Find staff by email (case-insensitive)
-async function findStaffByEmailCaseInsensitive(email: string) {
+async function findStaffByEmailCaseInsensitive(email: string): Promise<StaffRecord | null> {
   if (!email || !isValidEmail(email)) return null;
   
   const normalizedEmail = normalizeEmail(email);
@@ -77,10 +84,10 @@ async function findStaffByEmailCaseInsensitive(email: string) {
     ) || null;
   }
 
-  return staff;
+  return staff as StaffRecord | null;
 }
 
-async function findOrCreateStaff(userEmail: string, userName?: string) {
+async function findOrCreateStaff(userEmail: string, userName?: string): Promise<StaffRecord | null> {
   if (!userEmail || !isValidEmail(userEmail)) {
     console.log(`⚠️ Invalid email provided for staff lookup: ${userEmail}`);
     return null;
@@ -97,13 +104,14 @@ async function findOrCreateStaff(userEmail: string, userName?: string) {
           .replace(/[._-]/g, ' ')
           .replace(/\b\w/g, (l: string) => l.toUpperCase());
       
-      staff = await prisma.staff.create({
+      const newStaff = await prisma.staff.create({
         data: {
           name,
           email: normalizedEmail,
           phone: null
         }
       });
+      staff = newStaff as StaffRecord;
       console.log(`👤 Created new staff record: ${staff.name} (${staff.email}) ID: ${staff.id}`);
     } else {
       console.log(`👤 Found existing staff: ${staff.name} (${staff.email}) ID: ${staff.id}`);
@@ -137,7 +145,7 @@ function getCurrentWeekRange() {
 
 // ================== CORRECTED AVAILABILITY CHECK ==================
 
-// Check product availability with CORRECT unassigned calculation
+// Check product availability for staff
 async function checkProductAvailabilityForStaff(
   productId: number, 
   currentStaffId: number, 
@@ -189,31 +197,29 @@ async function checkProductAvailabilityForStaff(
       }
     });
     
-    // CORRECTED: Calculate REMAINING assigned stock (original - sold - returned)
+    // Calculate REMAINING assigned stock (original - sold - returned)
     let totalRemainingAssigned = 0;
     for (const assignment of allStaffAssignments) {
       const remaining = assignment.quantityGiven - 
                        assignment.quantitySold - 
                        assignment.quantityReturned;
-      totalRemainingAssigned += Math.max(0, remaining); // Don't go negative
+      totalRemainingAssigned += Math.max(0, remaining);
     }
     
-    // CORRECTED: Unassigned = Total - Remaining Assigned
+    // Unassigned = Total - Remaining Assigned
     const unassignedStock = Math.max(0, totalMainStock - totalRemainingAssigned);
     
-    console.log(`📊 CORRECTED Availability check for ${productName}:`, {
+    console.log(`📊 Availability check for ${productName}:`, {
       productId,
       staffId: currentStaffId,
       totalMainStock,
-      totalAssignments: allStaffAssignments.length,
       totalRemainingAssigned,
       unassignedStock,
       requestedQuantity
     });
     
-    // ========== RULE 1: STAFF HAS ASSIGNMENT ==========
+    // RULE 1: STAFF HAS ASSIGNMENT
     if (currentStaffAssignment) {
-      // This staff can ONLY sell from their REMAINING assigned quantity
       const staffAvailable = Math.max(0,
         currentStaffAssignment.quantityGiven - 
         currentStaffAssignment.quantitySold - 
@@ -242,9 +248,8 @@ async function checkProductAvailabilityForStaff(
         };
       }
     }
-    // ========== RULE 2: STAFF HAS NO ASSIGNMENT ==========
+    // RULE 2: STAFF HAS NO ASSIGNMENT
     else {
-      // This staff can ONLY sell from unassigned stock
       if (unassignedStock >= requestedQuantity) {
         return {
           productId,
@@ -327,9 +332,8 @@ async function validateProductsForStaffSale(
   };
 }
 
-// ================== CORRECTED INVENTORY PROCESSING ==================
+// ================== INVENTORY PROCESSING ==================
 
-// Process inventory with CORRECT unassigned calculation
 async function processInventoryForStaffSale(
   saleId: number, 
   staffId: number, 
@@ -344,7 +348,6 @@ async function processInventoryForStaffSale(
     const mainStockResults: MainStockDeductionResult[] = [];
     
     for (const item of items) {
-      // Get product name
       const product = await prisma.product.findUnique({
         where: { id: item.productId },
         select: { name: true }
@@ -353,7 +356,6 @@ async function processInventoryForStaffSale(
       const productName = product?.name || `Product ${item.productId}`;
       console.log(`🛍️ Processing: ${productName}, Quantity: ${item.quantity}`);
       
-      // Find staff assignment
       const staffAssignment = await prisma.staffInventory.findFirst({
         where: {
           staffId: staffId,
@@ -367,7 +369,6 @@ async function processInventoryForStaffSale(
         }
       });
       
-      // Check main stock
       const mainStockItem = await prisma.stock.findFirst({
         where: { productId: item.productId },
         orderBy: { createdAt: "desc" },
@@ -390,9 +391,7 @@ async function processInventoryForStaffSale(
         message: ''
       };
       
-      // ========== PROCESS BASED ON ASSIGNMENT ==========
       if (staffAssignment) {
-        // Staff has assignment - check if they have enough remaining
         const staffAvailable = Math.max(0,
           staffAssignment.quantityGiven - 
           staffAssignment.quantitySold - 
@@ -400,7 +399,6 @@ async function processInventoryForStaffSale(
         );
         
         if (staffAvailable >= item.quantity) {
-          // Update staff assignment
           await prisma.staffInventory.update({
             where: { id: staffAssignment.id },
             data: {
@@ -424,9 +422,6 @@ async function processInventoryForStaffSale(
           );
         }
       } else {
-        // Staff has no assignment - check unassigned stock
-        
-        // Get all assignments to calculate unassigned stock
         const allAssignments = await prisma.staffInventory.findMany({
           where: {
             productId: item.productId,
@@ -439,7 +434,6 @@ async function processInventoryForStaffSale(
           }
         });
         
-        // Calculate remaining assigned stock
         let totalRemainingAssigned = 0;
         for (const assignment of allAssignments) {
           const remaining = assignment.quantityGiven - 
@@ -448,7 +442,6 @@ async function processInventoryForStaffSale(
           totalRemainingAssigned += Math.max(0, remaining);
         }
         
-        // Calculate unassigned stock
         const unassignedStock = Math.max(0, mainStockItem.quantity - totalRemainingAssigned);
         
         if (unassignedStock < item.quantity) {
@@ -468,7 +461,6 @@ async function processInventoryForStaffSale(
         };
       }
       
-      // ALWAYS deduct from main stock
       await prisma.stock.update({
         where: { id: mainStockItem.id },
         data: { 
@@ -491,7 +483,6 @@ async function processInventoryForStaffSale(
         message: `Deducted ${item.quantity} from main stock`
       });
       
-      // Link sale item to staff inventory if assignment used
       if (staffTrackingResult.staffInventoryId) {
         const saleItemRecord = await prisma.saleitem.findFirst({
           where: {
@@ -515,37 +506,24 @@ async function processInventoryForStaffSale(
     
     return {
       success: true,
-      staffTracking: {
-        results: staffTrackingResults
-      },
-      mainStockDeductions: {
-        results: mainStockResults
-      },
-      summary: {
-        totalItemsRequested: items.reduce((sum, item) => sum + item.quantity, 0)
-      }
+      staffTracking: { results: staffTrackingResults },
+      mainStockDeductions: { results: mainStockResults },
+      summary: { totalItemsRequested: items.reduce((sum, item) => sum + item.quantity, 0) }
     };
     
   } catch (error: any) {
     console.error("❌ Error in inventory processing:", error);
-    return {
-      success: false,
-      error: error.message
-    };
+    return { success: false, error: error.message };
   }
 }
 
-// Process sale without staff (simple deduction)
-async function processSaleWithoutStaff(
-  items: Array<{productId: number, quantity: number}>
-) {
+async function processSaleWithoutStaff(items: Array<{productId: number, quantity: number}>) {
   try {
     console.log("📦 Processing sale without staff...");
     
     const results: MainStockDeductionResult[] = [];
     
     for (const item of items) {
-      // Get product info
       const product = await prisma.product.findUnique({
         where: { id: item.productId },
         select: { name: true }
@@ -553,7 +531,6 @@ async function processSaleWithoutStaff(
       
       const productName = product?.name || `Product ${item.productId}`;
       
-      // Check main stock
       const mainStockItem = await prisma.stock.findFirst({
         where: { productId: item.productId },
         orderBy: { createdAt: "desc" },
@@ -567,7 +544,6 @@ async function processSaleWithoutStaff(
         throw new Error(`Not enough stock for ${productName}. Available: ${mainStockItem.quantity}, Requested: ${item.quantity}`);
       }
       
-      // Deduct from main stock
       await prisma.stock.update({
         where: { id: mainStockItem.id },
         data: { 
@@ -592,21 +568,15 @@ async function processSaleWithoutStaff(
     return {
       success: true,
       results,
-      summary: {
-        totalItemsDeducted: items.reduce((sum, item) => sum + item.quantity, 0)
-      }
+      summary: { totalItemsDeducted: items.reduce((sum, item) => sum + item.quantity, 0) }
     };
     
   } catch (error: any) {
     console.error("❌ Error processing sale:", error);
-    return {
-      success: false,
-      error: error.message
-    };
+    return { success: false, error: error.message };
   }
 }
 
-// Restore inventory after sale update/delete
 async function restoreInventoryForSale(sale: any) {
   try {
     console.log(`🔄 Restoring inventory for sale ${sale.id}...`);
@@ -614,7 +584,6 @@ async function restoreInventoryForSale(sale: any) {
     const { weekStart, weekEnd } = getCurrentWeekRange();
     
     for (const item of sale.saleitem) {
-      // Restore main stock
       const stockItem = await prisma.stock.findFirst({
         where: { productId: item.productId },
         orderBy: { createdAt: "desc" },
@@ -631,7 +600,6 @@ async function restoreInventoryForSale(sale: any) {
         console.log(`📈 Restored ${item.quantity} items to main stock for product ${item.productId}`);
       }
       
-      // Restore staff inventory tracking if it was used
       if (item.staffInventoryId && sale.createdById) {
         const staffInventory = await prisma.staffInventory.findUnique({
           where: { id: item.staffInventoryId }
@@ -658,8 +626,6 @@ async function restoreInventoryForSale(sale: any) {
   }
 }
 
-// ================== SALE PROCESSING HELPER ==================
-
 function processSale(sale: any) {
   if (!sale) return null;
   
@@ -685,11 +651,9 @@ function processSale(sale: any) {
     status,
     createdBy: sale.createdBy || "SYSTEM",
     updatedBy: sale.updatedBy || "SYSTEM",
-    staff: sale.staff || null
+    staff: sale.assignedStaff || sale.createdByStaff || null
   };
 }
-
-// ================== API ROUTES ==================
 
 // ================== GET ALL SALES ==================
 export async function GET(req: NextRequest) {
@@ -701,27 +665,15 @@ export async function GET(req: NextRequest) {
     const startDate = searchParams.get('startDate');
     const endDate = searchParams.get('endDate');
     const status = searchParams.get('status');
+    const assignedStaffId = searchParams.get('assignedStaffId');
     
-    // Build where clause
     const where: any = {};
     
-    if (staffId) {
-      where.createdById = parseInt(staffId);
-    }
-    
-    if (createdBy && isValidEmail(createdBy)) {
-      const normalizedSearch = normalizeEmail(createdBy);
-      where.createdBy = { contains: normalizedSearch };
-    }
-    
-    if (customerId) {
-      where.customerId = parseInt(customerId);
-    }
-    
-    if (status) {
-      where.status = status;
-    }
-    
+    if (staffId) where.createdById = parseInt(staffId);
+    if (assignedStaffId) where.assignedStaffId = parseInt(assignedStaffId);
+    if (createdBy && isValidEmail(createdBy)) where.createdBy = { contains: normalizeEmail(createdBy) };
+    if (customerId) where.customerId = parseInt(customerId);
+    if (status) where.status = status;
     if (startDate || endDate) {
       where.date = {};
       if (startDate) where.date.gte = new Date(startDate);
@@ -735,28 +687,27 @@ export async function GET(req: NextRequest) {
         saleitem: { 
           include: { 
             product: true,
-            staffInventory: {
-              include: {
-                staff: true
-              }
-            }
+            staffInventory: { include: { staff: true } }
           } 
         },
         payment: true,
-        staff: true,
+        createdByStaff: true,
+        assignedStaff: true,
         paymentschedule: true,
         smsreminder: true,
+        invoice: true,
+        cashledger: true,
+        auditLogs: true
       },
       orderBy: { createdAt: "desc" },
     });
 
-    return NextResponse.json(sales.map(processSale));
+    const processedSales = sales.map(sale => processSale(sale));
+    
+    return NextResponse.json(processedSales);
   } catch (err: any) {
     console.error("❌ Fetch sales error:", err);
-    return NextResponse.json({ 
-      error: "Failed to fetch sales",
-      details: err.message 
-    }, { status: 500 });
+    return NextResponse.json({ error: "Failed to fetch sales", details: err.message }, { status: 500 });
   }
 }
 
@@ -813,67 +764,50 @@ export async function POST(req: NextRequest) {
     
     console.log("👤 Extracted user info:", {
       userEmail: normalizedUserEmail,
-      userName: userName
+      userName: userName,
+      assignedStaffId: data.assignedStaffId,
+      createdById: data.createdById
     });
     
-    // Find or create staff
-    let staffRecord = null;
-    let staffId: number | null = null;
+    // Find or create staff for the creator
+    let staffRecord: StaffRecord | null = null;
+    let staffId: number | null = data.createdById || null;
     
-    if (isValidEmail(normalizedUserEmail)) {
+    if (!staffId && isValidEmail(normalizedUserEmail)) {
       staffRecord = await findOrCreateStaff(normalizedUserEmail, userName);
       if (staffRecord) {
         staffId = staffRecord.id;
-        console.log(`✅ Sale linked to staff: ${staffRecord.name} (ID: ${staffRecord.id})`);
+        console.log(`✅ Sale linked to staff (creator): ${staffRecord.name} (ID: ${staffRecord.id})`);
       }
     }
 
     // Validate required fields
     const customerId = Number(data.customerId);
     const amount = Number(data.amount);
+    const assignedStaffId = data.assignedStaffId ? Number(data.assignedStaffId) : null;
 
     if (!customerId || isNaN(customerId)) {
-      return NextResponse.json({ 
-        error: "Invalid customer ID",
-        details: "Customer ID is required"
-      }, { status: 400 });
+      return NextResponse.json({ error: "Invalid customer ID", details: "Customer ID is required" }, { status: 400 });
     }
 
     if (!amount || isNaN(amount) || amount <= 0) {
-      return NextResponse.json({ 
-        error: "Invalid amount",
-        details: "Sale amount is required"
-      }, { status: 400 });
+      return NextResponse.json({ error: "Invalid amount", details: "Sale amount is required" }, { status: 400 });
     }
 
     if (!Array.isArray(data.saleItems) || data.saleItems.length === 0) {
-      return NextResponse.json({ 
-        error: "No sale items provided",
-        details: "At least one sale item is required" 
-      }, { status: 400 });
+      return NextResponse.json({ error: "No sale items provided", details: "At least one sale item is required" }, { status: 400 });
     }
 
     // Validate sale items
     for (const [index, item] of data.saleItems.entries()) {
       if (!item.productId || isNaN(item.productId)) {
-        return NextResponse.json({
-          error: `Invalid product ID at item ${index + 1}`,
-          details: `Item ${index + 1} has an invalid product ID`
-        }, { status: 400 });
+        return NextResponse.json({ error: `Invalid product ID at item ${index + 1}` }, { status: 400 });
       }
-      
       if (!item.quantity || isNaN(item.quantity) || item.quantity <= 0) {
-        return NextResponse.json({
-          error: `Invalid quantity at item ${index + 1}`,
-          details: `Item ${index + 1} quantity must be greater than 0`
-        }, { status: 400 });
+        return NextResponse.json({ error: `Invalid quantity at item ${index + 1}` }, { status: 400 });
       }
-      
       if (!item.price || isNaN(item.price) || item.price <= 0) {
-        return NextResponse.json({
-          error: `Invalid price at item ${index + 1}`,
-          details: `Item ${index + 1} price must be greater than 0`
-        }, { status: 400 });
+        return NextResponse.json({ error: `Invalid price at item ${index + 1}` }, { status: 400 });
       }
     }
 
@@ -882,21 +816,13 @@ export async function POST(req: NextRequest) {
     
     if (staffId) {
       const availabilityValidation = await validateProductsForStaffSale(
-        data.saleItems.map((item: any) => ({
-          productId: item.productId,
-          quantity: item.quantity
-        })),
+        data.saleItems.map((item: any) => ({ productId: item.productId, quantity: item.quantity })),
         staffId,
         weekStart,
         weekEnd
       );
       
       if (availabilityValidation.hasInsufficientItems) {
-        console.error("🚫 INSUFFICIENT AVAILABILITY:", {
-          staffId,
-          insufficientItems: availabilityValidation.insufficientItems
-        });
-        
         const errorMessages = availabilityValidation.insufficientItems.map(item => 
           `• ${item.productName}: ${item.message}`
         );
@@ -953,17 +879,16 @@ export async function POST(req: NextRequest) {
     console.log("✅ All items available in main stock");
 
     // Handle payments
-    const payments =
-      data.payments?.map((p: any) => ({
-        amount: Number(p.amount),
-        method: p.method,
-        referenceId: p.referenceId || null,
-        status: p.method === "CHECK" && !p.checkDate ? "PENDING" : "CLEARED",
-        checkDate: p.checkDate ? new Date(p.checkDate) : null,
-        paidAt: p.paidAt ? new Date(p.paidAt) : new Date(),
-      })) || [];
+    const payments = data.payments?.map((p: any) => ({
+      amount: Number(p.amount),
+      method: p.method,
+      referenceId: p.referenceId || null,
+      status: p.method === "CHECK" && !p.checkDate ? "PENDING" : "CLEARED",
+      checkDate: p.checkDate ? new Date(p.checkDate) : null,
+      paidAt: p.paidAt ? new Date(p.paidAt) : new Date(),
+    })) || [];
 
-    // Create sale
+    // Create sale with staff assignments
     const newSale = await prisma.sale.create({
       data: {
         customerId,
@@ -971,10 +896,11 @@ export async function POST(req: NextRequest) {
         date: data.date ? new Date(data.date) : new Date(),
         dueDate: data.dueDate ? new Date(data.dueDate) : null,
         paymentMethod: data.paymentMethod || "CASH",
-        status: "UNPAID",
+        status: data.status || "UNPAID",
         createdBy: normalizedUserEmail,
         updatedBy: normalizedUserEmail,
         createdById: staffId,
+        assignedStaffId: assignedStaffId,  // NEW: Assign responsible staff
         payment: { create: payments },
         saleitem: {
           create: data.saleItems.map((item: any) => ({
@@ -989,7 +915,8 @@ export async function POST(req: NextRequest) {
         customer: true,
         saleitem: { include: { product: true } },
         payment: true,
-        staff: true,
+        createdByStaff: true,
+        assignedStaff: true,  // NEW: Include assigned staff in response
       },
     });
 
@@ -997,6 +924,8 @@ export async function POST(req: NextRequest) {
       saleId: newSale.id,
       createdBy: newSale.createdBy,
       createdById: newSale.createdById,
+      assignedStaffId: newSale.assignedStaffId,  // NEW: Log assigned staff
+      assignedStaffName: newSale.assignedStaff?.name,  // NEW: Log assigned staff name
       customer: newSale.customer?.name,
       amount: newSale.amount
     });
@@ -1008,17 +937,11 @@ export async function POST(req: NextRequest) {
       inventoryResult = await processInventoryForStaffSale(
         newSale.id, 
         staffId, 
-        data.saleItems.map((item: any) => ({
-          productId: item.productId,
-          quantity: item.quantity
-        }))
+        data.saleItems.map((item: any) => ({ productId: item.productId, quantity: item.quantity }))
       );
     } else {
       inventoryResult = await processSaleWithoutStaff(
-        data.saleItems.map((item: any) => ({
-          productId: item.productId,
-          quantity: item.quantity
-        }))
+        data.saleItems.map((item: any) => ({ productId: item.productId, quantity: item.quantity }))
       );
     }
     
@@ -1040,24 +963,40 @@ export async function POST(req: NextRequest) {
         saleitem: { 
           include: { 
             product: true,
-            staffInventory: {
-              include: {
-                staff: true
-              }
-            }
+            staffInventory: { include: { staff: true } }
           } 
         },
         payment: true,
-        staff: true,
+        createdByStaff: true,
+        assignedStaff: true,
+        paymentschedule: true,
+        smsreminder: true,
+        invoice: true,
+        cashledger: true,
+        auditLogs: true
       },
     });
+
+    // Get staff names
+    let assignedStaffName = null;
+    if (completeSale?.assignedStaff) {
+      assignedStaffName = completeSale.assignedStaff.name;
+    } else if (assignedStaffId) {
+      const assignedStaff = await prisma.staff.findUnique({
+        where: { id: assignedStaffId },
+        select: { name: true }
+      });
+      assignedStaffName = assignedStaff?.name || null;
+    }
 
     return NextResponse.json({
       ...processSale(completeSale),
       inventoryProcessing: {
         result: inventoryResult,
         staffId,
-        staffName: staffRecord?.name
+        assignedStaffId,  // NEW: Return assigned staff ID
+        staffName: staffRecord?.name || null,
+        assignedStaffName: assignedStaffName  // NEW: Return assigned staff name
       }
     }, { status: 201 });
     
@@ -1099,17 +1038,17 @@ export async function GET_SINGLE(req: NextRequest, { params }: { params: { id: s
         saleitem: { 
           include: { 
             product: true,
-            staffInventory: {
-              include: {
-                staff: true
-              }
-            }
+            staffInventory: { include: { staff: true } }
           } 
         },
         payment: true,
-        staff: true,
+        createdByStaff: true,
+        assignedStaff: true,
         paymentschedule: true,
         smsreminder: true,
+        invoice: true,
+        cashledger: true,
+        auditLogs: true
       },
     });
 
@@ -1171,13 +1110,10 @@ export async function PUT(req: NextRequest) {
     const existingSale = await prisma.sale.findUnique({
       where: { id },
       include: { 
-        saleitem: {
-          include: {
-            staffInventory: true
-          }
-        }, 
+        saleitem: { include: { staffInventory: true } }, 
         payment: true, 
-        staff: true 
+        createdByStaff: true,
+        assignedStaff: true
       },
     });
 
@@ -1187,7 +1123,7 @@ export async function PUT(req: NextRequest) {
 
     // Link to staff if not already linked
     let staffId = existingSale.createdById;
-    let staffRecord = existingSale.staff;
+    let staffRecord: StaffRecord | null = existingSale.createdByStaff as StaffRecord | null;
     
     if (!staffId && isValidEmail(normalizedUserEmail)) {
       staffRecord = await findOrCreateStaff(normalizedUserEmail, userName);
@@ -1226,13 +1162,11 @@ export async function PUT(req: NextRequest) {
       }
       
       if (validationErrors.length > 0) {
-        // Re-apply the old inventory deductions
-        console.log("❌ Update failed, reapplying old inventory deductions...");
         await restoreInventoryForSale({
           ...existingSale,
-          saleitem: existingSale.saleitem.map(item => ({
+          saleitem: existingSale.saleitem.map((item: any) => ({
             ...item,
-            quantity: -item.quantity // Negative to deduct again
+            quantity: -item.quantity
           }))
         });
         
@@ -1241,7 +1175,7 @@ export async function PUT(req: NextRequest) {
           details: validationErrors,
           staffAttemptingUpdate: {
             id: staffId,
-            name: staffRecord?.name,
+            name: staffRecord?.name || null,
             email: normalizedUserEmail
           }
         }, { status: 400 });
@@ -1258,17 +1192,20 @@ export async function PUT(req: NextRequest) {
       updatedBy: normalizedUserEmail,
     };
 
-    // Update createdById if we found a staff and it's currently null
+    // Update assignedStaffId if provided (NEW)
+    if (data.assignedStaffId !== undefined) {
+      updateData.assignedStaffId = data.assignedStaffId ? Number(data.assignedStaffId) : null;
+      console.log(`🔄 Updating assigned staff for sale ${id} to: ${data.assignedStaffId || 'none'}`);
+    }
+
     if (staffId && !existingSale.createdById) {
       updateData.createdById = staffId;
     }
 
-    // Also update createdBy if it's not normalized
     if (existingSale.createdBy && existingSale.createdBy !== normalizedUserEmail) {
       updateData.createdBy = normalizedUserEmail;
     }
 
-    // Update sale
     await prisma.sale.update({
       where: { id },
       data: updateData,
@@ -1276,10 +1213,8 @@ export async function PUT(req: NextRequest) {
 
     // Replace saleitems if provided
     if (data.saleItems) {
-      // Delete old items
       await prisma.saleitem.deleteMany({ where: { saleId: id } });
       
-      // Create new items
       await prisma.saleitem.createMany({
         data: data.saleItems.map((item: any) => ({
           saleId: id,
@@ -1290,22 +1225,15 @@ export async function PUT(req: NextRequest) {
         })),
       });
       
-      // Apply inventory deduction for new items
       if (staffId) {
         await processInventoryForStaffSale(
           id, 
           staffId, 
-          data.saleItems.map((item: any) => ({
-            productId: item.productId,
-            quantity: item.quantity
-          }))
+          data.saleItems.map((item: any) => ({ productId: item.productId, quantity: item.quantity }))
         );
       } else {
         await processSaleWithoutStaff(
-          data.saleItems.map((item: any) => ({
-            productId: item.productId,
-            quantity: item.quantity
-          }))
+          data.saleItems.map((item: any) => ({ productId: item.productId, quantity: item.quantity }))
         );
       }
     }
@@ -1317,22 +1245,26 @@ export async function PUT(req: NextRequest) {
         saleitem: { 
           include: { 
             product: true, 
-            staffInventory: {
-              include: {
-                staff: true
-              }
-            } 
+            staffInventory: { include: { staff: true } }
           } 
         },
         payment: true,
-        staff: true,
+        createdByStaff: true,
+        assignedStaff: true,
+        paymentschedule: true,
+        smsreminder: true,
+        invoice: true,
+        cashledger: true,
+        auditLogs: true
       },
     });
 
     console.log(`✏️ Updated sale ${id}:`, {
       createdBy: updated?.createdBy,
       createdById: updated?.createdById,
-      staffLinked: updated?.staff?.name || 'None',
+      assignedStaffId: updated?.assignedStaffId,
+      staffLinked: updated?.createdByStaff?.name || 'None',
+      assignedStaffName: updated?.assignedStaff?.name || 'None'
     });
 
     return NextResponse.json(processSale(updated));
@@ -1359,16 +1291,9 @@ export async function DELETE(req: NextRequest) {
     const sale = await prisma.sale.findUnique({
       where: { id },
       include: { 
-        saleitem: {
-          include: {
-            staffInventory: {
-              include: {
-                staff: true
-              }
-            }
-          }
-        },
-        staff: true
+        saleitem: { include: { staffInventory: { include: { staff: true } } } },
+        createdByStaff: true,
+        assignedStaff: true
       },
     });
 
@@ -1402,20 +1327,20 @@ export async function DELETE(req: NextRequest) {
     const normalizedUserEmail = normalizeEmail(userEmail);
     
     console.log(`🗑️ Sale ${id} deleted by: ${normalizedUserEmail}`);
-    console.log(`   Sale was linked to staff: ${sale.staff?.name || 'None'} (ID: ${sale.createdById || 'None'})`);
+    console.log(`   Sale was linked to staff (creator): ${sale.createdByStaff?.name || 'None'} (ID: ${sale.createdById || 'None'})`);
+    console.log(`   Sale assigned to staff (follow-up): ${sale.assignedStaff?.name || 'None'} (ID: ${sale.assignedStaffId || 'None'})`);
 
-    // Restore inventory
     await restoreInventoryForSale(sale);
-
-    // Delete the sale
     await prisma.sale.delete({ where: { id } });
     
     return NextResponse.json({ 
       success: true,
       message: `Sale deleted successfully`,
       deletedBy: normalizedUserEmail,
-      staffLinked: sale.staff?.name || null,
-      staffId: sale.createdById,
+      creatorStaff: sale.createdByStaff?.name || null,
+      creatorStaffId: sale.createdById,
+      assignedStaff: sale.assignedStaff?.name || null,
+      assignedStaffId: sale.assignedStaffId,
       itemsRestored: sale.saleitem.length
     });
   } catch (err: any) {
@@ -1437,7 +1362,6 @@ export async function PATCH(req: NextRequest) {
       return NextResponse.json({ error: "Sale ID is required" }, { status: 400 });
     }
 
-    // Extract user info
     let userEmail = "";
     if (data.authInfo?.email) {
       userEmail = data.authInfo.email;
@@ -1453,13 +1377,13 @@ export async function PATCH(req: NextRequest) {
       updatedBy: normalizedUserEmail,
     };
 
-    // Only update provided fields
     if (data.status !== undefined) updateData.status = data.status;
     if (data.dueDate !== undefined) updateData.dueDate = new Date(data.dueDate);
     if (data.paymentMethod !== undefined) updateData.paymentMethod = data.paymentMethod;
     if (data.notes !== undefined) updateData.notes = data.notes;
     if (data.checkDepositDate !== undefined) updateData.checkDepositDate = new Date(data.checkDepositDate);
     if (data.isCheckDeposited !== undefined) updateData.isCheckDeposited = data.isCheckDeposited;
+    if (data.assignedStaffId !== undefined) updateData.assignedStaffId = data.assignedStaffId ? Number(data.assignedStaffId) : null;
 
     const updated = await prisma.sale.update({
       where: { id },
@@ -1469,15 +1393,17 @@ export async function PATCH(req: NextRequest) {
         saleitem: { 
           include: { 
             product: true, 
-            staffInventory: {
-              include: {
-                staff: true
-              }
-            } 
+            staffInventory: { include: { staff: true } }
           } 
         },
         payment: true,
-        staff: true,
+        createdByStaff: true,
+        assignedStaff: true,
+        paymentschedule: true,
+        smsreminder: true,
+        invoice: true,
+        cashledger: true,
+        auditLogs: true
       },
     });
 
