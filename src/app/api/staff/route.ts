@@ -1,3 +1,4 @@
+// src/app/api/staff/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 
@@ -62,13 +63,102 @@ export async function GET(req: NextRequest) {
 
     // If email is provided, return single staff member
     if (email) {
+      // For MySQL, we need to do case-insensitive search manually
+      const normalizedEmail = normalizeEmail(email);
+      
       const staff = await prisma.staff.findFirst({
         where: {
-          email: {
-            equals: email.toLowerCase(),
-            mode: 'insensitive'
+          email: normalizedEmail
+        }
+      });
+
+      if (!staff) {
+        // If not found with exact case, try to find by comparing normalized emails
+        const allStaff = await prisma.staff.findMany({
+          where: {
+            email: { not: null }
           }
-        },
+        });
+        
+        const foundStaff = allStaff.find(s => 
+          s.email && normalizeEmail(s.email) === normalizedEmail
+        );
+        
+        if (!foundStaff) {
+          return NextResponse.json({ error: "Staff not found" }, { status: 404 });
+        }
+        
+        // Now fetch the full staff data with includes
+        const fullStaff = await prisma.staff.findUnique({
+          where: { id: foundStaff.id },
+          include: {
+            staffInventories: includeInventory ? {
+              include: {
+                product: true,
+                saleItems: {
+                  include: {
+                    sale: true,
+                    product: true
+                  }
+                }
+              }
+            } : false,
+            createdSales: includeSales ? {
+              include: {
+                customer: true,
+                saleitem: {
+                  include: {
+                    product: true,
+                    staffInventory: true
+                  }
+                },
+                payment: true,
+                invoice: true,
+                paymentschedule: true
+              },
+              orderBy: { createdAt: "desc" },
+              take: 50
+            } : false,
+            assignedSales: includeSales ? {
+              include: {
+                customer: true,
+                saleitem: {
+                  include: {
+                    product: true,
+                    staffInventory: true
+                  }
+                },
+                payment: true,
+                invoice: true,
+                paymentschedule: true
+              },
+              orderBy: { createdAt: "desc" },
+              take: 50
+            } : false,
+            createdExpenses: includeExpenses ? {
+              include: {
+                cashledger: true
+              }
+            } : false,
+            updatedExpenses: includeExpenses ? {
+              include: {
+                cashledger: true
+              }
+            } : false
+          }
+        });
+
+        const transformedStaff = {
+          ...fullStaff,
+          sales: includeSales ? [...(fullStaff?.createdSales || []), ...(fullStaff?.assignedSales || [])] : undefined
+        };
+
+        return NextResponse.json(transformedStaff);
+      }
+
+      // Fetch full staff data with includes
+      const fullStaff = await prisma.staff.findUnique({
+        where: { id: staff.id },
         include: {
           staffInventories: includeInventory ? {
             include: {
@@ -126,14 +216,10 @@ export async function GET(req: NextRequest) {
         }
       });
 
-      if (!staff) {
-        return NextResponse.json({ error: "Staff not found" }, { status: 404 });
-      }
-
       // Transform for backward compatibility
       const transformedStaff = {
-        ...staff,
-        sales: includeSales ? [...(staff.createdSales || []), ...(staff.assignedSales || [])] : undefined
+        ...fullStaff,
+        sales: includeSales ? [...(fullStaff?.createdSales || []), ...(fullStaff?.assignedSales || [])] : undefined
       };
 
       return NextResponse.json(transformedStaff);
