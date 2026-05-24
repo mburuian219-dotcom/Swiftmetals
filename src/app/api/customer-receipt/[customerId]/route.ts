@@ -49,13 +49,8 @@ export async function GET(
             },
             payment: {
               orderBy: { paidAt: 'asc' }
-            },
-            assignedStaff: {
-              select: { name: true }
-            },
-            createdByStaff: {
-              select: { name: true }
             }
+            // Remove assignedStaff and createdByStaff from here
           },
           orderBy: { 
             date: 'desc' // Most recent sales first
@@ -71,6 +66,20 @@ export async function GET(
       );
     }
 
+    // Fetch staff data separately for all sales
+    const staffIds = new Set<number>();
+    customer.sale.forEach((sale: any) => {
+      if (sale.assignedStaffId) staffIds.add(sale.assignedStaffId);
+      if (sale.createdById) staffIds.add(sale.createdById);
+    });
+    
+    const staffMembers = await prisma.staff.findMany({
+      where: { id: { in: Array.from(staffIds) } },
+      select: { id: true, name: true }
+    });
+    
+    const staffMap = new Map(staffMembers.map(s => [s.id, s]));
+
     // Calculate totals across all sales
     let totalAllPurchases = 0;
     let totalAllPayments = 0;
@@ -85,12 +94,18 @@ export async function GET(
       totalAllPayments += salePayments;
       totalAllBalance += saleBalance;
       
+      // Add staff info to sale
+      const assignedStaff = sale.assignedStaffId ? staffMap.get(sale.assignedStaffId) : null;
+      const createdByStaff = sale.createdById ? staffMap.get(sale.createdById) : null;
+      
       return {
         ...sale,
         saleTotal,
         salePayments,
         saleBalance,
-        saleStatus: saleBalance > 0 ? 'UNPAID' : 'PAID'
+        saleStatus: saleBalance > 0 ? 'UNPAID' : 'PAID',
+        assignedStaff,
+        createdByStaff
       };
     });
 
@@ -130,7 +145,7 @@ For inquiries, contact us at support@swiftmetals.com`;
 
     const whatsappPhone = customer.phone ? formatPhoneForWhatsApp(customer.phone) : '';
 
-    // Generate HTML Statement - USING SAME STYLE AS RECEIPT
+    // Generate HTML Statement
     const html = `
 <!DOCTYPE html>
 <html lang="en">
@@ -139,7 +154,6 @@ For inquiries, contact us at support@swiftmetals.com`;
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Account Statement - ${escapeHtml(customer.name)}</title>
   <style>
-    /* EXACT SAME CSS AS RECEIPT */
     * {
       margin: 0;
       padding: 0;
@@ -483,7 +497,6 @@ For inquiries, contact us at support@swiftmetals.com`;
       transform: none;
     }
     
-    /* Statement-specific styles (minimal additions) */
     .statement-summary {
       background: #f9fafb;
       border: 1px solid #e5e7eb;
@@ -572,7 +585,6 @@ For inquiries, contact us at support@swiftmetals.com`;
       color: #dc2626;
     }
     
-    /* Mobile Responsive Styles - SAME AS RECEIPT */
     @media (max-width: 768px) {
       body {
         padding: 10px;
@@ -774,16 +786,13 @@ For inquiries, contact us at support@swiftmetals.com`;
   </div>
   
   <div class="receipt-container">
-    <!-- Header - SAME AS RECEIPT -->
     <div class="header">
       <div class="company-name">SwiftMetals</div>
       <div class="company-tagline">Your Trusted Metal Solutions Provider</div>
     </div>
     
-    <!-- Title -->
     <div class="receipt-title">ACCOUNT STATEMENT</div>
     
-    <!-- Statement Info -->
     <div class="receipt-info">
       <div class="info-item">
         <div class="info-label">Customer</div>
@@ -803,7 +812,6 @@ For inquiries, contact us at support@swiftmetals.com`;
       </div>
     </div>
     
-    <!-- Customer Information - SAME AS RECEIPT -->
     ${customer ? `
     <div class="section-title">Account Details</div>
     <div class="customer-box">
@@ -813,7 +821,6 @@ For inquiries, contact us at support@swiftmetals.com`;
     </div>
     ` : ''}
     
-    <!-- Statement Summary -->
     <div class="section-title">Account Summary</div>
     <div class="statement-summary">
       <div class="summary-item">
@@ -833,7 +840,6 @@ For inquiries, contact us at support@swiftmetals.com`;
       </div>
     </div>
     
-    <!-- All Purchases -->
     <div class="section-title">Purchase History</div>
     
     ${salesWithDetails.length === 0 ? `
@@ -858,7 +864,6 @@ For inquiries, contact us at support@swiftmetals.com`;
         </div>
       </div>
       
-      <!-- Items Table - SAME AS RECEIPT -->
       <table class="items-table">
         <thead>
           <tr>
@@ -878,9 +883,8 @@ For inquiries, contact us at support@swiftmetals.com`;
           </tr>
           `).join('')}
         </tbody>
-      但也
+      </table>
       
-      <!-- Payments - SAME AS RECEIPT -->
       ${sale.payment.length > 0 ? `
       <div style="margin-top: 20px;">
         <div style="font-size: 14px; color: #2563eb; font-weight: 600; margin-bottom: 10px;">
@@ -903,7 +907,6 @@ For inquiries, contact us at support@swiftmetals.com`;
       </div>
       ` : '<div class="no-payments" style="margin-top: 20px;">No payments recorded for this purchase</div>'}
       
-      <!-- Purchase Totals - SAME AS RECEIPT -->
       <div class="totals-box">
         <div class="total-row">
           <span class="total-label">Purchase Total:</span>
@@ -923,7 +926,6 @@ For inquiries, contact us at support@swiftmetals.com`;
     </div>
     `).join('')}
     
-    <!-- Overall Balance - SAME STYLE AS RECEIPT -->
     <div class="totals-box" style="margin-top: 40px; max-width: 100%; border: 2px solid ${totalAllBalance > 0 ? '#fca5a5' : '#a7f3d0'};">
       <div class="total-row" style="font-size: 16px;">
         <span class="total-label">Total Purchases:</span>
@@ -948,7 +950,6 @@ For inquiries, contact us at support@swiftmetals.com`;
       </div>
     </div>
     
-    <!-- Footer - SAME AS RECEIPT -->
     <div class="footer">
       <div class="footer-message">Thank you for being a valued customer!</div>
       <div class="footer-contact">For inquiries regarding your account, contact us at support@swiftmetals.com</div>
@@ -1029,7 +1030,7 @@ export async function POST(
     const protocol = req.headers.get('x-forwarded-proto') || 'https';
     const receiptUrl = `${protocol}://${host}/api/customer-receipt/${customer.id}`;
 
-    // Format SMS message - SAME STYLE AS RECEIPT SMS
+    // Format SMS message
     let msg = `Hello ${customer.name},\n\n`;
     msg += `*SWIFTMETALS ACCOUNT STATEMENT*\n\n`;
     msg += `Statement Summary:\n`;
