@@ -102,16 +102,12 @@ const ensureDate = (date: string | null): Date => {
   return isNaN(d.getTime()) ? new Date() : d;
 };
 
-// Helper to calculate actual sale status based on payments
-const calculateActualSaleStatus = (sale: any): string => {
-  let totalPaid = 0;
-  for (const p of sale.payment || []) {
-    if (p.status === 'CLEARED' || p.status === 'COMPLETED') {
-      totalPaid += p.amount;
-    }
-  }
+// Helper to calculate actual sale status based on remaining amount
+const calculateSaleStatus = (sale: any): string => {
+  const totalPaid = getTotalPaid(sale);
+  const remainingBalance = sale.amount - totalPaid;
   
-  if (totalPaid >= sale.amount) {
+  if (remainingBalance <= 0.01) {
     return 'PAID';
   } else if (totalPaid > 0) {
     return 'PARTIAL';
@@ -123,7 +119,7 @@ const calculateActualSaleStatus = (sale: any): string => {
 // Helper to get products string from sale
 const getProductsString = (sale: any): string => {
   if (!sale.saleitem || sale.saleitem.length === 0) {
-    return 'Debt record (no products)';
+    return 'No products';
   }
   
   const productStrings: string[] = [];
@@ -137,30 +133,19 @@ const getProductsString = (sale: any): string => {
   return productStrings.join('; ');
 };
 
-// Helper to get payment method string (handles unpaid sales)
-const getPaymentMethodString = (sale: any): string => {
+// Helper to get payment methods summary
+const getPaymentMethodsSummary = (sale: any): string => {
   if (!sale.payment || sale.payment.length === 0) {
-    return '-';
+    return 'No payments';
   }
   
-  const methods: string[] = [];
+  const summaries: string[] = [];
   for (const p of sale.payment) {
     if (p.status === 'CLEARED' || p.status === 'COMPLETED') {
-      if (!methods.includes(p.method)) {
-        methods.push(p.method);
-      }
+      summaries.push(`${p.method}: KSh ${formatCurrency(p.amount)}`);
     }
   }
-  
-  if (methods.length === 0) {
-    return '-';
-  }
-  
-  if (methods.length > 1) {
-    return methods.join('/');
-  }
-  
-  return methods[0];
+  return summaries.length > 0 ? summaries.join('; ') : 'No cleared payments';
 };
 
 // Helper to get total paid amount
@@ -174,19 +159,24 @@ const getTotalPaid = (sale: any): number => {
   return total;
 };
 
-// Helper to get payment methods summary
-const getPaymentMethodsSummary = (sale: any): string => {
-  if (!sale.payment || sale.payment.length === 0) {
-    return 'No payment';
+// Helper to get payments made during a period
+const getPaymentsInPeriod = (sale: any, startDate: Date, endDate: Date): any[] => {
+  if (!sale.payment || sale.payment.length === 0) return [];
+  return sale.payment.filter((p: any) => {
+    const paymentDate = new Date(p.paidAt);
+    return paymentDate >= startDate && paymentDate <= endDate &&
+      (p.status === 'CLEARED' || p.status === 'COMPLETED');
+  });
+};
+
+// Helper to get total paid during a period
+const getTotalPaidInPeriod = (sale: any, startDate: Date, endDate: Date): number => {
+  const paymentsInPeriod = getPaymentsInPeriod(sale, startDate, endDate);
+  let total = 0;
+  for (const p of paymentsInPeriod) {
+    total += p.amount;
   }
-  
-  const summaries: string[] = [];
-  for (const p of sale.payment) {
-    if (p.status === 'CLEARED' || p.status === 'COMPLETED') {
-      summaries.push(`${p.method}: KSh ${formatCurrency(p.amount)}`);
-    }
-  }
-  return summaries.length > 0 ? summaries.join('; ') : 'No cleared payments';
+  return total;
 };
 
 // Helper to get assigned staff name
@@ -228,11 +218,11 @@ export async function GET(request: NextRequest) {
   try {
     switch (reportType) {
       case 'daily':
-        return await generateDailyPaymentReport(date);
+        return await generateDailyActivityReport(date);
       case 'weekly':
-        return await generateWeeklyPaymentReport(startDate, endDate);
+        return await generateWeeklyActivityReport(startDate, endDate);
       case 'monthly':
-        return await generateMonthlyPaymentReport(startDate, endDate);
+        return await generateMonthlyActivityReport(startDate, endDate);
       case 'customer':
         return await generateCustomerHistory(customerId, startDate, endDate);
       case 'outstanding':
@@ -254,16 +244,17 @@ export async function GET(request: NextRequest) {
   }
 }
 
-// ==================== DAILY PAYMENT REPORT ====================
+// ==================== DAILY ACTIVITY REPORT ====================
 
-async function generateDailyPaymentReport(dateParam: string | null) {
+async function generateDailyActivityReport(dateParam: string | null) {
   const targetDate = ensureDate(dateParam);
   const startDateObj = startOfDay(targetDate);
   const endDateObj = endOfDay(targetDate);
 
+  // Fetch ALL sales that were UPDATED on this day (any activity: payment, edit, status change)
   const sales = await prisma.sale.findMany({
     where: {
-      date: { gte: startDateObj, lte: endDateObj },
+      updatedAt: { gte: startDateObj, lte: endDateObj },
       isDeleted: false
     },
     include: {
@@ -278,109 +269,167 @@ async function generateDailyPaymentReport(dateParam: string | null) {
           product: true
         }
       },
-      assignedStaff: true  // Include assigned staff
+      assignedStaff: true
     },
-    orderBy: { date: 'asc' }
+    orderBy: { updatedAt: 'desc' }
   });
 
   const transactionData = [];
   for (const sale of sales) {
-    const totalPaid = getTotalPaid(sale);
-    const actualStatus = calculateActualSaleStatus(sale);
-    const remainingBalance = sale.amount - totalPaid;
+    const totalPaidOverall = getTotalPaid(sale);
+    const remainingBalance = sale.amount - totalPaidOverall;
+    const status = calculateSaleStatus(sale);
+    const paidInPeriod = getTotalPaidInPeriod(sale, startDateObj, endDateObj);
+    const paymentsInPeriod = getPaymentsInPeriod(sale, startDateObj, endDateObj);
     const productsString = getProductsString(sale);
-    const paymentMethod = getPaymentMethodString(sale);
+    
+    // Determine activity type
+    let activityType = 'Updated';
+    if (paymentsInPeriod.length > 0) {
+      activityType = 'Payment Received';
+    } else if (status === 'PAID') {
+      activityType = 'Marked as Paid';
+    } else if (sale.status !== status) {
+      activityType = 'Status Changed';
+    }
     
     transactionData.push({
-      'Date': formatDate(sale.date),
-      'Time': formatTime(sale.date),
+      'Update Date': formatDate(sale.updatedAt),
+      'Update Time': formatTime(sale.updatedAt),
       'Sale ID': sale.id,
+      'Original Sale Date': formatDate(sale.date),
       'Customer Name': sale.customer?.name || 'Unknown',
       'Customer Phone': sale.customer?.phone || '',
       'Assigned Staff': getAssignedStaffName(sale),
       'Staff Phone': getAssignedStaffPhone(sale),
       'Staff Email': getAssignedStaffEmail(sale),
-      'Products Taken': productsString,
-      'Total Sale Amount': formatCurrency(sale.amount),
-      'Total Paid': formatCurrency(totalPaid),
-      'Remaining Balance': formatCurrency(remainingBalance),
-      'Payment Status': actualStatus,
-      'Payment Method': paymentMethod,
-      'Created By': sale.createdBy || 'N/A',
+      'Products': productsString,
+      'Total Sale Amount (KSh)': formatCurrency(sale.amount),
+      'Total Paid Overall (KSh)': formatCurrency(totalPaidOverall),
+      'Remaining Balance (KSh)': formatCurrency(remainingBalance),
+      'Payment Status': status,
+      'Activity Type': activityType,
+      'Payments Today (KSh)': paidInPeriod > 0 ? formatCurrency(paidInPeriod) : '-',
+      'Payment Methods': getPaymentMethodsSummary(sale),
       'Updated By': sale.updatedBy || 'N/A',
-      'Last Updated': sale.updatedAt ? formatDateTime(sale.updatedAt) : formatDateTime(sale.date)
+      'Last Updated': formatDateTime(sale.updatedAt)
     });
   }
 
-  let totalSales = 0;
-  let totalPayments = 0;
-  const uniqueCustomersSet = new Set<number>();
-  let unpaidSales = 0;
-  let partialSales = 0;
+  // Calculate summary statistics
+  let totalSalesValue = 0;
+  let totalPaymentsOverall = 0;
+  let totalPaymentsToday = 0;
   let paidSales = 0;
+  let partialSales = 0;
+  let unpaidSales = 0;
+  const uniqueCustomersSet = new Set<number>();
+  let paymentActivityCount = 0;
 
   for (const sale of sales) {
-    totalSales += sale.amount;
+    totalSalesValue += sale.amount;
     const totalPaid = getTotalPaid(sale);
-    totalPayments += totalPaid;
-    const actualStatus = calculateActualSaleStatus(sale);
+    totalPaymentsOverall += totalPaid;
+    const paidToday = getTotalPaidInPeriod(sale, startDateObj, endDateObj);
+    totalPaymentsToday += paidToday;
+    
+    if (paidToday > 0) paymentActivityCount++;
     
     if (sale.customer?.id) uniqueCustomersSet.add(sale.customer.id);
-    if (actualStatus === 'UNPAID') unpaidSales++;
-    else if (actualStatus === 'PARTIAL') partialSales++;
-    else if (actualStatus === 'PAID') paidSales++;
+    
+    const status = calculateSaleStatus(sale);
+    if (status === 'PAID') paidSales++;
+    else if (status === 'PARTIAL') partialSales++;
+    else unpaidSales++;
   }
   
   const uniqueCustomers = uniqueCustomersSet.size;
+  const totalRemaining = totalSalesValue - totalPaymentsOverall;
 
   const summaryRows = [
     {
-      'Date': '--- SUMMARY ---', 'Time': '', 'Sale ID': '', 'Customer Name': '', 'Customer Phone': '',
-      'Assigned Staff': '', 'Staff Phone': '', 'Staff Email': '',
-      'Products Taken': '', 'Total Sale Amount': '', 'Total Paid': '', 'Remaining Balance': '',
-      'Payment Status': '', 'Payment Method': '', 'Created By': '', 'Updated By': '', 'Last Updated': ''
+      'Update Date': '--- DAILY ACTIVITY SUMMARY ---', 'Update Time': '', 'Sale ID': '', 'Original Sale Date': '',
+      'Customer Name': '', 'Customer Phone': '', 'Assigned Staff': '', 'Staff Phone': '', 'Staff Email': '',
+      'Products': '', 'Total Sale Amount (KSh)': '', 'Total Paid Overall (KSh)': '', 'Remaining Balance (KSh)': '',
+      'Payment Status': '', 'Activity Type': '', 'Payments Today (KSh)': '', 'Payment Methods': '',
+      'Updated By': '', 'Last Updated': ''
     },
     {
-      'Date': 'TOTAL SALES VALUE', 'Time': '', 'Sale ID': '', 'Customer Name': '', 'Customer Phone': '',
-      'Assigned Staff': '', 'Staff Phone': '', 'Staff Email': '',
-      'Products Taken': '', 'Total Sale Amount': formatCurrency(totalSales), 'Total Paid': '', 'Remaining Balance': '',
-      'Payment Status': '', 'Payment Method': '', 'Created By': '', 'Updated By': '', 'Last Updated': ''
+      'Update Date': `Report Date: ${formatDate(startDateObj)}`, 'Update Time': '', 'Sale ID': '', 'Original Sale Date': '',
+      'Customer Name': '', 'Customer Phone': '', 'Assigned Staff': '', 'Staff Phone': '', 'Staff Email': '',
+      'Products': '', 'Total Sale Amount (KSh)': '', 'Total Paid Overall (KSh)': '', 'Remaining Balance (KSh)': '',
+      'Payment Status': '', 'Activity Type': '', 'Payments Today (KSh)': '', 'Payment Methods': '',
+      'Updated By': '', 'Last Updated': ''
     },
     {
-      'Date': 'TOTAL PAYMENTS RECEIVED', 'Time': '', 'Sale ID': '', 'Customer Name': '', 'Customer Phone': '',
-      'Assigned Staff': '', 'Staff Phone': '', 'Staff Email': '',
-      'Products Taken': '', 'Total Sale Amount': '', 'Total Paid': formatCurrency(totalPayments), 'Remaining Balance': '',
-      'Payment Status': '', 'Payment Method': '', 'Created By': '', 'Updated By': '', 'Last Updated': ''
+      'Update Date': 'SALES UPDATED TODAY', 'Update Time': '', 'Sale ID': '', 'Original Sale Date': '',
+      'Customer Name': '', 'Customer Phone': '', 'Assigned Staff': '', 'Staff Phone': '', 'Staff Email': '',
+      'Products': '', 'Total Sale Amount (KSh)': sales.length.toString(), 'Total Paid Overall (KSh)': '', 'Remaining Balance (KSh)': '',
+      'Payment Status': '', 'Activity Type': '', 'Payments Today (KSh)': '', 'Payment Methods': '',
+      'Updated By': '', 'Last Updated': ''
     },
     {
-      'Date': 'UNPAID SALES', 'Time': '', 'Sale ID': '', 'Customer Name': '', 'Customer Phone': '',
-      'Assigned Staff': '', 'Staff Phone': '', 'Staff Email': '',
-      'Products Taken': '', 'Total Sale Amount': '', 'Total Paid': '', 'Remaining Balance': unpaidSales.toString(),
-      'Payment Status': '', 'Payment Method': '', 'Created By': '', 'Updated By': '', 'Last Updated': ''
+      'Update Date': 'TOTAL SALE VALUE', 'Update Time': '', 'Sale ID': '', 'Original Sale Date': '',
+      'Customer Name': '', 'Customer Phone': '', 'Assigned Staff': '', 'Staff Phone': '', 'Staff Email': '',
+      'Products': '', 'Total Sale Amount (KSh)': formatCurrency(totalSalesValue), 'Total Paid Overall (KSh)': '', 'Remaining Balance (KSh)': '',
+      'Payment Status': '', 'Activity Type': '', 'Payments Today (KSh)': '', 'Payment Methods': '',
+      'Updated By': '', 'Last Updated': ''
     },
     {
-      'Date': 'PARTIAL SALES', 'Time': '', 'Sale ID': '', 'Customer Name': '', 'Customer Phone': '',
-      'Assigned Staff': '', 'Staff Phone': '', 'Staff Email': '',
-      'Products Taken': '', 'Total Sale Amount': '', 'Total Paid': '', 'Remaining Balance': partialSales.toString(),
-      'Payment Status': '', 'Payment Method': '', 'Created By': '', 'Updated By': '', 'Last Updated': ''
+      'Update Date': 'TOTAL PAID (OVERALL)', 'Update Time': '', 'Sale ID': '', 'Original Sale Date': '',
+      'Customer Name': '', 'Customer Phone': '', 'Assigned Staff': '', 'Staff Phone': '', 'Staff Email': '',
+      'Products': '', 'Total Sale Amount (KSh)': '', 'Total Paid Overall (KSh)': formatCurrency(totalPaymentsOverall), 'Remaining Balance (KSh)': '',
+      'Payment Status': '', 'Activity Type': '', 'Payments Today (KSh)': '', 'Payment Methods': '',
+      'Updated By': '', 'Last Updated': ''
     },
     {
-      'Date': 'PAID SALES', 'Time': '', 'Sale ID': '', 'Customer Name': '', 'Customer Phone': '',
-      'Assigned Staff': '', 'Staff Phone': '', 'Staff Email': '',
-      'Products Taken': '', 'Total Sale Amount': '', 'Total Paid': '', 'Remaining Balance': paidSales.toString(),
-      'Payment Status': '', 'Payment Method': '', 'Created By': '', 'Updated By': '', 'Last Updated': ''
+      'Update Date': 'PAYMENTS RECEIVED TODAY', 'Update Time': '', 'Sale ID': '', 'Original Sale Date': '',
+      'Customer Name': '', 'Customer Phone': '', 'Assigned Staff': '', 'Staff Phone': '', 'Staff Email': '',
+      'Products': '', 'Total Sale Amount (KSh)': '', 'Total Paid Overall (KSh)': '', 'Remaining Balance (KSh)': '',
+      'Payment Status': '', 'Activity Type': '', 'Payments Today (KSh)': formatCurrency(totalPaymentsToday), 'Payment Methods': '',
+      'Updated By': '', 'Last Updated': ''
     },
     {
-      'Date': 'UNIQUE CUSTOMERS', 'Time': '', 'Sale ID': '', 'Customer Name': '', 'Customer Phone': '',
-      'Assigned Staff': '', 'Staff Phone': '', 'Staff Email': '',
-      'Products Taken': '', 'Total Sale Amount': '', 'Total Paid': '', 'Remaining Balance': uniqueCustomers.toString(),
-      'Payment Status': '', 'Payment Method': '', 'Created By': '', 'Updated By': '', 'Last Updated': ''
+      'Update Date': 'TOTAL REMAINING BALANCE', 'Update Time': '', 'Sale ID': '', 'Original Sale Date': '',
+      'Customer Name': '', 'Customer Phone': '', 'Assigned Staff': '', 'Staff Phone': '', 'Staff Email': '',
+      'Products': '', 'Total Sale Amount (KSh)': '', 'Total Paid Overall (KSh)': '', 'Remaining Balance (KSh)': formatCurrency(totalRemaining),
+      'Payment Status': '', 'Activity Type': '', 'Payments Today (KSh)': '', 'Payment Methods': '',
+      'Updated By': '', 'Last Updated': ''
     },
     {
-      'Date': 'TOTAL SALES COUNT', 'Time': '', 'Sale ID': '', 'Customer Name': '', 'Customer Phone': '',
-      'Assigned Staff': '', 'Staff Phone': '', 'Staff Email': '',
-      'Products Taken': '', 'Total Sale Amount': sales.length.toString(), 'Total Paid': '', 'Remaining Balance': '',
-      'Payment Status': '', 'Payment Method': '', 'Created By': '', 'Updated By': '', 'Last Updated': ''
+      'Update Date': 'PAID SALES', 'Update Time': '', 'Sale ID': '', 'Original Sale Date': '',
+      'Customer Name': '', 'Customer Phone': '', 'Assigned Staff': '', 'Staff Phone': '', 'Staff Email': '',
+      'Products': '', 'Total Sale Amount (KSh)': '', 'Total Paid Overall (KSh)': '', 'Remaining Balance (KSh)': paidSales.toString(),
+      'Payment Status': '', 'Activity Type': '', 'Payments Today (KSh)': '', 'Payment Methods': '',
+      'Updated By': '', 'Last Updated': ''
+    },
+    {
+      'Update Date': 'PARTIAL SALES', 'Update Time': '', 'Sale ID': '', 'Original Sale Date': '',
+      'Customer Name': '', 'Customer Phone': '', 'Assigned Staff': '', 'Staff Phone': '', 'Staff Email': '',
+      'Products': '', 'Total Sale Amount (KSh)': '', 'Total Paid Overall (KSh)': '', 'Remaining Balance (KSh)': partialSales.toString(),
+      'Payment Status': '', 'Activity Type': '', 'Payments Today (KSh)': '', 'Payment Methods': '',
+      'Updated By': '', 'Last Updated': ''
+    },
+    {
+      'Update Date': 'UNPAID SALES', 'Update Time': '', 'Sale ID': '', 'Original Sale Date': '',
+      'Customer Name': '', 'Customer Phone': '', 'Assigned Staff': '', 'Staff Phone': '', 'Staff Email': '',
+      'Products': '', 'Total Sale Amount (KSh)': '', 'Total Paid Overall (KSh)': '', 'Remaining Balance (KSh)': unpaidSales.toString(),
+      'Payment Status': '', 'Activity Type': '', 'Payments Today (KSh)': '', 'Payment Methods': '',
+      'Updated By': '', 'Last Updated': ''
+    },
+    {
+      'Update Date': 'UNIQUE CUSTOMERS', 'Update Time': '', 'Sale ID': '', 'Original Sale Date': '',
+      'Customer Name': '', 'Customer Phone': '', 'Assigned Staff': '', 'Staff Phone': '', 'Staff Email': '',
+      'Products': '', 'Total Sale Amount (KSh)': uniqueCustomers.toString(), 'Total Paid Overall (KSh)': '', 'Remaining Balance (KSh)': '',
+      'Payment Status': '', 'Activity Type': '', 'Payments Today (KSh)': '', 'Payment Methods': '',
+      'Updated By': '', 'Last Updated': ''
+    },
+    {
+      'Update Date': 'SALES WITH PAYMENT TODAY', 'Update Time': '', 'Sale ID': '', 'Original Sale Date': '',
+      'Customer Name': '', 'Customer Phone': '', 'Assigned Staff': '', 'Staff Phone': '', 'Staff Email': '',
+      'Products': '', 'Total Sale Amount (KSh)': paymentActivityCount.toString(), 'Total Paid Overall (KSh)': '', 'Remaining Balance (KSh)': '',
+      'Payment Status': '', 'Activity Type': '', 'Payments Today (KSh)': '', 'Payment Methods': '',
+      'Updated By': '', 'Last Updated': ''
     }
   ];
 
@@ -391,20 +440,21 @@ async function generateDailyPaymentReport(dateParam: string | null) {
     status: 200,
     headers: {
       'Content-Type': 'text/csv; charset=utf-8',
-      'Content-Disposition': `attachment; filename="daily-payments-${formatDate(targetDate)}.csv"`,
+      'Content-Disposition': `attachment; filename="daily-activity-${formatDate(targetDate)}.csv"`,
     }
   });
 }
 
-// ==================== WEEKLY PAYMENT REPORT ====================
+// ==================== WEEKLY ACTIVITY REPORT ====================
 
-async function generateWeeklyPaymentReport(startDateParam: string | null, endDateParam: string | null) {
+async function generateWeeklyActivityReport(startDateParam: string | null, endDateParam: string | null) {
   const startDateObj = startDateParam ? startOfDay(ensureDate(startDateParam)) : startOfWeek(new Date());
   const endDateObj = endDateParam ? endOfDay(ensureDate(endDateParam)) : endOfWeek(new Date());
 
+  // Fetch ALL sales that were UPDATED during this week
   const sales = await prisma.sale.findMany({
     where: {
-      date: { gte: startDateObj, lte: endDateObj },
+      updatedAt: { gte: startDateObj, lte: endDateObj },
       isDeleted: false
     },
     include: {
@@ -419,100 +469,111 @@ async function generateWeeklyPaymentReport(startDateParam: string | null, endDat
           product: true
         }
       },
-      assignedStaff: true  // Include assigned staff
+      assignedStaff: true
     },
-    orderBy: { date: 'asc' }
+    orderBy: { updatedAt: 'desc' }
   });
 
   const salesData = [];
   for (const sale of sales) {
-    const totalPaid = getTotalPaid(sale);
-    const actualStatus = calculateActualSaleStatus(sale);
-    const remainingBalance = sale.amount - totalPaid;
+    const totalPaidOverall = getTotalPaid(sale);
+    const remainingBalance = sale.amount - totalPaidOverall;
+    const status = calculateSaleStatus(sale);
+    const paidInPeriod = getTotalPaidInPeriod(sale, startDateObj, endDateObj);
     const productsString = getProductsString(sale);
-    const paymentMethod = getPaymentMethodString(sale);
     
     salesData.push({
-      'Date': formatDate(sale.date),
-      'Time': formatTime(sale.date),
+      'Last Updated': formatDateTime(sale.updatedAt),
       'Sale ID': sale.id,
+      'Original Sale Date': formatDate(sale.date),
       'Customer Name': sale.customer?.name || 'Unknown',
       'Customer Phone': sale.customer?.phone || '',
       'Assigned Staff': getAssignedStaffName(sale),
-      'Staff Phone': getAssignedStaffPhone(sale),
-      'Staff Email': getAssignedStaffEmail(sale),
-      'Products Taken': productsString,
-      'Total Sale Amount': formatCurrency(sale.amount),
-      'Total Paid': formatCurrency(totalPaid),
-      'Remaining Balance': formatCurrency(remainingBalance),
-      'Payment Status': actualStatus,
-      'Payment Method': paymentMethod,
-      'Payments Summary': getPaymentMethodsSummary(sale),
-      'Created By': sale.createdBy || 'N/A',
-      'Updated By': sale.updatedBy || 'N/A',
-      'Last Updated': sale.updatedAt ? formatDateTime(sale.updatedAt) : formatDateTime(sale.date)
+      'Products': productsString,
+      'Total Amount (KSh)': formatCurrency(sale.amount),
+      'Total Paid (KSh)': formatCurrency(totalPaidOverall),
+      'Remaining Balance (KSh)': formatCurrency(remainingBalance),
+      'Status': status,
+      'Paid This Week (KSh)': paidInPeriod > 0 ? formatCurrency(paidInPeriod) : '-',
+      'Payment Methods': getPaymentMethodsSummary(sale),
+      'Updated By': sale.updatedBy || 'N/A'
     });
   }
 
-  let totalSales = 0;
-  let totalPayments = 0;
-  const uniqueCustomersSet = new Set<number>();
+  // Calculate summary statistics
+  let totalPaidThisWeek = 0;
+  let totalSalesValue = 0;
+  let paidSales = 0;
+  let partialSales = 0;
   let unpaidSales = 0;
-
-  for (const sale of sales) {
-    totalSales += sale.amount;
-    const totalPaid = getTotalPaid(sale);
-    totalPayments += totalPaid;
-    const actualStatus = calculateActualSaleStatus(sale);
-    
-    if (sale.customer?.id) uniqueCustomersSet.add(sale.customer.id);
-    if (actualStatus === 'UNPAID') unpaidSales++;
-  }
+  let paymentActivityCount = 0;
   
-  const uniqueCustomers = uniqueCustomersSet.size;
+  for (const sale of sales) {
+    totalSalesValue += sale.amount;
+    const paidInPeriod = getTotalPaidInPeriod(sale, startDateObj, endDateObj);
+    totalPaidThisWeek += paidInPeriod;
+    if (paidInPeriod > 0) paymentActivityCount++;
+    
+    const status = calculateSaleStatus(sale);
+    if (status === 'PAID') paidSales++;
+    else if (status === 'PARTIAL') partialSales++;
+    else unpaidSales++;
+  }
 
   const summaryRows = [
     {
-      'Date': '--- WEEKLY SUMMARY ---', 'Time': '', 'Sale ID': '', 'Customer Name': '', 'Customer Phone': '',
-      'Assigned Staff': '', 'Staff Phone': '', 'Staff Email': '',
-      'Products Taken': '', 'Total Sale Amount': '', 'Total Paid': '', 'Remaining Balance': '',
-      'Payment Status': '', 'Payment Method': '', 'Payments Summary': '', 'Created By': '', 'Updated By': '', 'Last Updated': ''
+      'Last Updated': '--- WEEKLY ACTIVITY SUMMARY ---', 'Sale ID': '', 'Original Sale Date': '',
+      'Customer Name': '', 'Customer Phone': '', 'Assigned Staff': '',
+      'Products': '', 'Total Amount (KSh)': '', 'Total Paid (KSh)': '', 'Remaining Balance (KSh)': '',
+      'Status': '', 'Paid This Week (KSh)': '', 'Payment Methods': '', 'Updated By': ''
     },
     {
-      'Date': `Week: ${formatDate(startDateObj)} to ${formatDate(endDateObj)}`, 'Time': '', 'Sale ID': '', 'Customer Name': '', 'Customer Phone': '',
-      'Assigned Staff': '', 'Staff Phone': '', 'Staff Email': '',
-      'Products Taken': '', 'Total Sale Amount': '', 'Total Paid': '', 'Remaining Balance': '',
-      'Payment Status': '', 'Payment Method': '', 'Payments Summary': '', 'Created By': '', 'Updated By': '', 'Last Updated': ''
+      'Last Updated': `Week: ${formatDate(startDateObj)} to ${formatDate(endDateObj)}`, 'Sale ID': '', 'Original Sale Date': '',
+      'Customer Name': '', 'Customer Phone': '', 'Assigned Staff': '',
+      'Products': '', 'Total Amount (KSh)': '', 'Total Paid (KSh)': '', 'Remaining Balance (KSh)': '',
+      'Status': '', 'Paid This Week (KSh)': '', 'Payment Methods': '', 'Updated By': ''
     },
     {
-      'Date': 'TOTAL SALES VALUE', 'Time': '', 'Sale ID': '', 'Customer Name': '', 'Customer Phone': '',
-      'Assigned Staff': '', 'Staff Phone': '', 'Staff Email': '',
-      'Products Taken': '', 'Total Sale Amount': formatCurrency(totalSales), 'Total Paid': '', 'Remaining Balance': '',
-      'Payment Status': '', 'Payment Method': '', 'Payments Summary': '', 'Created By': '', 'Updated By': '', 'Last Updated': ''
+      'Last Updated': 'SALES WITH ACTIVITY', 'Sale ID': '', 'Original Sale Date': '',
+      'Customer Name': '', 'Customer Phone': '', 'Assigned Staff': '',
+      'Products': '', 'Total Amount (KSh)': sales.length.toString(), 'Total Paid (KSh)': '', 'Remaining Balance (KSh)': '',
+      'Status': '', 'Paid This Week (KSh)': '', 'Payment Methods': '', 'Updated By': ''
     },
     {
-      'Date': 'TOTAL PAYMENTS', 'Time': '', 'Sale ID': '', 'Customer Name': '', 'Customer Phone': '',
-      'Assigned Staff': '', 'Staff Phone': '', 'Staff Email': '',
-      'Products Taken': '', 'Total Sale Amount': '', 'Total Paid': formatCurrency(totalPayments), 'Remaining Balance': '',
-      'Payment Status': '', 'Payment Method': '', 'Payments Summary': '', 'Created By': '', 'Updated By': '', 'Last Updated': ''
+      'Last Updated': 'TOTAL SALE VALUE', 'Sale ID': '', 'Original Sale Date': '',
+      'Customer Name': '', 'Customer Phone': '', 'Assigned Staff': '',
+      'Products': '', 'Total Amount (KSh)': formatCurrency(totalSalesValue), 'Total Paid (KSh)': '', 'Remaining Balance (KSh)': '',
+      'Status': '', 'Paid This Week (KSh)': '', 'Payment Methods': '', 'Updated By': ''
     },
     {
-      'Date': 'UNPAID SALES', 'Time': '', 'Sale ID': '', 'Customer Name': '', 'Customer Phone': '',
-      'Assigned Staff': '', 'Staff Phone': '', 'Staff Email': '',
-      'Products Taken': '', 'Total Sale Amount': '', 'Total Paid': '', 'Remaining Balance': unpaidSales.toString(),
-      'Payment Status': '', 'Payment Method': '', 'Payments Summary': '', 'Created By': '', 'Updated By': '', 'Last Updated': ''
+      'Last Updated': 'PAYMENTS RECEIVED', 'Sale ID': '', 'Original Sale Date': '',
+      'Customer Name': '', 'Customer Phone': '', 'Assigned Staff': '',
+      'Products': '', 'Total Amount (KSh)': '', 'Total Paid (KSh)': '', 'Remaining Balance (KSh)': '',
+      'Status': '', 'Paid This Week (KSh)': formatCurrency(totalPaidThisWeek), 'Payment Methods': '', 'Updated By': ''
     },
     {
-      'Date': 'UNIQUE CUSTOMERS', 'Time': '', 'Sale ID': '', 'Customer Name': '', 'Customer Phone': '',
-      'Assigned Staff': '', 'Staff Phone': '', 'Staff Email': '',
-      'Products Taken': '', 'Total Sale Amount': '', 'Total Paid': '', 'Remaining Balance': uniqueCustomers.toString(),
-      'Payment Status': '', 'Payment Method': '', 'Payments Summary': '', 'Created By': '', 'Updated By': '', 'Last Updated': ''
+      'Last Updated': 'PAID SALES', 'Sale ID': '', 'Original Sale Date': '',
+      'Customer Name': '', 'Customer Phone': '', 'Assigned Staff': '',
+      'Products': '', 'Total Amount (KSh)': '', 'Total Paid (KSh)': '', 'Remaining Balance (KSh)': paidSales.toString(),
+      'Status': '', 'Paid This Week (KSh)': '', 'Payment Methods': '', 'Updated By': ''
     },
     {
-      'Date': 'TOTAL SALES COUNT', 'Time': '', 'Sale ID': '', 'Customer Name': '', 'Customer Phone': '',
-      'Assigned Staff': '', 'Staff Phone': '', 'Staff Email': '',
-      'Products Taken': '', 'Total Sale Amount': sales.length.toString(), 'Total Paid': '', 'Remaining Balance': '',
-      'Payment Status': '', 'Payment Method': '', 'Payments Summary': '', 'Created By': '', 'Updated By': '', 'Last Updated': ''
+      'Last Updated': 'PARTIAL SALES', 'Sale ID': '', 'Original Sale Date': '',
+      'Customer Name': '', 'Customer Phone': '', 'Assigned Staff': '',
+      'Products': '', 'Total Amount (KSh)': '', 'Total Paid (KSh)': '', 'Remaining Balance (KSh)': partialSales.toString(),
+      'Status': '', 'Paid This Week (KSh)': '', 'Payment Methods': '', 'Updated By': ''
+    },
+    {
+      'Last Updated': 'UNPAID SALES', 'Sale ID': '', 'Original Sale Date': '',
+      'Customer Name': '', 'Customer Phone': '', 'Assigned Staff': '',
+      'Products': '', 'Total Amount (KSh)': '', 'Total Paid (KSh)': '', 'Remaining Balance (KSh)': unpaidSales.toString(),
+      'Status': '', 'Paid This Week (KSh)': '', 'Payment Methods': '', 'Updated By': ''
+    },
+    {
+      'Last Updated': 'SALES WITH PAYMENTS', 'Sale ID': '', 'Original Sale Date': '',
+      'Customer Name': '', 'Customer Phone': '', 'Assigned Staff': '',
+      'Products': '', 'Total Amount (KSh)': paymentActivityCount.toString(), 'Total Paid (KSh)': '', 'Remaining Balance (KSh)': '',
+      'Status': '', 'Paid This Week (KSh)': '', 'Payment Methods': '', 'Updated By': ''
     }
   ];
 
@@ -523,20 +584,21 @@ async function generateWeeklyPaymentReport(startDateParam: string | null, endDat
     status: 200,
     headers: {
       'Content-Type': 'text/csv; charset=utf-8',
-      'Content-Disposition': `attachment; filename="weekly-payments-${formatDate(startDateObj)}-to-${formatDate(endDateObj)}.csv"`,
+      'Content-Disposition': `attachment; filename="weekly-activity-${formatDate(startDateObj)}-to-${formatDate(endDateObj)}.csv"`,
     }
   });
 }
 
-// ==================== MONTHLY PAYMENT REPORT ====================
+// ==================== MONTHLY ACTIVITY REPORT ====================
 
-async function generateMonthlyPaymentReport(startDateParam: string | null, endDateParam: string | null) {
+async function generateMonthlyActivityReport(startDateParam: string | null, endDateParam: string | null) {
   const startDateObj = startDateParam ? startOfDay(ensureDate(startDateParam)) : startOfMonth(new Date());
   const endDateObj = endDateParam ? endOfDay(ensureDate(endDateParam)) : endOfMonth(new Date());
 
+  // Fetch ALL sales that were UPDATED during this month
   const sales = await prisma.sale.findMany({
     where: {
-      date: { gte: startDateObj, lte: endDateObj },
+      updatedAt: { gte: startDateObj, lte: endDateObj },
       isDeleted: false
     },
     include: {
@@ -551,99 +613,111 @@ async function generateMonthlyPaymentReport(startDateParam: string | null, endDa
           product: true
         }
       },
-      assignedStaff: true  // Include assigned staff
+      assignedStaff: true
     },
-    orderBy: { date: 'asc' }
+    orderBy: { updatedAt: 'desc' }
   });
 
   const salesData = [];
   for (const sale of sales) {
-    const totalPaid = getTotalPaid(sale);
-    const actualStatus = calculateActualSaleStatus(sale);
-    const remainingBalance = sale.amount - totalPaid;
+    const totalPaidOverall = getTotalPaid(sale);
+    const remainingBalance = sale.amount - totalPaidOverall;
+    const status = calculateSaleStatus(sale);
+    const paidInPeriod = getTotalPaidInPeriod(sale, startDateObj, endDateObj);
     const productsString = getProductsString(sale);
-    const paymentMethod = getPaymentMethodString(sale);
     
     salesData.push({
-      'Date': formatDate(sale.date),
-      'Time': formatTime(sale.date),
+      'Last Updated': formatDateTime(sale.updatedAt),
       'Sale ID': sale.id,
+      'Original Sale Date': formatDate(sale.date),
       'Customer Name': sale.customer?.name || 'Unknown',
       'Customer Phone': sale.customer?.phone || '',
       'Assigned Staff': getAssignedStaffName(sale),
-      'Staff Phone': getAssignedStaffPhone(sale),
-      'Staff Email': getAssignedStaffEmail(sale),
-      'Products Taken': productsString,
-      'Total Sale Amount': formatCurrency(sale.amount),
-      'Total Paid': formatCurrency(totalPaid),
-      'Remaining Balance': formatCurrency(remainingBalance),
-      'Payment Status': actualStatus,
-      'Payment Method': paymentMethod,
-      'Created By': sale.createdBy || 'N/A',
-      'Updated By': sale.updatedBy || 'N/A',
-      'Last Updated': sale.updatedAt ? formatDateTime(sale.updatedAt) : formatDateTime(sale.date)
+      'Products': productsString,
+      'Total Amount (KSh)': formatCurrency(sale.amount),
+      'Total Paid (KSh)': formatCurrency(totalPaidOverall),
+      'Remaining Balance (KSh)': formatCurrency(remainingBalance),
+      'Status': status,
+      'Paid This Month (KSh)': paidInPeriod > 0 ? formatCurrency(paidInPeriod) : '-',
+      'Payment Methods': getPaymentMethodsSummary(sale),
+      'Updated By': sale.updatedBy || 'N/A'
     });
   }
 
-  let totalSales = 0;
-  let totalPayments = 0;
-  const uniqueCustomersSet = new Set<number>();
+  // Calculate summary statistics
+  let totalPaidThisMonth = 0;
+  let totalSalesValue = 0;
+  let paidSales = 0;
+  let partialSales = 0;
   let unpaidSales = 0;
-
-  for (const sale of sales) {
-    totalSales += sale.amount;
-    const totalPaid = getTotalPaid(sale);
-    totalPayments += totalPaid;
-    const actualStatus = calculateActualSaleStatus(sale);
-    
-    if (sale.customer?.id) uniqueCustomersSet.add(sale.customer.id);
-    if (actualStatus === 'UNPAID') unpaidSales++;
-  }
+  let paymentActivityCount = 0;
   
-  const uniqueCustomers = uniqueCustomersSet.size;
+  for (const sale of sales) {
+    totalSalesValue += sale.amount;
+    const paidInPeriod = getTotalPaidInPeriod(sale, startDateObj, endDateObj);
+    totalPaidThisMonth += paidInPeriod;
+    if (paidInPeriod > 0) paymentActivityCount++;
+    
+    const status = calculateSaleStatus(sale);
+    if (status === 'PAID') paidSales++;
+    else if (status === 'PARTIAL') partialSales++;
+    else unpaidSales++;
+  }
 
   const summaryRows = [
     {
-      'Date': '--- MONTHLY SUMMARY ---', 'Time': '', 'Sale ID': '', 'Customer Name': '', 'Customer Phone': '',
-      'Assigned Staff': '', 'Staff Phone': '', 'Staff Email': '',
-      'Products Taken': '', 'Total Sale Amount': '', 'Total Paid': '', 'Remaining Balance': '',
-      'Payment Status': '', 'Payment Method': '', 'Created By': '', 'Updated By': '', 'Last Updated': ''
+      'Last Updated': '--- MONTHLY ACTIVITY SUMMARY ---', 'Sale ID': '', 'Original Sale Date': '',
+      'Customer Name': '', 'Customer Phone': '', 'Assigned Staff': '',
+      'Products': '', 'Total Amount (KSh)': '', 'Total Paid (KSh)': '', 'Remaining Balance (KSh)': '',
+      'Status': '', 'Paid This Month (KSh)': '', 'Payment Methods': '', 'Updated By': ''
     },
     {
-      'Date': `Month: ${formatDate(startDateObj)} to ${formatDate(endDateObj)}`, 'Time': '', 'Sale ID': '', 'Customer Name': '', 'Customer Phone': '',
-      'Assigned Staff': '', 'Staff Phone': '', 'Staff Email': '',
-      'Products Taken': '', 'Total Sale Amount': '', 'Total Paid': '', 'Remaining Balance': '',
-      'Payment Status': '', 'Payment Method': '', 'Created By': '', 'Updated By': '', 'Last Updated': ''
+      'Last Updated': `Month: ${formatDate(startDateObj)} to ${formatDate(endDateObj)}`, 'Sale ID': '', 'Original Sale Date': '',
+      'Customer Name': '', 'Customer Phone': '', 'Assigned Staff': '',
+      'Products': '', 'Total Amount (KSh)': '', 'Total Paid (KSh)': '', 'Remaining Balance (KSh)': '',
+      'Status': '', 'Paid This Month (KSh)': '', 'Payment Methods': '', 'Updated By': ''
     },
     {
-      'Date': 'TOTAL SALES VALUE', 'Time': '', 'Sale ID': '', 'Customer Name': '', 'Customer Phone': '',
-      'Assigned Staff': '', 'Staff Phone': '', 'Staff Email': '',
-      'Products Taken': '', 'Total Sale Amount': formatCurrency(totalSales), 'Total Paid': '', 'Remaining Balance': '',
-      'Payment Status': '', 'Payment Method': '', 'Created By': '', 'Updated By': '', 'Last Updated': ''
+      'Last Updated': 'SALES WITH ACTIVITY', 'Sale ID': '', 'Original Sale Date': '',
+      'Customer Name': '', 'Customer Phone': '', 'Assigned Staff': '',
+      'Products': '', 'Total Amount (KSh)': sales.length.toString(), 'Total Paid (KSh)': '', 'Remaining Balance (KSh)': '',
+      'Status': '', 'Paid This Month (KSh)': '', 'Payment Methods': '', 'Updated By': ''
     },
     {
-      'Date': 'TOTAL PAYMENTS', 'Time': '', 'Sale ID': '', 'Customer Name': '', 'Customer Phone': '',
-      'Assigned Staff': '', 'Staff Phone': '', 'Staff Email': '',
-      'Products Taken': '', 'Total Sale Amount': '', 'Total Paid': formatCurrency(totalPayments), 'Remaining Balance': '',
-      'Payment Status': '', 'Payment Method': '', 'Created By': '', 'Updated By': '', 'Last Updated': ''
+      'Last Updated': 'TOTAL SALE VALUE', 'Sale ID': '', 'Original Sale Date': '',
+      'Customer Name': '', 'Customer Phone': '', 'Assigned Staff': '',
+      'Products': '', 'Total Amount (KSh)': formatCurrency(totalSalesValue), 'Total Paid (KSh)': '', 'Remaining Balance (KSh)': '',
+      'Status': '', 'Paid This Month (KSh)': '', 'Payment Methods': '', 'Updated By': ''
     },
     {
-      'Date': 'UNPAID SALES', 'Time': '', 'Sale ID': '', 'Customer Name': '', 'Customer Phone': '',
-      'Assigned Staff': '', 'Staff Phone': '', 'Staff Email': '',
-      'Products Taken': '', 'Total Sale Amount': '', 'Total Paid': '', 'Remaining Balance': unpaidSales.toString(),
-      'Payment Status': '', 'Payment Method': '', 'Created By': '', 'Updated By': '', 'Last Updated': ''
+      'Last Updated': 'PAYMENTS RECEIVED', 'Sale ID': '', 'Original Sale Date': '',
+      'Customer Name': '', 'Customer Phone': '', 'Assigned Staff': '',
+      'Products': '', 'Total Amount (KSh)': '', 'Total Paid (KSh)': '', 'Remaining Balance (KSh)': '',
+      'Status': '', 'Paid This Month (KSh)': formatCurrency(totalPaidThisMonth), 'Payment Methods': '', 'Updated By': ''
     },
     {
-      'Date': 'UNIQUE CUSTOMERS', 'Time': '', 'Sale ID': '', 'Customer Name': '', 'Customer Phone': '',
-      'Assigned Staff': '', 'Staff Phone': '', 'Staff Email': '',
-      'Products Taken': '', 'Total Sale Amount': '', 'Total Paid': '', 'Remaining Balance': uniqueCustomers.toString(),
-      'Payment Status': '', 'Payment Method': '', 'Created By': '', 'Updated By': '', 'Last Updated': ''
+      'Last Updated': 'PAID SALES', 'Sale ID': '', 'Original Sale Date': '',
+      'Customer Name': '', 'Customer Phone': '', 'Assigned Staff': '',
+      'Products': '', 'Total Amount (KSh)': '', 'Total Paid (KSh)': '', 'Remaining Balance (KSh)': paidSales.toString(),
+      'Status': '', 'Paid This Month (KSh)': '', 'Payment Methods': '', 'Updated By': ''
     },
     {
-      'Date': 'TOTAL SALES COUNT', 'Time': '', 'Sale ID': '', 'Customer Name': '', 'Customer Phone': '',
-      'Assigned Staff': '', 'Staff Phone': '', 'Staff Email': '',
-      'Products Taken': '', 'Total Sale Amount': sales.length.toString(), 'Total Paid': '', 'Remaining Balance': '',
-      'Payment Status': '', 'Payment Method': '', 'Created By': '', 'Updated By': '', 'Last Updated': ''
+      'Last Updated': 'PARTIAL SALES', 'Sale ID': '', 'Original Sale Date': '',
+      'Customer Name': '', 'Customer Phone': '', 'Assigned Staff': '',
+      'Products': '', 'Total Amount (KSh)': '', 'Total Paid (KSh)': '', 'Remaining Balance (KSh)': partialSales.toString(),
+      'Status': '', 'Paid This Month (KSh)': '', 'Payment Methods': '', 'Updated By': ''
+    },
+    {
+      'Last Updated': 'UNPAID SALES', 'Sale ID': '', 'Original Sale Date': '',
+      'Customer Name': '', 'Customer Phone': '', 'Assigned Staff': '',
+      'Products': '', 'Total Amount (KSh)': '', 'Total Paid (KSh)': '', 'Remaining Balance (KSh)': unpaidSales.toString(),
+      'Status': '', 'Paid This Month (KSh)': '', 'Payment Methods': '', 'Updated By': ''
+    },
+    {
+      'Last Updated': 'SALES WITH PAYMENTS', 'Sale ID': '', 'Original Sale Date': '',
+      'Customer Name': '', 'Customer Phone': '', 'Assigned Staff': '',
+      'Products': '', 'Total Amount (KSh)': paymentActivityCount.toString(), 'Total Paid (KSh)': '', 'Remaining Balance (KSh)': '',
+      'Status': '', 'Paid This Month (KSh)': '', 'Payment Methods': '', 'Updated By': ''
     }
   ];
 
@@ -654,7 +728,7 @@ async function generateMonthlyPaymentReport(startDateParam: string | null, endDa
     status: 200,
     headers: {
       'Content-Type': 'text/csv; charset=utf-8',
-      'Content-Disposition': `attachment; filename="monthly-payments-${formatDate(startDateObj)}-to-${formatDate(endDateObj)}.csv"`,
+      'Content-Disposition': `attachment; filename="monthly-activity-${formatDate(startDateObj)}-to-${formatDate(endDateObj)}.csv"`,
     }
   });
 }
@@ -696,7 +770,7 @@ async function generateCustomerHistory(customerIdParam: string | null, startDate
           product: true
         }
       },
-      assignedStaff: true  // Include assigned staff
+      assignedStaff: true
     },
     orderBy: { date: 'asc' }
   });
@@ -710,20 +784,19 @@ async function generateCustomerHistory(customerIdParam: string | null, startDate
 
   for (const sale of sales) {
     const productsString = getProductsString(sale);
-    const actualStatus = calculateActualSaleStatus(sale);
+    const status = calculateSaleStatus(sale);
     
     runningBalance += sale.amount;
     transactions.push({
       'Date': formatDate(sale.date),
-      'Type': 'SALE (CREDIT)',
+      'Type': 'SALE (DEBIT)',
       'Sale ID': sale.id,
       'Products': productsString,
       'Assigned Staff': getAssignedStaffName(sale),
-      'Debit': formatCurrency(sale.amount),
-      'Credit': '0.00',
-      'Running Balance': formatCurrency(runningBalance),
-      'Status': actualStatus,
-      'Payment Method': '-'
+      'Debit (KSh)': formatCurrency(sale.amount),
+      'Credit (KSh)': '0.00',
+      'Running Balance (KSh)': formatCurrency(runningBalance),
+      'Status': status
     });
 
     for (const payment of sale.payment) {
@@ -731,15 +804,14 @@ async function generateCustomerHistory(customerIdParam: string | null, startDate
       const newStatus = runningBalance === 0 ? 'PAID' : (runningBalance > 0 ? 'PARTIAL' : 'OVERPAID');
       transactions.push({
         'Date': formatDate(payment.paidAt),
-        'Type': 'PAYMENT',
+        'Type': 'PAYMENT (CREDIT)',
         'Sale ID': sale.id,
         'Products': `Payment via ${payment.method}`,
         'Assigned Staff': getAssignedStaffName(sale),
-        'Debit': '0.00',
-        'Credit': formatCurrency(payment.amount),
-        'Running Balance': formatCurrency(runningBalance),
-        'Status': newStatus,
-        'Payment Method': payment.method
+        'Debit (KSh)': '0.00',
+        'Credit (KSh)': formatCurrency(payment.amount),
+        'Running Balance (KSh)': formatCurrency(runningBalance),
+        'Status': newStatus
       });
     }
   }
@@ -755,20 +827,20 @@ async function generateCustomerHistory(customerIdParam: string | null, startDate
   transactions.push(
     {
       'Date': '--- SUMMARY ---', 'Type': '', 'Sale ID': '', 'Products': '', 'Assigned Staff': '',
-      'Debit': '', 'Credit': '', 'Running Balance': '', 'Status': '', 'Payment Method': ''
+      'Debit (KSh)': '', 'Credit (KSh)': '', 'Running Balance (KSh)': '', 'Status': ''
     },
     {
-      'Date': '', 'Type': 'TOTAL CREDIT', 'Sale ID': '', 'Products': '', 'Assigned Staff': '',
-      'Debit': formatCurrency(totalCredit), 'Credit': '', 'Running Balance': '', 'Status': '', 'Payment Method': ''
+      'Date': '', 'Type': 'TOTAL PURCHASES', 'Sale ID': '', 'Products': '', 'Assigned Staff': '',
+      'Debit (KSh)': formatCurrency(totalCredit), 'Credit (KSh)': '', 'Running Balance (KSh)': '', 'Status': ''
     },
     {
       'Date': '', 'Type': 'TOTAL PAYMENTS', 'Sale ID': '', 'Products': '', 'Assigned Staff': '',
-      'Debit': '', 'Credit': formatCurrency(totalPayments), 'Running Balance': '', 'Status': '', 'Payment Method': ''
+      'Debit (KSh)': '', 'Credit (KSh)': formatCurrency(totalPayments), 'Running Balance (KSh)': '', 'Status': ''
     },
     {
       'Date': '', 'Type': 'OUTSTANDING BALANCE', 'Sale ID': '', 'Products': '', 'Assigned Staff': '',
-      'Debit': '', 'Credit': '', 'Running Balance': formatCurrency(outstandingBalance),
-      'Status': outstandingBalance === 0 ? 'CLEARED' : 'PENDING', 'Payment Method': ''
+      'Debit (KSh)': '', 'Credit (KSh)': '', 'Running Balance (KSh)': formatCurrency(outstandingBalance),
+      'Status': outstandingBalance === 0 ? 'PAID' : (outstandingBalance > 0 ? 'PARTIAL' : 'OVERPAID')
     }
   );
 
@@ -808,7 +880,7 @@ async function generateOutstandingReport(asOfParam: string | null) {
           product: true
         }
       },
-      assignedStaff: true  // Include assigned staff
+      assignedStaff: true
     },
     orderBy: [
       { customer: { name: 'asc' } },
@@ -816,21 +888,20 @@ async function generateOutstandingReport(asOfParam: string | null) {
     ]
   });
 
-  // Filter to only unpaid and partial sales based on actual payments
+  // Filter to only unpaid and partial sales based on remaining balance
   const unpaidPartialSales = sales.filter(sale => {
     const totalPaid = getTotalPaid(sale);
     const remaining = sale.amount - totalPaid;
-    return remaining > 0;
+    return remaining > 0.01; // More than 1 cent remaining
   });
 
   const outstandingData = [];
   for (const sale of unpaidPartialSales) {
     const totalPaid = getTotalPaid(sale);
     const currentBalance = sale.amount - totalPaid;
-    const actualStatus = calculateActualSaleStatus(sale);
+    const status = calculateSaleStatus(sale);
     const nextPaymentDue = sale.paymentschedule.find(ps => !ps.isPaid);
     const productsString = getProductsString(sale);
-    const paymentMethod = getPaymentMethodString(sale);
     
     let daysOverdue = 0;
     if (sale.dueDate) {
@@ -842,6 +913,7 @@ async function generateOutstandingReport(asOfParam: string | null) {
     
     let lastPaymentDate = 'No payments';
     let lastPaymentMethod = '-';
+    let lastPaymentAmount = 0;
     if (sale.payment.length > 0) {
       let latestPayment = sale.payment[0];
       for (const p of sale.payment) {
@@ -851,6 +923,7 @@ async function generateOutstandingReport(asOfParam: string | null) {
       }
       lastPaymentDate = formatDate(latestPayment.paidAt);
       lastPaymentMethod = latestPayment.method;
+      lastPaymentAmount = latestPayment.amount;
     }
     
     outstandingData.push({
@@ -861,63 +934,104 @@ async function generateOutstandingReport(asOfParam: string | null) {
       'Assigned Staff': getAssignedStaffName(sale),
       'Staff Phone': getAssignedStaffPhone(sale),
       'Staff Email': getAssignedStaffEmail(sale),
-      'Products Taken': productsString,
-      'Original Amount': formatCurrency(sale.amount),
-      'Total Paid': formatCurrency(totalPaid),
-      'Outstanding Balance': formatCurrency(currentBalance),
-      'Status': actualStatus,
-      'Payment Method': paymentMethod,
+      'Products': productsString,
+      'Original Amount (KSh)': formatCurrency(sale.amount),
+      'Total Paid (KSh)': formatCurrency(totalPaid),
+      'Outstanding Balance (KSh)': formatCurrency(currentBalance),
+      'Status': status,
       'Due Date': sale.dueDate ? formatDate(sale.dueDate) : 'N/A',
       'Next Payment Due': nextPaymentDue ? formatDate(nextPaymentDue.dueDate) : 'N/A',
-      'Days Overdue': daysOverdue,
+      'Days Overdue': daysOverdue > 0 ? daysOverdue : 0,
       'Last Payment Date': lastPaymentDate,
+      'Last Payment Amount (KSh)': lastPaymentAmount > 0 ? formatCurrency(lastPaymentAmount) : '-',
       'Last Payment Method': lastPaymentMethod,
       'Created By': sale.createdBy || 'N/A',
-      'Updated By': sale.updatedBy || 'N/A'
+      'Last Updated By': sale.updatedBy || 'N/A',
+      'Last Updated': formatDateTime(sale.updatedAt)
     });
   }
 
   let totalOutstanding = 0;
   let totalOverdue = 0;
   let overdueCount = 0;
+  let partialCount = 0;
+  let unpaidCount = 0;
   
   for (const d of outstandingData) {
-    const outstanding = parseFloat(d['Outstanding Balance'] as string);
+    const outstanding = parseFloat(d['Outstanding Balance (KSh)'] as string);
     totalOutstanding += outstanding;
     if (d['Days Overdue'] > 0) {
       totalOverdue += outstanding;
       overdueCount++;
     }
+    if (d['Status'] === 'PARTIAL') partialCount++;
+    else if (d['Status'] === 'UNPAID') unpaidCount++;
   }
 
   const summaryRows = [
     {
-      'Customer Name': '--- SUMMARY ---', 'Customer Phone': '', 'Sale ID': '', 'Sale Date': '',
+      'Customer Name': '--- OUTSTANDING DEBTS SUMMARY ---', 'Customer Phone': '', 'Sale ID': '', 'Sale Date': '',
       'Assigned Staff': '', 'Staff Phone': '', 'Staff Email': '',
-      'Products Taken': '', 'Original Amount': '', 'Total Paid': '', 'Outstanding Balance': '',
-      'Status': '', 'Payment Method': '', 'Due Date': '', 'Next Payment Due': '', 'Days Overdue': '',
-      'Last Payment Date': '', 'Last Payment Method': '', 'Created By': '', 'Updated By': ''
+      'Products': '', 'Original Amount (KSh)': '', 'Total Paid (KSh)': '', 'Outstanding Balance (KSh)': '',
+      'Status': '', 'Due Date': '', 'Next Payment Due': '', 'Days Overdue': '',
+      'Last Payment Date': '', 'Last Payment Amount (KSh)': '', 'Last Payment Method': '',
+      'Created By': '', 'Last Updated By': '', 'Last Updated': ''
+    },
+    {
+      'Customer Name': `Report Date: ${formatDate(asOfDate)}`, 'Customer Phone': '', 'Sale ID': '', 'Sale Date': '',
+      'Assigned Staff': '', 'Staff Phone': '', 'Staff Email': '',
+      'Products': '', 'Original Amount (KSh)': '', 'Total Paid (KSh)': '', 'Outstanding Balance (KSh)': '',
+      'Status': '', 'Due Date': '', 'Next Payment Due': '', 'Days Overdue': '',
+      'Last Payment Date': '', 'Last Payment Amount (KSh)': '', 'Last Payment Method': '',
+      'Created By': '', 'Last Updated By': '', 'Last Updated': ''
+    },
+    {
+      'Customer Name': 'OUTSTANDING ACCOUNTS', 'Customer Phone': '', 'Sale ID': '', 'Sale Date': '',
+      'Assigned Staff': '', 'Staff Phone': '', 'Staff Email': '',
+      'Products': '', 'Original Amount (KSh)': outstandingData.length.toString(), 'Total Paid (KSh)': '', 'Outstanding Balance (KSh)': '',
+      'Status': '', 'Due Date': '', 'Next Payment Due': '', 'Days Overdue': '',
+      'Last Payment Date': '', 'Last Payment Amount (KSh)': '', 'Last Payment Method': '',
+      'Created By': '', 'Last Updated By': '', 'Last Updated': ''
     },
     {
       'Customer Name': 'TOTAL OUTSTANDING', 'Customer Phone': '', 'Sale ID': '', 'Sale Date': '',
       'Assigned Staff': '', 'Staff Phone': '', 'Staff Email': '',
-      'Products Taken': '', 'Original Amount': '', 'Total Paid': '', 'Outstanding Balance': formatCurrency(totalOutstanding),
-      'Status': '', 'Payment Method': '', 'Due Date': '', 'Next Payment Due': '', 'Days Overdue': '',
-      'Last Payment Date': '', 'Last Payment Method': '', 'Created By': '', 'Updated By': ''
+      'Products': '', 'Original Amount (KSh)': '', 'Total Paid (KSh)': '', 'Outstanding Balance (KSh)': formatCurrency(totalOutstanding),
+      'Status': '', 'Due Date': '', 'Next Payment Due': '', 'Days Overdue': '',
+      'Last Payment Date': '', 'Last Payment Amount (KSh)': '', 'Last Payment Method': '',
+      'Created By': '', 'Last Updated By': '', 'Last Updated': ''
     },
     {
       'Customer Name': 'OVERDUE AMOUNT', 'Customer Phone': '', 'Sale ID': '', 'Sale Date': '',
       'Assigned Staff': '', 'Staff Phone': '', 'Staff Email': '',
-      'Products Taken': '', 'Original Amount': '', 'Total Paid': '', 'Outstanding Balance': formatCurrency(totalOverdue),
-      'Status': '', 'Payment Method': '', 'Due Date': '', 'Next Payment Due': '', 'Days Overdue': '',
-      'Last Payment Date': '', 'Last Payment Method': '', 'Created By': '', 'Updated By': ''
+      'Products': '', 'Original Amount (KSh)': '', 'Total Paid (KSh)': '', 'Outstanding Balance (KSh)': formatCurrency(totalOverdue),
+      'Status': '', 'Due Date': '', 'Next Payment Due': '', 'Days Overdue': '',
+      'Last Payment Date': '', 'Last Payment Amount (KSh)': '', 'Last Payment Method': '',
+      'Created By': '', 'Last Updated By': '', 'Last Updated': ''
     },
     {
-      'Customer Name': `Overdue Accounts: ${overdueCount}`, 'Customer Phone': '', 'Sale ID': '', 'Sale Date': '',
+      'Customer Name': 'OVERDUE ACCOUNTS', 'Customer Phone': '', 'Sale ID': '', 'Sale Date': '',
       'Assigned Staff': '', 'Staff Phone': '', 'Staff Email': '',
-      'Products Taken': '', 'Original Amount': '', 'Total Paid': '', 'Outstanding Balance': '',
-      'Status': '', 'Payment Method': '', 'Due Date': '', 'Next Payment Due': '', 'Days Overdue': '',
-      'Last Payment Date': '', 'Last Payment Method': '', 'Created By': '', 'Updated By': ''
+      'Products': '', 'Original Amount (KSh)': overdueCount.toString(), 'Total Paid (KSh)': '', 'Outstanding Balance (KSh)': '',
+      'Status': '', 'Due Date': '', 'Next Payment Due': '', 'Days Overdue': '',
+      'Last Payment Date': '', 'Last Payment Amount (KSh)': '', 'Last Payment Method': '',
+      'Created By': '', 'Last Updated By': '', 'Last Updated': ''
+    },
+    {
+      'Customer Name': 'PARTIAL PAYMENT ACCOUNTS', 'Customer Phone': '', 'Sale ID': '', 'Sale Date': '',
+      'Assigned Staff': '', 'Staff Phone': '', 'Staff Email': '',
+      'Products': '', 'Original Amount (KSh)': partialCount.toString(), 'Total Paid (KSh)': '', 'Outstanding Balance (KSh)': '',
+      'Status': '', 'Due Date': '', 'Next Payment Due': '', 'Days Overdue': '',
+      'Last Payment Date': '', 'Last Payment Amount (KSh)': '', 'Last Payment Method': '',
+      'Created By': '', 'Last Updated By': '', 'Last Updated': ''
+    },
+    {
+      'Customer Name': 'UNPAID ACCOUNTS', 'Customer Phone': '', 'Sale ID': '', 'Sale Date': '',
+      'Assigned Staff': '', 'Staff Phone': '', 'Staff Email': '',
+      'Products': '', 'Original Amount (KSh)': unpaidCount.toString(), 'Total Paid (KSh)': '', 'Outstanding Balance (KSh)': '',
+      'Status': '', 'Due Date': '', 'Next Payment Due': '', 'Days Overdue': '',
+      'Last Payment Date': '', 'Last Payment Amount (KSh)': '', 'Last Payment Method': '',
+      'Created By': '', 'Last Updated By': '', 'Last Updated': ''
     }
   ];
 
@@ -947,11 +1061,12 @@ async function generatePaymentActivityReport(period: string, startDateParam: str
       start = startOfMonth(ensureDate(startDateParam));
       end = endOfMonth(ensureDate(endDateParam || startDateParam));
       break;
-    default:
+    default: // daily
       start = startOfDay(ensureDate(startDateParam));
       end = endOfDay(ensureDate(endDateParam || startDateParam));
   }
 
+  // Fetch sales that had PAYMENT activity during the period
   const salesWithPayments = await prisma.sale.findMany({
     where: {
       payment: {
@@ -971,77 +1086,110 @@ async function generatePaymentActivityReport(period: string, startDateParam: str
         }
       },
       saleitem: { include: { product: true } },
-      assignedStaff: true  // Include assigned staff
+      assignedStaff: true
     },
     orderBy: { updatedAt: 'desc' }
   });
 
   const activityData = [];
   for (const sale of salesWithPayments) {
-    let totalPaidInPeriod = 0;
-    for (const p of sale.payment) {
-      totalPaidInPeriod += p.amount;
-    }
+    const totalPaidInPeriod = getTotalPaidInPeriod(sale, start, end);
     const totalPaidOverall = getTotalPaid(sale);
     const remainingBalance = sale.amount - totalPaidOverall;
-    const actualStatus = calculateActualSaleStatus(sale);
+    const status = calculateSaleStatus(sale);
     const productsString = getProductsString(sale);
-    const paymentMethod = getPaymentMethodString(sale);
+    const paymentsInPeriod = getPaymentsInPeriod(sale, start, end);
+    
+    // Create payment details string
+    const paymentDetails = paymentsInPeriod.map(p => 
+      `${p.method}: KSh ${formatCurrency(p.amount)} on ${formatDate(p.paidAt)}`
+    ).join('; ');
     
     activityData.push({
+      'Payment Date': formatDate(paymentsInPeriod[0]?.paidAt || sale.updatedAt),
       'Sale ID': sale.id,
-      'Sale Date': formatDate(sale.date),
+      'Original Sale Date': formatDate(sale.date),
       'Customer Name': sale.customer.name,
       'Customer Phone': sale.customer.phone || '',
       'Assigned Staff': getAssignedStaffName(sale),
-      'Staff Phone': getAssignedStaffPhone(sale),
-      'Staff Email': getAssignedStaffEmail(sale),
-      'Products Taken': productsString,
-      'Original Amount': formatCurrency(sale.amount),
-      'Paid in Period': formatCurrency(totalPaidInPeriod),
-      'Total Paid Overall': formatCurrency(totalPaidOverall),
-      'Remaining Balance': formatCurrency(remainingBalance),
-      'Status': actualStatus,
-      'Payment Method': paymentMethod,
-      'Payments Count': sale.payment.length,
-      'Last Updated': formatDateTime(sale.updatedAt),
-      'Created By': sale.createdBy || 'N/A',
+      'Products': productsString,
+      'Original Amount (KSh)': formatCurrency(sale.amount),
+      'Total Paid Overall (KSh)': formatCurrency(totalPaidOverall),
+      'Remaining Balance (KSh)': formatCurrency(remainingBalance),
+      'Status': status,
+      'Payments in Period (KSh)': formatCurrency(totalPaidInPeriod),
+      'Payment Details': paymentDetails,
       'Updated By': sale.updatedBy || 'N/A'
     });
   }
 
   let totalPaidInPeriod = 0;
+  let paidSales = 0;
+  let partialSales = 0;
+  let unpaidSales = 0;
+  
   for (const d of activityData) {
-    totalPaidInPeriod += parseFloat(d['Paid in Period'] as string);
+    totalPaidInPeriod += parseFloat(d['Payments in Period (KSh)'] as string);
+    const status = d['Status'] as string;
+    if (status === 'PAID') paidSales++;
+    else if (status === 'PARTIAL') partialSales++;
+    else unpaidSales++;
   }
-  const totalSalesUpdated = activityData.length;
 
+  const periodLabel = period === 'daily' ? 'Daily' : period === 'weekly' ? 'Weekly' : 'Monthly';
   const summaryRows = [
     {
-      'Sale ID': '--- SUMMARY ---', 'Sale Date': '', 'Customer Name': '', 'Customer Phone': '',
-      'Assigned Staff': '', 'Staff Phone': '', 'Staff Email': '',
-      'Products Taken': '', 'Original Amount': '', 'Paid in Period': '', 'Total Paid Overall': '',
-      'Remaining Balance': '', 'Status': '', 'Payment Method': '', 'Payments Count': '', 'Last Updated': '',
-      'Created By': '', 'Updated By': ''
+      'Payment Date': `--- ${periodLabel} PAYMENT ACTIVITY ---`, 'Sale ID': '', 'Original Sale Date': '',
+      'Customer Name': '', 'Customer Phone': '', 'Assigned Staff': '',
+      'Products': '', 'Original Amount (KSh)': '', 'Total Paid Overall (KSh)': '', 'Remaining Balance (KSh)': '',
+      'Status': '', 'Payments in Period (KSh)': '', 'Payment Details': '', 'Updated By': ''
     },
     {
-      'Sale ID': 'TOTAL', 'Sale Date': '', 'Customer Name': '', 'Customer Phone': '',
-      'Assigned Staff': '', 'Staff Phone': '', 'Staff Email': '',
-      'Products Taken': '', 'Original Amount': '', 'Paid in Period': formatCurrency(totalPaidInPeriod),
-      'Total Paid Overall': '', 'Remaining Balance': '', 'Status': '',
-      'Payment Method': '', 'Payments Count': totalSalesUpdated, 'Last Updated': '', 'Created By': '', 'Updated By': ''
+      'Payment Date': `Period: ${formatDate(start)} to ${formatDate(end)}`, 'Sale ID': '', 'Original Sale Date': '',
+      'Customer Name': '', 'Customer Phone': '', 'Assigned Staff': '',
+      'Products': '', 'Original Amount (KSh)': '', 'Total Paid Overall (KSh)': '', 'Remaining Balance (KSh)': '',
+      'Status': '', 'Payments in Period (KSh)': '', 'Payment Details': '', 'Updated By': ''
+    },
+    {
+      'Payment Date': 'SALES WITH PAYMENTS', 'Sale ID': '', 'Original Sale Date': '',
+      'Customer Name': '', 'Customer Phone': '', 'Assigned Staff': '',
+      'Products': '', 'Original Amount (KSh)': activityData.length.toString(), 'Total Paid Overall (KSh)': '', 'Remaining Balance (KSh)': '',
+      'Status': '', 'Payments in Period (KSh)': '', 'Payment Details': '', 'Updated By': ''
+    },
+    {
+      'Payment Date': 'TOTAL PAYMENTS RECEIVED', 'Sale ID': '', 'Original Sale Date': '',
+      'Customer Name': '', 'Customer Phone': '', 'Assigned Staff': '',
+      'Products': '', 'Original Amount (KSh)': '', 'Total Paid Overall (KSh)': '', 'Remaining Balance (KSh)': '',
+      'Status': '', 'Payments in Period (KSh)': formatCurrency(totalPaidInPeriod), 'Payment Details': '', 'Updated By': ''
+    },
+    {
+      'Payment Date': 'PAID SALES', 'Sale ID': '', 'Original Sale Date': '',
+      'Customer Name': '', 'Customer Phone': '', 'Assigned Staff': '',
+      'Products': '', 'Original Amount (KSh)': paidSales.toString(), 'Total Paid Overall (KSh)': '', 'Remaining Balance (KSh)': '',
+      'Status': '', 'Payments in Period (KSh)': '', 'Payment Details': '', 'Updated By': ''
+    },
+    {
+      'Payment Date': 'PARTIAL SALES', 'Sale ID': '', 'Original Sale Date': '',
+      'Customer Name': '', 'Customer Phone': '', 'Assigned Staff': '',
+      'Products': '', 'Original Amount (KSh)': partialSales.toString(), 'Total Paid Overall (KSh)': '', 'Remaining Balance (KSh)': '',
+      'Status': '', 'Payments in Period (KSh)': '', 'Payment Details': '', 'Updated By': ''
+    },
+    {
+      'Payment Date': 'UNPAID SALES', 'Sale ID': '', 'Original Sale Date': '',
+      'Customer Name': '', 'Customer Phone': '', 'Assigned Staff': '',
+      'Products': '', 'Original Amount (KSh)': unpaidSales.toString(), 'Total Paid Overall (KSh)': '', 'Remaining Balance (KSh)': '',
+      'Status': '', 'Payments in Period (KSh)': '', 'Payment Details': '', 'Updated By': ''
     }
   ];
 
   const finalData = [...activityData, ...summaryRows];
   const csv = arrayToCSV(finalData);
   
-  const periodLabel = period === 'daily' ? 'day' : period;
   return new NextResponse(csv, {
     status: 200,
     headers: {
       'Content-Type': 'text/csv; charset=utf-8',
-      'Content-Disposition': `attachment; filename="payment-activity-${periodLabel}-${formatDate(start)}.csv"`,
+      'Content-Disposition': `attachment; filename="payment-activity-${periodLabel.toLowerCase()}-${formatDate(start)}.csv"`,
     }
   });
 }
@@ -1084,14 +1232,15 @@ async function recordPayment(data: any) {
     return NextResponse.json({ error: 'Sale not found' }, { status: 404 });
   }
 
-  let totalPaidSoFar = 0;
-  for (const p of sale.payment) {
-    if (p.status === 'CLEARED' || p.status === 'COMPLETED') {
-      totalPaidSoFar += p.amount;
-    }
-  }
+  let totalPaidSoFar = getTotalPaid(sale);
   const newTotalPaid = totalPaidSoFar + amount;
-  const newStatus = newTotalPaid >= sale.amount ? 'PAID' : 'PARTIAL';
+  const remainingBalance = sale.amount - newTotalPaid;
+  let newStatus = 'UNPAID';
+  if (remainingBalance <= 0.01) {
+    newStatus = 'PAID';
+  } else if (newTotalPaid > 0) {
+    newStatus = 'PARTIAL';
+  }
 
   const payment = await prisma.payment.create({
     data: {
@@ -1116,28 +1265,11 @@ async function recordPayment(data: any) {
     }
   });
 
-  try {
-    await prisma.saleauditlog.create({
-      data: {
-        saleId,
-        action: 'PAYMENT',
-        fieldName: 'amount',
-        oldValue: JSON.stringify({ totalPaid: totalPaidSoFar }),
-        newValue: JSON.stringify({ paymentAmount: amount, totalPaid: newTotalPaid }),
-        difference: `Payment of ${formatCurrency(amount)} received. New status: ${newStatus}`,
-        changedBy: recordedBy || 'system',
-        changedAt: new Date()
-      }
-    });
-  } catch (auditError) {
-    console.warn('Audit log creation failed:', auditError);
-  }
-
   return NextResponse.json({
     success: true,
     payment,
     newStatus,
-    remainingBalance: sale.amount - newTotalPaid
+    remainingBalance: remainingBalance > 0 ? remainingBalance : 0
   });
 }
 
@@ -1164,7 +1296,7 @@ async function generateBulkPaymentReport(data: any) {
               product: true
             }
           },
-          assignedStaff: true  // Include assigned staff
+          assignedStaff: true
         } 
       }
     },
@@ -1183,7 +1315,7 @@ async function generateBulkPaymentReport(data: any) {
       'Assigned Staff': getAssignedStaffName(payment.sale),
       'Sale ID': payment.saleId,
       'Products': productsString,
-      'Amount': formatCurrency(payment.amount),
+      'Amount (KSh)': formatCurrency(payment.amount),
       'Method': payment.method
     });
   }
@@ -1221,7 +1353,7 @@ async function generatePaymentTrends(data: any) {
         sale: { 
           include: { 
             customer: true,
-            assignedStaff: true  // Include assigned staff
+            assignedStaff: true
           } 
         }
       }
@@ -1237,16 +1369,14 @@ async function generatePaymentTrends(data: any) {
       if (p.sale.customerId) uniqueCustomersSet.add(p.sale.customerId);
       if (p.sale.assignedStaffId) uniqueStaffSet.add(p.sale.assignedStaffId);
     }
-    const uniqueCustomers = uniqueCustomersSet.size;
-    const uniqueStaff = uniqueStaffSet.size;
     
     monthlyData.push({
       'Month': formatDate(monthStart).substring(0, 7),
-      'Total Payments': formatCurrency(totalAmount),
+      'Total Payments (KSh)': formatCurrency(totalAmount),
       'Payment Count': payments.length,
-      'Unique Customers': uniqueCustomers,
-      'Unique Staff Involved': uniqueStaff,
-      'Average Payment': formatCurrency(payments.length > 0 ? totalAmount / payments.length : 0)
+      'Unique Customers': uniqueCustomersSet.size,
+      'Unique Staff': uniqueStaffSet.size,
+      'Average Payment (KSh)': formatCurrency(payments.length > 0 ? totalAmount / payments.length : 0)
     });
   }
 

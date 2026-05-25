@@ -380,10 +380,6 @@ function AccountingReportsModal({ isOpen, onClose, customers, getUserDisplayName
           url = `/api/paymentReports?type=daily&date=${accountingDate}`;
           filename = `daily-payments-${accountingDate}.csv`;
           break;
-        case "weekly":
-          url = `/api/paymentReports?type=weekly&date=${accountingDate}`;
-          filename = `weekly-report-${accountingDate}.csv`;
-          break;
         case "monthly":
           url = `/api/paymentReports?type=monthly&date=${accountingDate}`;
           filename = `monthly-report-${accountingDate}.csv`;
@@ -591,51 +587,86 @@ function AccountingReportsModal({ isOpen, onClose, customers, getUserDisplayName
 
 // ==================== ACCOUNTING PAGE COMPONENT ====================
 
+// ==================== ACCOUNTING PAGE COMPONENT ====================
+
 function AccountingPage({ sales, getUserDisplayName }: { sales: Sale[], getUserDisplayName: (email: string | null | undefined) => { name: string, email: string } }) {
   const [recentlyCleared, setRecentlyCleared] = useState<RecentlyClearedDebt[]>([]);
+  const [recentlyUpdatedSales, setRecentlyUpdatedSales] = useState<Sale[]>([]);
   const [loading, setLoading] = useState(true);
   const [timeRange, setTimeRange] = useState<"today" | "week" | "month">("week");
 
-  const analyzeRecentlyClearedDebts = useCallback(() => {
-    const cleared: RecentlyClearedDebt[] = [];
+  // Track sales that had ANY update (payment, status change, etc.) during the period
+  const analyzeRecentlyUpdatedSales = useCallback(() => {
+    const updatedSales: Sale[] = [];
+    const clearedDebts: RecentlyClearedDebt[] = [];
     const now = new Date();
     let thresholdDate = new Date();
+    
     switch (timeRange) {
-      case "today": thresholdDate.setHours(0, 0, 0, 0); break;
-      case "week": thresholdDate.setDate(now.getDate() - 7); break;
-      case "month": thresholdDate.setMonth(now.getMonth() - 1); break;
+      case "today": 
+        thresholdDate.setHours(0, 0, 0, 0); 
+        break;
+      case "week": 
+        thresholdDate.setDate(now.getDate() - 7); 
+        thresholdDate.setHours(0, 0, 0, 0);
+        break;
+      case "month": 
+        thresholdDate.setMonth(now.getMonth() - 1); 
+        thresholdDate.setHours(0, 0, 0, 0);
+        break;
     }
+
     sales.forEach(sale => {
-      if (sale.status === "PAID" && sale.updatedAt) {
+      // Check if the sale was UPDATED (any change) during the period
+      // This includes sales that were created long ago but had activity now
+      if (sale.updatedAt) {
         const updatedDate = new Date(sale.updatedAt);
         if (updatedDate >= thresholdDate) {
-          const totalPayments = sale.payments?.reduce((sum, p) => sum + Number(p.amount), 0) || 0;
-          const recentPayments = sale.payments?.filter(p => new Date(p.date) >= thresholdDate);
-          const lastPayment = recentPayments?.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())[0];
-          if (totalPayments >= sale.amount - 0.01) {
-            cleared.push({
-              saleId: sale.id,
-              customerName: sale.customer?.name || "Unknown",
-              customerPhone: sale.customer?.phone || null,
-              originalAmount: sale.amount,
-              clearedAmount: totalPayments,
-              clearedAt: sale.updatedAt,
-              clearedBy: sale.updatedBy || "System",
-              previousStatus: "UNPAID",
-              paymentMethod: lastPayment?.method || "Unknown"
-            });
+          // This sale had activity during the selected period
+          updatedSales.push(sale);
+          
+          // If the sale became PAID during this period, track it as a cleared debt
+          if (sale.status === "PAID") {
+            const totalPayments = sale.payments?.reduce((sum, p) => sum + Number(p.amount), 0) || 0;
+            // Find the most recent payment in this period
+            const recentPayments = sale.payments?.filter(p => new Date(p.date) >= thresholdDate);
+            const lastPayment = recentPayments?.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())[0];
+            
+            if (totalPayments >= sale.amount - 0.01) {
+              clearedDebts.push({
+                saleId: sale.id,
+                customerName: sale.customer?.name || "Unknown",
+                customerPhone: sale.customer?.phone || null,
+                originalAmount: sale.amount,
+                clearedAmount: totalPayments,
+                clearedAt: sale.updatedAt,
+                clearedBy: sale.updatedBy || "System",
+                previousStatus: "UNPAID",
+                paymentMethod: lastPayment?.method || "Unknown"
+              });
+            }
           }
         }
       }
     });
-    cleared.sort((a, b) => new Date(b.clearedAt).getTime() - new Date(a.clearedAt).getTime());
-    setRecentlyCleared(cleared);
+    
+    // Sort by most recent update first
+    updatedSales.sort((a, b) => {
+      const dateA = a.updatedAt ? new Date(a.updatedAt).getTime() : 0;
+      const dateB = b.updatedAt ? new Date(b.updatedAt).getTime() : 0;
+      return dateB - dateA;
+    });
+    
+    clearedDebts.sort((a, b) => new Date(b.clearedAt).getTime() - new Date(a.clearedAt).getTime());
+    
+    setRecentlyUpdatedSales(updatedSales);
+    setRecentlyCleared(clearedDebts);
     setLoading(false);
   }, [sales, timeRange]);
 
   useEffect(() => {
-    analyzeRecentlyClearedDebts();
-  }, [analyzeRecentlyClearedDebts]);
+    analyzeRecentlyUpdatedSales();
+  }, [analyzeRecentlyUpdatedSales]);
 
   const formatCurrency = (amount: number): string => {
     return new Intl.NumberFormat('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(amount);
@@ -650,18 +681,36 @@ function AccountingPage({ sales, getUserDisplayName }: { sales: Sale[], getUserD
   };
 
   const totalCleared = recentlyCleared.reduce((sum, debt) => sum + debt.clearedAmount, 0);
+  const totalUpdatedAmount = recentlyUpdatedSales.reduce((sum, sale) => sum + sale.amount, 0);
+
+  // Helper to determine if a sale was created before the period but updated during it
+  const wasCreatedBeforePeriod = (sale: Sale): boolean => {
+    if (!sale.createdAt) return false;
+    let thresholdDate = new Date();
+    switch (timeRange) {
+      case "today": thresholdDate.setHours(0, 0, 0, 0); break;
+      case "week": thresholdDate.setDate(new Date().getDate() - 7); thresholdDate.setHours(0, 0, 0, 0); break;
+      case "month": thresholdDate.setMonth(new Date().getMonth() - 1); thresholdDate.setHours(0, 0, 0, 0); break;
+    }
+    return new Date(sale.createdAt) < thresholdDate;
+  };
 
   return (
     <div className="space-y-4">
+      {/* Header Stats */}
       <div className="bg-gradient-to-r from-green-600 to-teal-600 rounded-xl p-4 text-white">
         <div className="flex justify-between items-center flex-wrap gap-2">
           <div>
             <h2 className="text-lg font-bold">Accounting Dashboard</h2>
-            <p className="text-xs opacity-90">Track cleared debts and financial activity</p>
+            <p className="text-xs opacity-90">Track payment activity and cleared debts</p>
           </div>
           <div className="flex gap-2">
             {["today", "week", "month"].map((range) => (
-              <button key={range} onClick={() => setTimeRange(range as any)} className={`px-3 py-1 rounded-lg text-xs transition-colors ${timeRange === range ? "bg-white text-green-700 font-semibold" : "bg-green-700 text-white hover:bg-green-800"}`}>
+              <button 
+                key={range} 
+                onClick={() => setTimeRange(range as any)} 
+                className={`px-3 py-1 rounded-lg text-xs transition-colors ${timeRange === range ? "bg-white text-green-700 font-semibold" : "bg-green-700 text-white hover:bg-green-800"}`}
+              >
                 {range === "today" ? "Today" : range === "week" ? "This Week" : "This Month"}
               </button>
             ))}
@@ -669,45 +718,180 @@ function AccountingPage({ sales, getUserDisplayName }: { sales: Sale[], getUserD
         </div>
       </div>
 
+      {/* Summary Cards */}
       <div className="grid grid-cols-2 gap-3">
         <div className="bg-white dark:bg-gray-800 rounded-xl p-3 shadow-sm border-l-4 border-green-500">
-          <div className="flex items-center gap-2 mb-1"><TrendingUp size={16} className="text-green-600" /><span className="text-xs text-gray-600 dark:text-gray-400">Debts Cleared</span></div>
+          <div className="flex items-center gap-2 mb-1">
+            <TrendingUp size={16} className="text-green-600" />
+            <span className="text-xs text-gray-600 dark:text-gray-400">Debts Cleared</span>
+          </div>
           <div className="text-xl font-bold text-green-700 dark:text-green-400">{recentlyCleared.length}</div>
-          <div className="text-xs text-gray-500">in selected period</div>
+          <div className="text-xs text-gray-500">during period</div>
         </div>
         <div className="bg-white dark:bg-gray-800 rounded-xl p-3 shadow-sm border-l-4 border-blue-500">
-          <div className="flex items-center gap-2 mb-1"><Receipt size={16} className="text-blue-600" /><span className="text-xs text-gray-600 dark:text-gray-400">Total Amount</span></div>
+          <div className="flex items-center gap-2 mb-1">
+            <Receipt size={16} className="text-blue-600" />
+            <span className="text-xs text-gray-600 dark:text-gray-400">Cleared Amount</span>
+          </div>
           <div className="text-xl font-bold text-blue-700 dark:text-blue-400">Ksh {formatCurrency(totalCleared)}</div>
           <div className="text-xs text-gray-500">recovered</div>
         </div>
       </div>
 
+      {/* Activity Summary */}
+      <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-3">
+        <div className="flex items-center justify-between mb-2">
+          <div className="flex items-center gap-2">
+            <ClockIcon size={14} className="text-blue-500" />
+            <span className="text-xs font-semibold text-gray-700 dark:text-gray-300">Period Activity</span>
+          </div>
+          <span className="text-xs text-gray-500">{recentlyUpdatedSales.length} sales updated</span>
+        </div>
+        <div className="space-y-1 text-xs text-gray-600 dark:text-gray-400">
+          <p>• Sales with payment activity: {recentlyUpdatedSales.length}</p>
+          <p>• Total value of updated sales: Ksh {formatCurrency(totalUpdatedAmount)}</p>
+          <p>• Sales that became paid: {recentlyCleared.length}</p>
+          <p className="text-blue-500 text-[10px] mt-1">
+            ℹ️ Includes sales created at any time that had updates during this period
+          </p>
+        </div>
+      </div>
+
+      {/* Recently Cleared Debts */}
       <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700">
         <div className="p-3 border-b dark:border-gray-700">
-          <h3 className="font-semibold text-black dark:text-white flex items-center gap-2"><ClockIcon size={16} className="text-green-600" />Recently Cleared Debts</h3>
-          <p className="text-xs text-gray-500 mt-1">Sales that were recently paid off</p>
+          <h3 className="font-semibold text-black dark:text-white flex items-center gap-2">
+            <CheckCircle size={16} className="text-green-600" />
+            Recently Cleared Debts
+          </h3>
+          <p className="text-xs text-gray-500 mt-1">Sales that were paid off during this period</p>
         </div>
         <div className="divide-y dark:divide-gray-700">
-          {loading ? (<div className="p-8 text-center text-gray-500">Loading...</div>) : recentlyCleared.length === 0 ? (
-            <div className="p-8 text-center text-gray-500"><CheckCircle size={32} className="mx-auto text-green-300 mb-2" />No debts cleared in this period</div>
+          {loading ? (
+            <div className="p-8 text-center text-gray-500">Loading...</div>
+          ) : recentlyCleared.length === 0 ? (
+            <div className="p-8 text-center text-gray-500">
+              <CheckCircle size={32} className="mx-auto text-green-300 mb-2" />
+              No debts cleared in this period
+            </div>
           ) : (
             recentlyCleared.map((debt, idx) => (
               <div key={idx} className="p-3 hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors">
                 <div className="flex justify-between items-start mb-2">
-                  <div><div className="font-medium text-black dark:text-white">{debt.customerName}</div>{debt.customerPhone && <div className="text-xs text-gray-500">{debt.customerPhone}</div>}</div>
-                  <div className="text-right"><div className="text-sm font-bold text-green-700 dark:text-green-400">Ksh {formatCurrency(debt.clearedAmount)}</div><div className="text-xs text-gray-500">Sale #{debt.saleId}</div></div>
+                  <div>
+                    <div className="font-medium text-black dark:text-white">{debt.customerName}</div>
+                    {debt.customerPhone && <div className="text-xs text-gray-500">{debt.customerPhone}</div>}
+                  </div>
+                  <div className="text-right">
+                    <div className="text-sm font-bold text-green-700 dark:text-green-400">Ksh {formatCurrency(debt.clearedAmount)}</div>
+                    <div className="text-xs text-gray-500">Sale #{debt.saleId}</div>
+                  </div>
                 </div>
                 <div className="flex flex-wrap gap-3 text-xs text-gray-600 dark:text-gray-400">
-                  <div className="flex items-center gap-1"><Calendar size={10} /><span>Cleared: {formatDateTime(debt.clearedAt)}</span></div>
-                  <div className="flex items-center gap-1"><User size={10} /><span>By: {getUserDisplayName(debt.clearedBy).name}</span></div>
-                  <div className="flex items-center gap-1"><CreditCard size={10} /><span>Method: {debt.paymentMethod}</span></div>
+                  <div className="flex items-center gap-1">
+                    <Calendar size={10} />
+                    <span>Cleared: {formatDateTime(debt.clearedAt)}</span>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <User size={10} />
+                    <span>By: {getUserDisplayName(debt.clearedBy).name}</span>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <CreditCard size={10} />
+                    <span>Method: {debt.paymentMethod}</span>
+                  </div>
                 </div>
                 <div className="mt-2 flex items-center gap-2">
-                  <div className="flex-1 bg-gray-200 dark:bg-gray-700 rounded-full h-1.5"><div className="bg-green-600 rounded-full h-1.5 transition-all" style={{ width: `${(debt.clearedAmount / debt.originalAmount) * 100}%` }} /></div>
+                  <div className="flex-1 bg-gray-200 dark:bg-gray-700 rounded-full h-1.5">
+                    <div className="bg-green-600 rounded-full h-1.5 transition-all" style={{ width: `${(debt.clearedAmount / debt.originalAmount) * 100}%` }} />
+                  </div>
                   <span className="text-xs text-gray-500">{Math.round((debt.clearedAmount / debt.originalAmount) * 100)}%</span>
                 </div>
               </div>
             ))
+          )}
+        </div>
+      </div>
+
+      {/* Recently Updated Sales (All Activity) */}
+      <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700">
+        <div className="p-3 border-b dark:border-gray-700">
+          <h3 className="font-semibold text-black dark:text-white flex items-center gap-2">
+            <History size={16} className="text-blue-600" />
+            Recent Sales Activity
+          </h3>
+          <p className="text-xs text-gray-500 mt-1">All sales that had updates during this period</p>
+        </div>
+        <div className="divide-y dark:divide-gray-700 max-h-96 overflow-y-auto">
+          {loading ? (
+            <div className="p-8 text-center text-gray-500">Loading...</div>
+          ) : recentlyUpdatedSales.length === 0 ? (
+            <div className="p-8 text-center text-gray-500">
+              <History size={32} className="mx-auto text-gray-300 mb-2" />
+              No sales updated in this period
+            </div>
+          ) : (
+            recentlyUpdatedSales.map((sale) => {
+              const isOldSale = wasCreatedBeforePeriod(sale);
+              return (
+                <div key={sale.id} className="p-3 hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors">
+                  <div className="flex justify-between items-start mb-2">
+                    <div>
+                      <div className="font-medium text-black dark:text-white flex items-center gap-2">
+                        {sale.customer?.name || "Unknown"}
+                        {isOldSale && (
+                          <span className="text-[10px] bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded-full">
+                            Old Sale
+                          </span>
+                        )}
+                      </div>
+                      {sale.customer?.phone && <div className="text-xs text-gray-500">{sale.customer.phone}</div>}
+                    </div>
+                    <div className="text-right">
+                      <div className={`text-sm font-bold ${sale.status === "PAID" ? "text-green-600" : sale.status === "PARTIAL" ? "text-orange-600" : "text-red-600"}`}>
+                        Ksh {formatCurrency(sale.amount)}
+                      </div>
+                      <div className="text-xs text-gray-500">Sale #{sale.id}</div>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2 text-xs text-gray-600 dark:text-gray-400 mb-2">
+                    <div className="flex items-center gap-1">
+                      <Calendar size={10} />
+                      <span>Created: {formatDateTime(sale.createdAt)}</span>
+                    </div>
+                    <div className="flex items-center gap-1">
+                      <ClockIcon size={10} />
+                      <span>Updated: {formatDateTime(sale.updatedAt)}</span>
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap gap-2 text-xs">
+                    <span className={`px-2 py-0.5 rounded-full ${sale.status === "PAID" ? "bg-green-100 text-green-700" : sale.status === "PARTIAL" ? "bg-orange-100 text-orange-700" : "bg-red-100 text-red-700"}`}>
+                      Status: {sale.status}
+                    </span>
+                    <span className="px-2 py-0.5 rounded-full bg-blue-100 text-blue-700">
+                      Due: Ksh {formatCurrency(sale.remainingAmount)}
+                    </span>
+                    {sale.updatedBy && (
+                      <span className="px-2 py-0.5 rounded-full bg-gray-100 text-gray-600">
+                        By: {getUserDisplayName(sale.updatedBy).name}
+                      </span>
+                    )}
+                  </div>
+                  {sale.payments && sale.payments.length > 0 && (
+                    <div className="mt-2 pt-2 border-t border-gray-100 dark:border-gray-700">
+                      <p className="text-[10px] text-gray-400 mb-1">Recent payments:</p>
+                      <div className="flex flex-wrap gap-1">
+                        {sale.payments.slice(-3).map((payment, idx) => (
+                          <span key={idx} className="text-[10px] px-1.5 py-0.5 bg-gray-100 dark:bg-gray-700 rounded-full">
+                            {payment.method}: Ksh {formatCurrency(payment.amount)}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })
           )}
         </div>
       </div>
