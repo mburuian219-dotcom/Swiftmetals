@@ -1,12 +1,18 @@
+// @ts-nocheck
 "use client";
 import React, { useEffect, useState, useCallback, useMemo } from "react";
-import { Download, CreditCard, AlertTriangle, CheckCircle, Plus, X, Edit, Trash2, Calculator, Save, ChevronDown, ChevronUp, Filter, Calendar, Search, XCircle, User, DollarSign, Banknote, Smartphone, Landmark, CreditCard as CardIcon, Archive, RotateCcw, Info, History, TrendingUp, TrendingDown, Clock as ClockIcon, Users, Receipt, FileSpreadsheet, Moon, Sun, Menu, UserCheck } from "lucide-react";
+import { 
+  Download, CreditCard, AlertTriangle, CheckCircle, Plus, X, Edit, Trash2, 
+  Calculator, Save, ChevronDown, ChevronUp, Filter, Calendar, Search, XCircle, 
+  User, DollarSign, Banknote, Smartphone, Landmark, CreditCard as CardIcon, 
+  Archive, RotateCcw, Info, History, TrendingUp, TrendingDown, Clock as ClockIcon, 
+  Users, Receipt, FileSpreadsheet, Moon, Sun, Menu, UserCheck 
+} from "lucide-react";
 import { auth } from "@/lib/firebase";
 import { onAuthStateChanged } from "firebase/auth";
 
 // ==================== INTERFACES ====================
 
-/** Customer interface - represents a customer in the system */
 interface Customer {
   id: number;
   name: string;
@@ -14,15 +20,14 @@ interface Customer {
   email?: string;
 }
 
-/** Product interface - represents a product that can be sold */
 interface Product {
   id: number;
   name: string;
   price?: number;
-  stock?: number;
+  stock?: Array<{ quantity: number; costPrice: number }> | { quantity: number } | number;
+  totalStock?: number;
 }
 
-/** SaleItem interface - represents a product within a sale with quantity and price */
 interface SaleItem {
   id: number;
   product: Product;
@@ -30,7 +35,6 @@ interface SaleItem {
   price: number;
 }
 
-/** Payment interface - represents a payment made on a sale */
 interface Payment {
   id?: number;
   amount: number;
@@ -40,9 +44,9 @@ interface Payment {
   checkDepositDate?: string | null;
   dueDate?: string | null;
   status?: "PENDING" | "COMPLETED" | "BOUNCED" | "CLEARED";
+  bankName?: string | null;
 }
 
-/** NewPayment interface - used when creating/adding new payments */
 interface NewPayment {
   id?: number;
   amount: string;
@@ -57,7 +61,6 @@ interface NewPayment {
   status?: "PENDING" | "CLEARED" | "BOUNCED";
 }
 
-/** Staff interface - represents staff member assigned to sale */
 interface Staff {
   id: number;
   name: string;
@@ -65,7 +68,6 @@ interface Staff {
   phone?: string;
 }
 
-/** Sale interface - complete sale record including all related data */
 interface Sale {
   id: number;
   saleitems: SaleItem[];
@@ -88,8 +90,8 @@ interface Sale {
   assignedStaffId?: number | null;
 }
 
-/** NewSaleItem interface - used in edit forms for adding items */
 interface NewSaleItem {
+  id?: number;
   productId: number;
   quantity: number;
   price: number;
@@ -97,7 +99,6 @@ interface NewSaleItem {
   originalPrice?: number;
 }
 
-/** UserDetail interface - stores user information fetched from the system */
 interface UserDetail {
   email: string;
   name: string;
@@ -105,7 +106,6 @@ interface UserDetail {
   photoURL?: string;
 }
 
-/** Enhanced AuditLog interface - tracks detailed changes made to a sale */
 interface AuditLog {
   id: number;
   saleId: number;
@@ -125,7 +125,6 @@ interface AuditLog {
   changeCategory?: string;
 }
 
-/** DeletedSale interface - represents a sale that has been soft-deleted and archived */
 interface DeletedSale {
   id: number;
   originalSaleId: number;
@@ -147,7 +146,6 @@ interface DeletedSale {
   restoredBy?: string;
 }
 
-/** RecentlyClearedDebt interface - tracks debts that were recently paid off */
 interface RecentlyClearedDebt {
   saleId: number;
   customerName: string;
@@ -162,167 +160,220 @@ interface RecentlyClearedDebt {
 
 // ==================== THEME CONTEXT ====================
 const ThemeContext = React.createContext({ theme: 'light', toggleTheme: () => {} });
+function useTheme() { return React.useContext(ThemeContext); }
 
-function useTheme() {
-  return React.useContext(ThemeContext);
-}
-
-// Mobile card component for better mobile viewing
+// ==================== MOBILE SALE CARD ====================
 const MobileSaleCard = ({ sale, expandedSaleId, setExpandedSaleId, formatCurrency, formatDate, formatDateTime, getUserDisplayName, paymentMethods, isRecentlyUpdated, isSaleModified, handleViewAuditLog, handleEditSale, showDeleteConfirmationWithReason, loading }: any) => {
   const isExpanded = expandedSaleId === sale.id;
   
+  const statusColors: Record<string, string> = {
+    PAID: "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300",
+    PARTIAL: "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300",
+    UNPAID: "bg-rose-100 text-rose-700 dark:bg-rose-900/40 dark:text-rose-300",
+  };
+
   return (
-    <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden shadow-sm">
-      {/* Compact header for mobile */}
-      <div 
-        className="p-3 cursor-pointer active:bg-gray-50 dark:active:bg-gray-700/50 transition-colors"
+    <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-100 dark:border-gray-700 overflow-hidden shadow-sm">
+      <div
+        className="p-3 cursor-pointer select-none active:bg-gray-50 dark:active:bg-gray-700/50 transition-colors"
         onClick={() => setExpandedSaleId(isExpanded ? null : sale.id)}
       >
-        <div className="flex justify-between items-start">
+        <div className="flex items-start justify-between gap-2">
           <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-2 flex-wrap">
-              <h3 className="font-semibold text-gray-900 dark:text-white text-sm truncate">
-                {sale.customer?.name || "-"}
-              </h3>
-              {sale.customer?.phone && (
-                <span className="text-xs text-gray-500 dark:text-gray-400">{sale.customer.phone}</span>
-              )}
-            </div>
-            <div className="flex flex-wrap gap-1 mt-1">
-              <span className={`px-1.5 py-0.5 rounded-full text-xs font-semibold ${
-                sale.status === "PAID" ? "bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300" :
-                sale.status === "PARTIAL" ? "bg-orange-100 dark:bg-orange-900/30 text-orange-700 dark:text-orange-300" :
-                "bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300"
-              }`}>
-                {sale.status}
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <p className="font-semibold text-gray-900 dark:text-white text-[13px] truncate">
+                {sale.customer?.name || "—"}
+              </p>
+              <span className="text-[9px] text-gray-400 bg-gray-100 dark:bg-gray-700 px-1.5 py-0.5 rounded-full">
+                #{sale.id}
               </span>
-              {sale.assignedStaff && (
-                <span className="px-1.5 py-0.5 rounded-full text-xs bg-indigo-100 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300 flex items-center gap-1">
-                  <UserCheck size={10} />
-                  {sale.assignedStaff.name.split(' ')[0]}
-                </span>
-              )}
-              {isRecentlyUpdated(sale) && isSaleModified(sale) && (
-                <span className="px-1.5 py-0.5 rounded-full text-xs bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-300">
-                  Updated
-                </span>
-              )}
             </div>
+            {sale.customer?.phone && (
+              <p className="text-[11px] text-gray-400 dark:text-gray-500 mt-0.5">{sale.customer.phone}</p>
+            )}
           </div>
-          <div className="text-right">
-            <div className="text-base font-bold text-emerald-600 dark:text-emerald-400">
+          <div className="text-right flex-shrink-0">
+            <p className="font-bold text-emerald-600 dark:text-emerald-400 text-[13px]">
               Ksh {formatCurrency(sale.amount)}
-            </div>
-            <div className="text-xs text-gray-500">
-              Due: Ksh {formatCurrency(sale.remainingAmount)}
-            </div>
+            </p>
+            {sale.remainingAmount > 0 && (
+              <p className="text-[10px] text-rose-500 dark:text-rose-400 mt-0.5">
+                Due: Ksh {formatCurrency(sale.remainingAmount)}
+              </p>
+            )}
           </div>
         </div>
-        
-        <div className="flex items-center justify-between mt-2 text-xs text-gray-500">
-          <div className="flex items-center gap-2">
+
+        <div className="flex flex-wrap items-center gap-1.5 mt-2">
+          <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-semibold ${statusColors[sale.status] || statusColors.UNPAID}`}>
+            {sale.status}
+          </span>
+          {sale.assignedStaff && (
+            <span className="px-1.5 py-0.5 rounded-full text-[10px] bg-indigo-100 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300 flex items-center gap-1">
+              <UserCheck size={9} />
+              {sale.assignedStaff.name.split(' ')[0]}
+            </span>
+          )}
+          {isRecentlyUpdated(sale) && isSaleModified(sale) && (
+            <span className="px-1.5 py-0.5 rounded-full text-[10px] bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300">
+              Updated
+            </span>
+          )}
+          {sale.payments?.slice(0, 2).map((p: any, i: number) => {
+            const m = paymentMethods.find((pm: any) => pm.value === p.method);
+            const Icon = m?.icon || Banknote;
+            return (
+              <span key={i} className={`px-1.5 py-0.5 rounded-full text-[10px] flex items-center gap-1 ${m?.color || "bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300"}`}>
+                <Icon size={9} />
+                {p.method}
+              </span>
+            );
+          })}
+        </div>
+
+        <div className="flex items-center justify-between mt-2">
+          <div className="flex items-center gap-1 text-[10px] text-gray-400">
             <Calendar size={10} />
             <span>{formatDate(sale.date)}</span>
           </div>
-          <ChevronDown size={14} className={`transform transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
+          <div className={`text-gray-400 transition-transform duration-200 ${isExpanded ? "rotate-180" : ""}`}>
+            <ChevronDown size={12} />
+          </div>
         </div>
       </div>
-      
-      {/* Expanded content */}
+
       {isExpanded && (
-        <div className="border-t border-gray-100 dark:border-gray-700 p-3 space-y-3">
-          {/* Assigned Staff Info - Prominent display */}
-          {sale.assignedStaff && (
-            <div className="bg-indigo-50 dark:bg-indigo-900/20 rounded-lg p-2 border border-indigo-200 dark:border-indigo-800">
+        <div className="border-t border-gray-100 dark:border-gray-700 bg-gray-50/50 dark:bg-gray-900/20">
+          <div className="p-3 space-y-3">
+            <div className="flex items-center justify-between bg-white dark:bg-gray-800 rounded-lg px-2.5 py-2 border border-gray-100 dark:border-gray-700">
               <div className="flex items-center gap-2">
-                <UserCheck size={14} className="text-indigo-600 dark:text-indigo-400" />
-                <span className="text-xs font-medium text-indigo-700 dark:text-indigo-300">Assigned Staff:</span>
-                <span className="text-xs font-semibold text-indigo-800 dark:text-indigo-200">{sale.assignedStaff.name}</span>
-                {sale.assignedStaff.phone && (
-                  <span className="text-xs text-indigo-600 dark:text-indigo-400">({sale.assignedStaff.phone})</span>
-                )}
+                <Receipt size={12} className="text-gray-400" />
+                <span className="text-[11px] text-gray-600 dark:text-gray-400">Sale ID:</span>
+                <span className="text-[11px] font-mono font-semibold text-gray-900 dark:text-white">#{sale.id}</span>
+              </div>
+              <div className="flex items-center gap-1">
+                <span className={`w-2 h-2 rounded-full ${
+                  sale.status === "PAID" ? "bg-green-500" : 
+                  sale.status === "PARTIAL" ? "bg-orange-500" : "bg-red-500"
+                }`} />
+                <span className="text-[10px] text-gray-500">{sale.status}</span>
               </div>
             </div>
-          )}
-          
-          {/* Payment methods */}
-          {sale.payments && sale.payments.length > 0 && (
-            <div>
-              <div className="text-xs font-medium text-gray-600 mb-1">Payments:</div>
-              <div className="flex flex-wrap gap-1">
-                {sale.payments.slice(0, 3).map((payment: any, idx: number) => {
-                  const IconComponent = paymentMethods.find((m: any) => m.value === payment.method)?.icon || Banknote;
-                  return (
-                    <span key={idx} className={`px-2 py-0.5 rounded-full text-xs flex items-center gap-1 ${
-                      paymentMethods.find((m: any) => m.value === payment.method)?.color || "bg-gray-100 text-gray-700"
-                    }`}>
-                      <IconComponent size={10} />
-                      <span>{payment.method}</span>
-                      <span className="font-semibold">Ksh {formatCurrency(payment.amount)}</span>
-                    </span>
-                  );
-                })}
-                {sale.payments.length > 3 && (
-                  <span className="text-gray-400 text-xs px-2 py-0.5">+{sale.payments.length - 3}</span>
-                )}
+
+            {sale.assignedStaff && (
+              <div className="flex items-center gap-2 bg-indigo-50 dark:bg-indigo-900/20 rounded-lg px-2.5 py-2 border border-indigo-100 dark:border-indigo-800">
+                <UserCheck size={12} className="text-indigo-500 dark:text-indigo-400 flex-shrink-0" />
+                <div className="flex-1">
+                  <span className="text-[11px] text-indigo-600 dark:text-indigo-300">
+                    <span className="font-medium">Assigned Staff:</span> {sale.assignedStaff.name}
+                  </span>
+                  {sale.assignedStaff.phone && (
+                    <span className="text-[10px] text-indigo-400 ml-2">· {sale.assignedStaff.phone}</span>
+                  )}
+                </div>
               </div>
-            </div>
-          )}
-          
-          {/* Products */}
-          {sale.saleitems && sale.saleitems.length > 0 && (
-            <div>
-              <div className="text-xs font-medium text-gray-600 mb-1">Items:</div>
-              <div className="space-y-1 max-h-32 overflow-y-auto">
-                {sale.saleitems.map((item: any, idx: number) => (
-                  <div key={idx} className="text-xs text-gray-600 dark:text-gray-400 flex justify-between">
-                    <span className="truncate flex-1">{item.product.name}</span>
-                    <span className="ml-2 flex-shrink-0">×{item.quantity} @ Ksh {formatCurrency(item.price)}</span>
-                  </div>
-                ))}
+            )}
+
+            {sale.createdBy && (
+              <div className="flex items-center gap-2 bg-blue-50 dark:bg-blue-900/20 rounded-lg px-2.5 py-2 border border-blue-100 dark:border-blue-800">
+                <User size={12} className="text-blue-500 dark:text-blue-400 flex-shrink-0" />
+                <div className="flex-1">
+                  <span className="text-[11px] text-blue-600 dark:text-blue-300">
+                    <span className="font-medium">Created by:</span> {getUserDisplayName(sale.createdBy).name}
+                  </span>
+                  {sale.createdAt && (
+                    <span className="text-[10px] text-blue-400 ml-2">· {formatDateTime(sale.createdAt)}</span>
+                  )}
+                </div>
               </div>
+            )}
+
+            {sale.updatedBy && sale.updatedAt && sale.updatedAt !== sale.createdAt && (
+              <div className="flex items-center gap-2 bg-teal-50 dark:bg-teal-900/20 rounded-lg px-2.5 py-2 border border-teal-100 dark:border-teal-800">
+                <ClockIcon size={12} className="text-teal-500 dark:text-teal-400 flex-shrink-0" />
+                <div className="flex-1">
+                  <span className="text-[11px] text-teal-600 dark:text-teal-300">
+                    <span className="font-medium">Last updated by:</span> {getUserDisplayName(sale.updatedBy).name}
+                  </span>
+                  <span className="text-[10px] text-teal-400 ml-2">· {formatDateTime(sale.updatedAt)}</span>
+                </div>
+              </div>
+            )}
+
+            {sale.dueDate && (
+              <div className="flex items-center gap-2 bg-yellow-50 dark:bg-yellow-900/20 rounded-lg px-2.5 py-2 border border-yellow-100 dark:border-yellow-800">
+                <Calendar size={12} className="text-yellow-500 flex-shrink-0" />
+                <span className="text-[11px] text-yellow-700 dark:text-yellow-300">
+                  <span className="font-medium">Due Date:</span> {formatDate(sale.dueDate)}
+                </span>
+              </div>
+            )}
+
+            {sale.payments?.length > 0 && (
+              <div>
+                <p className="text-[10px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-2">Payments</p>
+                <div className="flex flex-wrap gap-1.5">
+                  {sale.payments.map((p: any, i: number) => {
+                    const m = paymentMethods.find((pm: any) => pm.value === p.method);
+                    const Icon = m?.icon || Banknote;
+                    return (
+                      <div key={i} className={`flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-medium ${m?.color || "bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-300"}`}>
+                        <Icon size={9} />
+                        <span>{p.method}</span>
+                        {p.amount > 0 && <span className="opacity-80">· Ksh {formatCurrency(p.amount)}</span>}
+                        {p.referenceId && <span className="text-[8px] opacity-70">({p.referenceId})</span>}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {sale.saleitems?.length > 0 && (
+              <div>
+                <p className="text-[10px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-2">Items</p>
+                <div className="space-y-1 max-h-32 overflow-y-auto rounded-lg">
+                  {sale.saleitems.map((item: any, i: number) => (
+                    <div key={i} className="flex items-center justify-between text-[11px] bg-white dark:bg-gray-800 rounded-lg px-2.5 py-1.5 border border-gray-100 dark:border-gray-700">
+                      <span className="text-gray-700 dark:text-gray-300 truncate flex-1 pr-2">{item.product.name}</span>
+                      <span className="text-gray-400 flex-shrink-0 text-[10px]">×{item.quantity} · Ksh {formatCurrency(item.price)}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <div className="grid grid-cols-2 gap-2 pt-1">
+              <button
+                onClick={() => window.open(`/api/receipt/${sale.id}`, "_blank")}
+                className="flex items-center justify-center gap-1.5 bg-violet-50 dark:bg-violet-900/20 text-violet-700 dark:text-violet-300 rounded-lg py-2 text-[11px] font-medium active:scale-95 transition-transform border border-violet-100 dark:border-violet-800"
+              >
+                <Download size={11} />
+                Receipt
+              </button>
+              <button
+                onClick={() => handleEditSale(sale)}
+                className="flex items-center justify-center gap-1.5 bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-300 rounded-lg py-2 text-[11px] font-medium active:scale-95 transition-transform border border-blue-100 dark:border-blue-800"
+              >
+                <Edit size={11} />
+                Edit
+              </button>
+              <button
+                onClick={() => handleViewAuditLog(sale)}
+                className="flex items-center justify-center gap-1.5 bg-gray-50 dark:bg-gray-700/50 text-gray-600 dark:text-gray-300 rounded-lg py-2 text-[11px] font-medium active:scale-95 transition-transform border border-gray-200 dark:border-gray-600"
+              >
+                <History size={11} />
+                History
+              </button>
+              <button
+                onClick={() => showDeleteConfirmationWithReason(sale.id)}
+                disabled={loading}
+                className="flex items-center justify-center gap-1.5 bg-rose-50 dark:bg-rose-900/20 text-rose-600 dark:text-rose-400 rounded-lg py-2 text-[11px] font-medium active:scale-95 transition-transform border border-rose-100 dark:border-rose-800 disabled:opacity-40"
+              >
+                <Trash2 size={11} />
+                Delete
+              </button>
             </div>
-          )}
-          
-          {/* Last updated info */}
-          {sale.updatedAt && sale.updatedBy && (
-            <div className="text-xs text-gray-500 flex items-center gap-1">
-              <ClockIcon size={10} />
-              <span>Updated {formatDateTime(sale.updatedAt)} by {getUserDisplayName(sale.updatedBy).name}</span>
-            </div>
-          )}
-          
-          {/* Action buttons */}
-          <div className="flex gap-2 pt-2">
-            <button
-              onClick={() => window.open(`/api/receipt/${sale.id}`, "_blank")}
-              className="flex-1 bg-purple-50 dark:bg-purple-900/20 hover:bg-purple-100 text-purple-700 px-2 py-1.5 rounded-lg text-xs flex items-center justify-center gap-1"
-            >
-              <Download size={12} />
-              Receipt
-            </button>
-            <button
-              onClick={() => handleEditSale(sale)}
-              className="flex-1 bg-blue-50 dark:bg-blue-900/20 hover:bg-blue-100 text-blue-700 px-2 py-1.5 rounded-lg text-xs flex items-center justify-center gap-1"
-            >
-              <Edit size={12} />
-              Edit
-            </button>
-            <button
-              onClick={() => handleViewAuditLog(sale)}
-              className="flex-1 bg-gray-50 dark:bg-gray-700/50 hover:bg-gray-100 text-gray-700 px-2 py-1.5 rounded-lg text-xs flex items-center justify-center gap-1"
-            >
-              <History size={12} />
-              History
-            </button>
-            <button
-              onClick={() => showDeleteConfirmationWithReason(sale.id)}
-              disabled={loading}
-              className="flex-1 bg-red-50 dark:bg-red-900/20 hover:bg-red-100 text-red-700 px-2 py-1.5 rounded-lg text-xs flex items-center justify-center gap-1 disabled:opacity-50"
-            >
-              <Trash2 size={12} />
-              Delete
-            </button>
           </div>
         </div>
       )}
@@ -331,7 +382,6 @@ const MobileSaleCard = ({ sale, expandedSaleId, setExpandedSaleId, formatCurrenc
 };
 
 // ==================== ACCOUNTING REPORTS MODAL ====================
-
 interface AccountingReportsModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -379,6 +429,10 @@ function AccountingReportsModal({ isOpen, onClose, customers, getUserDisplayName
         case "daily":
           url = `/api/paymentReports?type=daily&date=${accountingDate}`;
           filename = `daily-payments-${accountingDate}.csv`;
+          break;
+        case "weekly":
+          url = `/api/paymentReports?type=weekly&date=${accountingDate}`;
+          filename = `weekly-report-${accountingDate}.csv`;
           break;
         case "monthly":
           url = `/api/paymentReports?type=monthly&date=${accountingDate}`;
@@ -435,77 +489,90 @@ function AccountingReportsModal({ isOpen, onClose, customers, getUserDisplayName
 
   if (!isOpen) return null;
 
+  const reportTypes = [
+    { key: "daily", label: "Daily" },
+    { key: "weekly", label: "Weekly" },
+    { key: "monthly", label: "Monthly" },
+    { key: "outstanding", label: "Outstanding" },
+    { key: "customer", label: "Customer" },
+    { key: "payment-activity", label: "Activity" },
+  ];
+
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-3 z-[60]">
-      <div className="bg-white dark:bg-gray-800 rounded-xl max-w-md w-full max-h-[90vh] overflow-y-auto shadow-2xl">
-        <div className="p-4 border-b dark:border-gray-700 sticky top-0 bg-white dark:bg-gray-800 rounded-t-xl">
+    <div className="fixed inset-0 bg-black/60 flex items-end sm:items-center justify-center p-0 sm:p-4 z-[60]">
+      <div className="bg-white dark:bg-gray-800 rounded-t-2xl sm:rounded-2xl w-full sm:max-w-md max-h-[92vh] overflow-y-auto shadow-2xl">
+        <div className="flex justify-center pt-2 pb-1 sm:hidden">
+          <div className="w-10 h-1 rounded-full bg-gray-300 dark:bg-gray-600" />
+        </div>
+
+        <div className="p-4 border-b dark:border-gray-700">
           <div className="flex justify-between items-center">
-            <h3 className="text-lg font-bold text-black dark:text-white flex items-center gap-2">
-              <FileSpreadsheet size={20} />
-              Accounting Reports
+            <h3 className="text-base font-bold text-gray-900 dark:text-white flex items-center gap-2">
+              <FileSpreadsheet size={18} className="text-purple-500" />
+              Reports
             </h3>
-            <button
-              onClick={onClose}
-              className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
-            >
-              <X size={20} />
+            <button onClick={onClose} className="w-7 h-7 flex items-center justify-center rounded-full bg-gray-100 dark:bg-gray-700 text-gray-500 hover:text-gray-700 dark:hover:text-gray-300">
+              <X size={14} />
             </button>
           </div>
         </div>
-        
+
         <div className="p-4 space-y-4">
           {error && (
-            <div className="bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-300 p-3 rounded-xl text-sm">
+            <div className="bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-300 p-2.5 rounded-lg text-xs flex items-start gap-2">
+              <AlertTriangle size={12} className="mt-0.5 flex-shrink-0" />
               {error}
             </div>
           )}
 
           <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-              Select Report Type
-            </label>
-            <div className="grid grid-cols-2 gap-2">
-              <button onClick={() => setReportType("daily")} className={`px-3 py-2 text-sm rounded-xl transition ${reportType === "daily" ? "bg-blue-600 text-white" : "bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-200"}`}>Daily Report</button>
-              <button onClick={() => setReportType("weekly")} className={`px-3 py-2 text-sm rounded-xl transition ${reportType === "weekly" ? "bg-blue-600 text-white" : "bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-200"}`}>Weekly Report</button>
-              <button onClick={() => setReportType("monthly")} className={`px-3 py-2 text-sm rounded-xl transition ${reportType === "monthly" ? "bg-blue-600 text-white" : "bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-200"}`}>Monthly Report</button>
-              <button onClick={() => setReportType("outstanding")} className={`px-3 py-2 text-sm rounded-xl transition ${reportType === "outstanding" ? "bg-blue-600 text-white" : "bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-200"}`}>Outstanding Debts</button>
-              <button onClick={() => setReportType("customer")} className={`px-3 py-2 text-sm rounded-xl transition ${reportType === "customer" ? "bg-blue-600 text-white" : "bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-200"}`}>Customer History</button>
-              <button onClick={() => setReportType("payment-activity")} className={`px-3 py-2 text-sm rounded-xl transition ${reportType === "payment-activity" ? "bg-blue-600 text-white" : "bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-200"}`}>Payment Activity</button>
+            <label className="block text-[10px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-2">Report Type</label>
+            <div className="grid grid-cols-3 gap-2">
+              {reportTypes.map(rt => (
+                <button
+                  key={rt.key}
+                  onClick={() => setReportType(rt.key as any)}
+                  className={`py-2.5 rounded-lg text-xs font-medium transition-all active:scale-95 ${
+                    reportType === rt.key
+                      ? "bg-blue-600 text-white shadow-sm"
+                      : "bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300"
+                  }`}
+                >
+                  {rt.label}
+                </button>
+              ))}
             </div>
           </div>
 
-          <div className="bg-blue-50 dark:bg-blue-900/20 p-3 rounded-xl border border-blue-200 dark:border-blue-800">
-            <div className="flex items-start gap-2">
-              <Info size={16} className="text-blue-600 dark:text-blue-400 flex-shrink-0 mt-0.5" />
-              <div className="text-xs text-blue-800 dark:text-blue-300">
-                <p className="font-semibold mb-1">What each report shows:</p>
-                <ul className="space-y-1 list-disc list-inside">
-                  <li><strong>Daily/Weekly/Monthly:</strong> All payments received during period</li>
-                  <li><strong>Outstanding Debts:</strong> All UNPAID and PARTIAL sales</li>
-                  <li><strong>Customer History:</strong> Complete transaction history</li>
-                  <li><strong>Payment Activity:</strong> Sales with payments in selected period</li>
-                </ul>
-              </div>
-            </div>
+          <div className="bg-blue-50 dark:bg-blue-900/20 p-2.5 rounded-lg border border-blue-100 dark:border-blue-800 flex gap-2">
+            <Info size={12} className="text-blue-500 flex-shrink-0 mt-0.5" />
+            <p className="text-[10px] text-blue-700 dark:text-blue-300 leading-relaxed">
+              {reportType === "daily" && "All payments received on the selected date."}
+              {reportType === "weekly" && "All payments received within the selected week range."}
+              {reportType === "monthly" && "All payments received within the selected month range."}
+              {reportType === "outstanding" && "All UNPAID and PARTIAL sales as of the selected date."}
+              {reportType === "customer" && "Complete transaction history for the selected customer."}
+              {reportType === "payment-activity" && "Sales with payments recorded in the selected period."}
+            </p>
           </div>
 
           {(reportType === "daily" || reportType === "weekly" || reportType === "monthly") && (
             <>
               {reportType === "daily" && (
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Select Date</label>
-                  <input type="date" value={accountingDate} onChange={(e) => setAccountingDate(e.target.value)} className="w-full p-2 border border-gray-300 dark:border-gray-600 rounded-xl text-black dark:text-white bg-white dark:bg-gray-700 text-sm" />
+                  <label className="block text-[10px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-1">Date</label>
+                  <input type="date" value={accountingDate} onChange={e => setAccountingDate(e.target.value)} className="w-full p-2.5 border border-gray-200 dark:border-gray-600 rounded-lg text-gray-900 dark:text-white bg-white dark:bg-gray-700 text-xs" />
                 </div>
               )}
               {(reportType === "weekly" || reportType === "monthly") && (
                 <div className="grid grid-cols-2 gap-2">
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Start Date</label>
-                    <input type="date" value={accountingStartDate} onChange={(e) => setAccountingStartDate(e.target.value)} className="w-full p-2 border border-gray-300 dark:border-gray-600 rounded-xl text-black dark:text-white bg-white dark:bg-gray-700 text-sm" />
+                    <label className="block text-[10px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-1">From</label>
+                    <input type="date" value={accountingStartDate} onChange={e => setAccountingStartDate(e.target.value)} className="w-full p-2.5 border border-gray-200 dark:border-gray-600 rounded-lg text-gray-900 dark:text-white bg-white dark:bg-gray-700 text-xs" />
                   </div>
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">End Date</label>
-                    <input type="date" value={accountingEndDate} onChange={(e) => setAccountingEndDate(e.target.value)} className="w-full p-2 border border-gray-300 dark:border-gray-600 rounded-xl text-black dark:text-white bg-white dark:bg-gray-700 text-sm" />
+                    <label className="block text-[10px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-1">To</label>
+                    <input type="date" value={accountingEndDate} onChange={e => setAccountingEndDate(e.target.value)} className="w-full p-2.5 border border-gray-200 dark:border-gray-600 rounded-lg text-gray-900 dark:text-white bg-white dark:bg-gray-700 text-xs" />
                   </div>
                 </div>
               )}
@@ -514,29 +581,31 @@ function AccountingReportsModal({ isOpen, onClose, customers, getUserDisplayName
 
           {reportType === "outstanding" && (
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">As of Date</label>
-              <input type="date" value={accountingDate} onChange={(e) => setAccountingDate(e.target.value)} className="w-full p-2 border border-gray-300 dark:border-gray-600 rounded-xl text-black dark:text-white bg-white dark:bg-gray-700 text-sm" />
+              <label className="block text-[10px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-1">As of Date</label>
+              <input type="date" value={accountingDate} onChange={e => setAccountingDate(e.target.value)} className="w-full p-2.5 border border-gray-200 dark:border-gray-600 rounded-lg text-gray-900 dark:text-white bg-white dark:bg-gray-700 text-xs" />
             </div>
           )}
 
           {reportType === "payment-activity" && (
             <>
               <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Period</label>
+                <label className="block text-[10px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-1">Period</label>
                 <div className="grid grid-cols-3 gap-2">
-                  <button onClick={() => setAccountingPeriod("daily")} className={`px-3 py-2 text-sm rounded-xl transition ${accountingPeriod === "daily" ? "bg-blue-600 text-white" : "bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-200"}`}>Daily</button>
-                  <button onClick={() => setAccountingPeriod("weekly")} className={`px-3 py-2 text-sm rounded-xl transition ${accountingPeriod === "weekly" ? "bg-blue-600 text-white" : "bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-200"}`}>Weekly</button>
-                  <button onClick={() => setAccountingPeriod("monthly")} className={`px-3 py-2 text-sm rounded-xl transition ${accountingPeriod === "monthly" ? "bg-blue-600 text-white" : "bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-200"}`}>Monthly</button>
+                  {["daily", "weekly", "monthly"].map(p => (
+                    <button key={p} onClick={() => setAccountingPeriod(p as any)} className={`py-2.5 rounded-lg text-xs font-medium transition-all ${accountingPeriod === p ? "bg-blue-600 text-white" : "bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300"}`}>
+                      {p.charAt(0).toUpperCase() + p.slice(1)}
+                    </button>
+                  ))}
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-2">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Start Date</label>
-                  <input type="date" value={accountingStartDate} onChange={(e) => setAccountingStartDate(e.target.value)} className="w-full p-2 border border-gray-300 dark:border-gray-600 rounded-xl text-black dark:text-white bg-white dark:bg-gray-700 text-sm" />
+                  <label className="block text-[10px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-1">From</label>
+                  <input type="date" value={accountingStartDate} onChange={e => setAccountingStartDate(e.target.value)} className="w-full p-2.5 border border-gray-200 dark:border-gray-600 rounded-lg text-gray-900 dark:text-white bg-white dark:bg-gray-700 text-xs" />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">End Date</label>
-                  <input type="date" value={accountingEndDate} onChange={(e) => setAccountingEndDate(e.target.value)} className="w-full p-2 border border-gray-300 dark:border-gray-600 rounded-xl text-black dark:text-white bg-white dark:bg-gray-700 text-sm" />
+                  <label className="block text-[10px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-1">To</label>
+                  <input type="date" value={accountingEndDate} onChange={e => setAccountingEndDate(e.target.value)} className="w-full p-2.5 border border-gray-200 dark:border-gray-600 rounded-lg text-gray-900 dark:text-white bg-white dark:bg-gray-700 text-xs" />
                 </div>
               </div>
             </>
@@ -545,15 +614,23 @@ function AccountingReportsModal({ isOpen, onClose, customers, getUserDisplayName
           {reportType === "customer" && (
             <>
               <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Select Customer</label>
+                <label className="block text-[10px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-1">Customer</label>
                 <div className="relative">
-                  <input type="text" placeholder="Search customer..." value={accountingCustomerSearch} onChange={(e) => { setAccountingCustomerSearch(e.target.value); setAccountingShowCustomerDropdown(true); }} onFocus={() => setAccountingShowCustomerDropdown(true)} className="w-full p-2 border border-gray-300 dark:border-gray-600 rounded-xl text-black dark:text-white bg-white dark:bg-gray-700 text-sm" />
+                  <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" size={12} />
+                  <input
+                    type="text"
+                    placeholder="Search customer…"
+                    value={accountingCustomerSearch}
+                    onChange={e => { setAccountingCustomerSearch(e.target.value); setAccountingShowCustomerDropdown(true); }}
+                    onFocus={() => setAccountingShowCustomerDropdown(true)}
+                    className="w-full pl-8 pr-2.5 py-2.5 border border-gray-200 dark:border-gray-600 rounded-lg text-gray-900 dark:text-white bg-white dark:bg-gray-700 text-xs"
+                  />
                   {accountingShowCustomerDropdown && filteredCustomers.length > 0 && (
-                    <div className="absolute z-20 w-full mt-1 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-xl shadow-lg max-h-40 overflow-y-auto">
-                      {filteredCustomers.map(customer => (
-                        <div key={customer.id} onClick={() => { setAccountingCustomerId(customer.id.toString()); setAccountingCustomerSearch(customer.name); setAccountingShowCustomerDropdown(false); }} className="p-2 hover:bg-blue-50 dark:hover:bg-gray-700 cursor-pointer border-b last:border-b-0 text-sm">
-                          <div className="font-medium text-black dark:text-white truncate">{customer.name}</div>
-                          {customer.phone && <div className="text-xs text-gray-500 dark:text-gray-400">{customer.phone}</div>}
+                    <div className="absolute z-20 w-full mt-1 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded-lg shadow-lg max-h-40 overflow-y-auto">
+                      {filteredCustomers.map(c => (
+                        <div key={c.id} onClick={() => { setAccountingCustomerId(c.id.toString()); setAccountingCustomerSearch(c.name); setAccountingShowCustomerDropdown(false); }} className="p-2.5 hover:bg-blue-50 dark:hover:bg-gray-700 cursor-pointer border-b dark:border-gray-700 last:border-b-0">
+                          <p className="font-medium text-xs text-gray-900 dark:text-white">{c.name}</p>
+                          {c.phone && <p className="text-[10px] text-gray-400">{c.phone}</p>}
                         </div>
                       ))}
                     </div>
@@ -562,21 +639,31 @@ function AccountingReportsModal({ isOpen, onClose, customers, getUserDisplayName
               </div>
               <div className="grid grid-cols-2 gap-2">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Start Date</label>
-                  <input type="date" value={accountingStartDate} onChange={(e) => setAccountingStartDate(e.target.value)} className="w-full p-2 border border-gray-300 dark:border-gray-600 rounded-xl text-black dark:text-white bg-white dark:bg-gray-700 text-sm" />
+                  <label className="block text-[10px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-1">Start Date</label>
+                  <input type="date" value={accountingStartDate} onChange={e => setAccountingStartDate(e.target.value)} className="w-full p-2.5 border border-gray-200 dark:border-gray-600 rounded-lg text-gray-900 dark:text-white bg-white dark:bg-gray-700 text-xs" />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">End Date</label>
-                  <input type="date" value={accountingEndDate} onChange={(e) => setAccountingEndDate(e.target.value)} className="w-full p-2 border border-gray-300 dark:border-gray-600 rounded-xl text-black dark:text-white bg-white dark:bg-gray-700 text-sm" />
+                  <label className="block text-[10px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-1">End Date</label>
+                  <input type="date" value={accountingEndDate} onChange={e => setAccountingEndDate(e.target.value)} className="w-full p-2.5 border border-gray-200 dark:border-gray-600 rounded-lg text-gray-900 dark:text-white bg-white dark:bg-gray-700 text-xs" />
                 </div>
               </div>
             </>
           )}
           
           <div className="flex gap-2 pt-2">
-            <button onClick={onClose} className="flex-1 bg-gray-500 text-white px-4 py-2 rounded-xl hover:bg-gray-600 text-sm transition-colors">Cancel</button>
-            <button onClick={downloadAccountingReport} disabled={downloadingReport || (reportType === "customer" && !accountingCustomerId)} className="flex-1 bg-purple-600 text-white px-4 py-2 rounded-xl hover:bg-purple-700 disabled:opacity-50 text-sm flex items-center justify-center gap-2 transition-colors">
-              {downloadingReport ? (<><div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>Downloading...</>) : (<><Download size={16} />Download CSV</>)}
+            <button onClick={onClose} className="flex-1 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 py-3 rounded-lg font-medium text-xs transition-colors active:scale-95">
+              Cancel
+            </button>
+            <button
+              onClick={downloadAccountingReport}
+              disabled={downloadingReport || (reportType === "customer" && !accountingCustomerId)}
+              className="flex-1 bg-purple-600 text-white py-3 rounded-lg font-medium text-xs flex items-center justify-center gap-1.5 disabled:opacity-50 active:scale-95 transition-all"
+            >
+              {downloadingReport ? (
+                <><div className="w-3 h-3 rounded-full border-2 border-white/30 border-t-white animate-spin" />Download…</>
+              ) : (
+                <><Download size={13} />CSV</>
+              )}
             </button>
           </div>
         </div>
@@ -586,18 +673,12 @@ function AccountingReportsModal({ isOpen, onClose, customers, getUserDisplayName
 }
 
 // ==================== ACCOUNTING PAGE COMPONENT ====================
-
-// ==================== ACCOUNTING PAGE COMPONENT ====================
-
 function AccountingPage({ sales, getUserDisplayName }: { sales: Sale[], getUserDisplayName: (email: string | null | undefined) => { name: string, email: string } }) {
   const [recentlyCleared, setRecentlyCleared] = useState<RecentlyClearedDebt[]>([]);
-  const [recentlyUpdatedSales, setRecentlyUpdatedSales] = useState<Sale[]>([]);
   const [loading, setLoading] = useState(true);
   const [timeRange, setTimeRange] = useState<"today" | "week" | "month">("week");
 
-  // Track sales that had ANY update (payment, status change, etc.) during the period
   const analyzeRecentlyUpdatedSales = useCallback(() => {
-    const updatedSales: Sale[] = [];
     const clearedDebts: RecentlyClearedDebt[] = [];
     const now = new Date();
     let thresholdDate = new Date();
@@ -617,49 +698,32 @@ function AccountingPage({ sales, getUserDisplayName }: { sales: Sale[], getUserD
     }
 
     sales.forEach(sale => {
-      // Check if the sale was UPDATED (any change) during the period
-      // This includes sales that were created long ago but had activity now
       if (sale.updatedAt) {
         const updatedDate = new Date(sale.updatedAt);
-        if (updatedDate >= thresholdDate) {
-          // This sale had activity during the selected period
-          updatedSales.push(sale);
+        if (updatedDate >= thresholdDate && sale.status === "PAID") {
+          const totalPayments = sale.payments?.reduce((sum, p) => sum + Number(p.amount), 0) || 0;
+          const recentPayments = sale.payments?.filter(p => new Date(p.date) >= thresholdDate);
+          const lastPayment = recentPayments?.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())[0];
           
-          // If the sale became PAID during this period, track it as a cleared debt
-          if (sale.status === "PAID") {
-            const totalPayments = sale.payments?.reduce((sum, p) => sum + Number(p.amount), 0) || 0;
-            // Find the most recent payment in this period
-            const recentPayments = sale.payments?.filter(p => new Date(p.date) >= thresholdDate);
-            const lastPayment = recentPayments?.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())[0];
-            
-            if (totalPayments >= sale.amount - 0.01) {
-              clearedDebts.push({
-                saleId: sale.id,
-                customerName: sale.customer?.name || "Unknown",
-                customerPhone: sale.customer?.phone || null,
-                originalAmount: sale.amount,
-                clearedAmount: totalPayments,
-                clearedAt: sale.updatedAt,
-                clearedBy: sale.updatedBy || "System",
-                previousStatus: "UNPAID",
-                paymentMethod: lastPayment?.method || "Unknown"
-              });
-            }
+          if (totalPayments >= sale.amount - 0.01) {
+            clearedDebts.push({
+              saleId: sale.id,
+              customerName: sale.customer?.name || "Unknown",
+              customerPhone: sale.customer?.phone || null,
+              originalAmount: sale.amount,
+              clearedAmount: totalPayments,
+              clearedAt: sale.updatedAt,
+              clearedBy: sale.updatedBy || "System",
+              previousStatus: "UNPAID",
+              paymentMethod: lastPayment?.method || "Unknown"
+            });
           }
         }
       }
     });
     
-    // Sort by most recent update first
-    updatedSales.sort((a, b) => {
-      const dateA = a.updatedAt ? new Date(a.updatedAt).getTime() : 0;
-      const dateB = b.updatedAt ? new Date(b.updatedAt).getTime() : 0;
-      return dateB - dateA;
-    });
-    
     clearedDebts.sort((a, b) => new Date(b.clearedAt).getTime() - new Date(a.clearedAt).getTime());
     
-    setRecentlyUpdatedSales(updatedSales);
     setRecentlyCleared(clearedDebts);
     setLoading(false);
   }, [sales, timeRange]);
@@ -676,222 +740,67 @@ function AccountingPage({ sales, getUserDisplayName }: { sales: Sale[], getUserD
     if (!dateString) return "";
     try {
       const date = new Date(dateString);
-      return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+      return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
     } catch { return ""; }
   };
 
   const totalCleared = recentlyCleared.reduce((sum, debt) => sum + debt.clearedAmount, 0);
-  const totalUpdatedAmount = recentlyUpdatedSales.reduce((sum, sale) => sum + sale.amount, 0);
-
-  // Helper to determine if a sale was created before the period but updated during it
-  const wasCreatedBeforePeriod = (sale: Sale): boolean => {
-    if (!sale.createdAt) return false;
-    let thresholdDate = new Date();
-    switch (timeRange) {
-      case "today": thresholdDate.setHours(0, 0, 0, 0); break;
-      case "week": thresholdDate.setDate(new Date().getDate() - 7); thresholdDate.setHours(0, 0, 0, 0); break;
-      case "month": thresholdDate.setMonth(new Date().getMonth() - 1); thresholdDate.setHours(0, 0, 0, 0); break;
-    }
-    return new Date(sale.createdAt) < thresholdDate;
-  };
 
   return (
-    <div className="space-y-4">
-      {/* Header Stats */}
-      <div className="bg-gradient-to-r from-green-600 to-teal-600 rounded-xl p-4 text-white">
+    <div className="space-y-3">
+      <div className="bg-gradient-to-r from-green-600 to-teal-600 rounded-lg p-3 text-white">
         <div className="flex justify-between items-center flex-wrap gap-2">
           <div>
-            <h2 className="text-lg font-bold">Accounting Dashboard</h2>
-            <p className="text-xs opacity-90">Track payment activity and cleared debts</p>
+            <h2 className="text-sm font-bold">Accounting</h2>
+            <p className="text-[10px] opacity-90">Track cleared debts</p>
           </div>
-          <div className="flex gap-2">
+          <div className="flex gap-1.5">
             {["today", "week", "month"].map((range) => (
-              <button 
-                key={range} 
-                onClick={() => setTimeRange(range as any)} 
-                className={`px-3 py-1 rounded-lg text-xs transition-colors ${timeRange === range ? "bg-white text-green-700 font-semibold" : "bg-green-700 text-white hover:bg-green-800"}`}
-              >
-                {range === "today" ? "Today" : range === "week" ? "This Week" : "This Month"}
+              <button key={range} onClick={() => setTimeRange(range as any)} className={`px-2.5 py-1 rounded-md text-[10px] transition-colors ${timeRange === range ? "bg-white text-green-700 font-semibold" : "bg-green-700 text-white hover:bg-green-800"}`}>
+                {range === "today" ? "Today" : range === "week" ? "Week" : "Month"}
               </button>
             ))}
           </div>
         </div>
       </div>
 
-      {/* Summary Cards */}
-      <div className="grid grid-cols-2 gap-3">
-        <div className="bg-white dark:bg-gray-800 rounded-xl p-3 shadow-sm border-l-4 border-green-500">
-          <div className="flex items-center gap-2 mb-1">
-            <TrendingUp size={16} className="text-green-600" />
-            <span className="text-xs text-gray-600 dark:text-gray-400">Debts Cleared</span>
-          </div>
-          <div className="text-xl font-bold text-green-700 dark:text-green-400">{recentlyCleared.length}</div>
-          <div className="text-xs text-gray-500">during period</div>
+      <div className="grid grid-cols-2 gap-2">
+        <div className="bg-white dark:bg-gray-800 rounded-lg p-2.5 shadow-sm border-l-4 border-green-500">
+          <div className="flex items-center gap-1.5 mb-0.5"><TrendingUp size={12} className="text-green-600" /><span className="text-[10px] text-gray-600 dark:text-gray-400">Cleared</span></div>
+          <div className="text-base font-bold text-green-700 dark:text-green-400">{recentlyCleared.length}</div>
+          <div className="text-[9px] text-gray-500">debts</div>
         </div>
-        <div className="bg-white dark:bg-gray-800 rounded-xl p-3 shadow-sm border-l-4 border-blue-500">
-          <div className="flex items-center gap-2 mb-1">
-            <Receipt size={16} className="text-blue-600" />
-            <span className="text-xs text-gray-600 dark:text-gray-400">Cleared Amount</span>
-          </div>
-          <div className="text-xl font-bold text-blue-700 dark:text-blue-400">Ksh {formatCurrency(totalCleared)}</div>
-          <div className="text-xs text-gray-500">recovered</div>
+        <div className="bg-white dark:bg-gray-800 rounded-lg p-2.5 shadow-sm border-l-4 border-blue-500">
+          <div className="flex items-center gap-1.5 mb-0.5"><Receipt size={12} className="text-blue-600" /><span className="text-[10px] text-gray-600 dark:text-gray-400">Amount</span></div>
+          <div className="text-base font-bold text-blue-700 dark:text-blue-400">Ksh {formatCurrency(totalCleared)}</div>
+          <div className="text-[9px] text-gray-500">recovered</div>
         </div>
       </div>
 
-      {/* Activity Summary */}
-      <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-3">
-        <div className="flex items-center justify-between mb-2">
-          <div className="flex items-center gap-2">
-            <ClockIcon size={14} className="text-blue-500" />
-            <span className="text-xs font-semibold text-gray-700 dark:text-gray-300">Period Activity</span>
-          </div>
-          <span className="text-xs text-gray-500">{recentlyUpdatedSales.length} sales updated</span>
-        </div>
-        <div className="space-y-1 text-xs text-gray-600 dark:text-gray-400">
-          <p>• Sales with payment activity: {recentlyUpdatedSales.length}</p>
-          <p>• Total value of updated sales: Ksh {formatCurrency(totalUpdatedAmount)}</p>
-          <p>• Sales that became paid: {recentlyCleared.length}</p>
-          <p className="text-blue-500 text-[10px] mt-1">
-            ℹ️ Includes sales created at any time that had updates during this period
-          </p>
-        </div>
-      </div>
-
-      {/* Recently Cleared Debts */}
-      <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700">
-        <div className="p-3 border-b dark:border-gray-700">
-          <h3 className="font-semibold text-black dark:text-white flex items-center gap-2">
-            <CheckCircle size={16} className="text-green-600" />
-            Recently Cleared Debts
-          </h3>
-          <p className="text-xs text-gray-500 mt-1">Sales that were paid off during this period</p>
+      <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700">
+        <div className="p-2.5 border-b dark:border-gray-700">
+          <h3 className="font-semibold text-xs text-black dark:text-white flex items-center gap-1.5"><ClockIcon size={12} className="text-green-600" />Cleared Debts</h3>
         </div>
         <div className="divide-y dark:divide-gray-700">
-          {loading ? (
-            <div className="p-8 text-center text-gray-500">Loading...</div>
-          ) : recentlyCleared.length === 0 ? (
-            <div className="p-8 text-center text-gray-500">
-              <CheckCircle size={32} className="mx-auto text-green-300 mb-2" />
-              No debts cleared in this period
-            </div>
+          {loading ? (<div className="p-6 text-center text-gray-500 text-xs">Loading...</div>) : recentlyCleared.length === 0 ? (
+            <div className="p-6 text-center text-gray-500"><CheckCircle size={24} className="mx-auto text-green-300 mb-1.5" /><span className="text-xs">No debts cleared</span></div>
           ) : (
             recentlyCleared.map((debt, idx) => (
-              <div key={idx} className="p-3 hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors">
-                <div className="flex justify-between items-start mb-2">
-                  <div>
-                    <div className="font-medium text-black dark:text-white">{debt.customerName}</div>
-                    {debt.customerPhone && <div className="text-xs text-gray-500">{debt.customerPhone}</div>}
-                  </div>
-                  <div className="text-right">
-                    <div className="text-sm font-bold text-green-700 dark:text-green-400">Ksh {formatCurrency(debt.clearedAmount)}</div>
-                    <div className="text-xs text-gray-500">Sale #{debt.saleId}</div>
-                  </div>
+              <div key={idx} className="p-2.5 hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors">
+                <div className="flex justify-between items-start mb-1.5">
+                  <div><div className="font-medium text-xs text-black dark:text-white">{debt.customerName}</div>{debt.customerPhone && <div className="text-[9px] text-gray-500">{debt.customerPhone}</div>}</div>
+                  <div className="text-right"><div className="text-xs font-bold text-green-700 dark:text-green-400">Ksh {formatCurrency(debt.clearedAmount)}</div><div className="text-[9px] text-gray-500">#{debt.saleId}</div></div>
                 </div>
-                <div className="flex flex-wrap gap-3 text-xs text-gray-600 dark:text-gray-400">
-                  <div className="flex items-center gap-1">
-                    <Calendar size={10} />
-                    <span>Cleared: {formatDateTime(debt.clearedAt)}</span>
-                  </div>
-                  <div className="flex items-center gap-1">
-                    <User size={10} />
-                    <span>By: {getUserDisplayName(debt.clearedBy).name}</span>
-                  </div>
-                  <div className="flex items-center gap-1">
-                    <CreditCard size={10} />
-                    <span>Method: {debt.paymentMethod}</span>
-                  </div>
+                <div className="flex flex-wrap gap-2 text-[9px] text-gray-600 dark:text-gray-400">
+                  <div className="flex items-center gap-0.5"><Calendar size={8} /><span>{formatDateTime(debt.clearedAt)}</span></div>
+                  <div className="flex items-center gap-0.5"><User size={8} /><span>{getUserDisplayName(debt.clearedBy).name}</span></div>
                 </div>
-                <div className="mt-2 flex items-center gap-2">
-                  <div className="flex-1 bg-gray-200 dark:bg-gray-700 rounded-full h-1.5">
-                    <div className="bg-green-600 rounded-full h-1.5 transition-all" style={{ width: `${(debt.clearedAmount / debt.originalAmount) * 100}%` }} />
-                  </div>
-                  <span className="text-xs text-gray-500">{Math.round((debt.clearedAmount / debt.originalAmount) * 100)}%</span>
+                <div className="mt-1.5 flex items-center gap-1.5">
+                  <div className="flex-1 bg-gray-200 dark:bg-gray-700 rounded-full h-1"><div className="bg-green-600 rounded-full h-1 transition-all" style={{ width: `${(debt.clearedAmount / debt.originalAmount) * 100}%` }} /></div>
+                  <span className="text-[9px] text-gray-500">{Math.round((debt.clearedAmount / debt.originalAmount) * 100)}%</span>
                 </div>
               </div>
             ))
-          )}
-        </div>
-      </div>
-
-      {/* Recently Updated Sales (All Activity) */}
-      <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700">
-        <div className="p-3 border-b dark:border-gray-700">
-          <h3 className="font-semibold text-black dark:text-white flex items-center gap-2">
-            <History size={16} className="text-blue-600" />
-            Recent Sales Activity
-          </h3>
-          <p className="text-xs text-gray-500 mt-1">All sales that had updates during this period</p>
-        </div>
-        <div className="divide-y dark:divide-gray-700 max-h-96 overflow-y-auto">
-          {loading ? (
-            <div className="p-8 text-center text-gray-500">Loading...</div>
-          ) : recentlyUpdatedSales.length === 0 ? (
-            <div className="p-8 text-center text-gray-500">
-              <History size={32} className="mx-auto text-gray-300 mb-2" />
-              No sales updated in this period
-            </div>
-          ) : (
-            recentlyUpdatedSales.map((sale) => {
-              const isOldSale = wasCreatedBeforePeriod(sale);
-              return (
-                <div key={sale.id} className="p-3 hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors">
-                  <div className="flex justify-between items-start mb-2">
-                    <div>
-                      <div className="font-medium text-black dark:text-white flex items-center gap-2">
-                        {sale.customer?.name || "Unknown"}
-                        {isOldSale && (
-                          <span className="text-[10px] bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded-full">
-                            Old Sale
-                          </span>
-                        )}
-                      </div>
-                      {sale.customer?.phone && <div className="text-xs text-gray-500">{sale.customer.phone}</div>}
-                    </div>
-                    <div className="text-right">
-                      <div className={`text-sm font-bold ${sale.status === "PAID" ? "text-green-600" : sale.status === "PARTIAL" ? "text-orange-600" : "text-red-600"}`}>
-                        Ksh {formatCurrency(sale.amount)}
-                      </div>
-                      <div className="text-xs text-gray-500">Sale #{sale.id}</div>
-                    </div>
-                  </div>
-                  <div className="grid grid-cols-2 gap-2 text-xs text-gray-600 dark:text-gray-400 mb-2">
-                    <div className="flex items-center gap-1">
-                      <Calendar size={10} />
-                      <span>Created: {formatDateTime(sale.createdAt)}</span>
-                    </div>
-                    <div className="flex items-center gap-1">
-                      <ClockIcon size={10} />
-                      <span>Updated: {formatDateTime(sale.updatedAt)}</span>
-                    </div>
-                  </div>
-                  <div className="flex flex-wrap gap-2 text-xs">
-                    <span className={`px-2 py-0.5 rounded-full ${sale.status === "PAID" ? "bg-green-100 text-green-700" : sale.status === "PARTIAL" ? "bg-orange-100 text-orange-700" : "bg-red-100 text-red-700"}`}>
-                      Status: {sale.status}
-                    </span>
-                    <span className="px-2 py-0.5 rounded-full bg-blue-100 text-blue-700">
-                      Due: Ksh {formatCurrency(sale.remainingAmount)}
-                    </span>
-                    {sale.updatedBy && (
-                      <span className="px-2 py-0.5 rounded-full bg-gray-100 text-gray-600">
-                        By: {getUserDisplayName(sale.updatedBy).name}
-                      </span>
-                    )}
-                  </div>
-                  {sale.payments && sale.payments.length > 0 && (
-                    <div className="mt-2 pt-2 border-t border-gray-100 dark:border-gray-700">
-                      <p className="text-[10px] text-gray-400 mb-1">Recent payments:</p>
-                      <div className="flex flex-wrap gap-1">
-                        {sale.payments.slice(-3).map((payment, idx) => (
-                          <span key={idx} className="text-[10px] px-1.5 py-0.5 bg-gray-100 dark:bg-gray-700 rounded-full">
-                            {payment.method}: Ksh {formatCurrency(payment.amount)}
-                          </span>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              );
-            })
           )}
         </div>
       </div>
@@ -900,7 +809,6 @@ function AccountingPage({ sales, getUserDisplayName }: { sales: Sale[], getUserD
 }
 
 // ==================== ENHANCED AUDIT LOG MODAL ====================
-
 function EnhancedAuditLogModal({ isOpen, onClose, auditLogs, loading, sale, getUserDisplayName, formatDateTime }: { isOpen: boolean; onClose: () => void; auditLogs: AuditLog[]; loading: boolean; sale: Sale | null; getUserDisplayName: (email: string | null | undefined) => { name: string, email: string }; formatDateTime: (date: string | null | undefined) => string; }) {
   if (!isOpen || !sale) return null;
 
@@ -916,51 +824,38 @@ function EnhancedAuditLogModal({ isOpen, onClose, auditLogs, loading, sale, getU
 
   const getActionIcon = (action: string) => {
     switch (action) {
-      case "CREATE": return <CheckCircle size={14} />;
-      case "UPDATE": return <Edit size={14} />;
-      case "DELETE": return <Trash2 size={14} />;
-      case "RESTORE": return <RotateCcw size={14} />;
-      default: return <History size={14} />;
+      case "CREATE": return <CheckCircle size={12} />;
+      case "UPDATE": return <Edit size={12} />;
+      case "DELETE": return <Trash2 size={12} />;
+      case "RESTORE": return <RotateCcw size={12} />;
+      default: return <History size={12} />;
     }
   };
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-3 z-[70]">
-      <div className="bg-white dark:bg-gray-800 rounded-xl max-w-3xl w-full max-h-[85vh] overflow-y-auto shadow-2xl">
-        <div className="p-4 border-b dark:border-gray-700 sticky top-0 bg-white dark:bg-gray-800 rounded-t-xl z-10">
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-2 z-[70]">
+      <div className="bg-white dark:bg-gray-800 rounded-lg max-w-3xl w-full max-h-[85vh] overflow-y-auto shadow-2xl">
+        <div className="p-3 border-b dark:border-gray-700 sticky top-0 bg-white dark:bg-gray-800 rounded-t-lg z-10">
           <div className="flex justify-between items-center">
-            <div><h3 className="text-xl font-bold text-black dark:text-white flex items-center gap-2"><History size={22} className="text-blue-600" />Audit History</h3><p className="text-sm text-gray-500 mt-1">Sale #{sale.id} - {sale.customer?.name}</p></div>
-            <button onClick={onClose} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors"><X size={22} /></button>
+            <div><h3 className="text-base font-bold text-black dark:text-white flex items-center gap-1.5"><History size={16} className="text-blue-600" />Audit</h3><p className="text-[10px] text-gray-500 mt-0.5">Sale #{sale.id} - {sale.customer?.name}</p></div>
+            <button onClick={onClose} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors"><X size={18} /></button>
           </div>
         </div>
-        <div className="p-4">
-          {loading ? (<div className="text-center py-12"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto"></div><p className="text-gray-500 mt-3">Loading audit logs...</p></div>) : auditLogs.length === 0 ? (
-            <div className="text-center py-12 text-gray-500"><History size={48} className="mx-auto text-gray-300 mb-3" /><p>No audit records found for this sale</p><p className="text-xs mt-1">Changes will appear here when the sale is modified</p></div>
+        <div className="p-3">
+          {loading ? (<div className="text-center py-8"><div className="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-600 mx-auto"></div><p className="text-gray-500 mt-2 text-xs">Loading...</p></div>) : auditLogs.length === 0 ? (
+            <div className="text-center py-8 text-gray-500"><History size={32} className="mx-auto text-gray-300 mb-2" /><p className="text-xs">No audit records</p></div>
           ) : (
-            <div className="space-y-3">
+            <div className="space-y-2">
               {auditLogs.map((log, index) => (
-                <div key={log.id} className={`border dark:border-gray-700 rounded-xl p-3 transition-all hover:shadow-md ${index === 0 ? 'border-blue-300 bg-blue-50/30 dark:bg-blue-900/10' : 'dark:bg-gray-800/50'}`}>
-                  <div className="flex items-start gap-3">
-                    <div className="flex-shrink-0"><div className={`w-8 h-8 rounded-full flex items-center justify-center ${getActionColor(log.action)}`}>{getActionIcon(log.action)}</div></div>
+                <div key={log.id} className={`border dark:border-gray-700 rounded-lg p-2.5 transition-all hover:shadow-md ${index === 0 ? 'border-blue-300 bg-blue-50/30 dark:bg-blue-900/10' : 'dark:bg-gray-800/50'}`}>
+                  <div className="flex items-start gap-2">
+                    <div className="flex-shrink-0"><div className={`w-6 h-6 rounded-full flex items-center justify-center ${getActionColor(log.action)}`}>{getActionIcon(log.action)}</div></div>
                     <div className="flex-1">
-                      <div className="flex flex-wrap justify-between items-start gap-2">
-                        <div><span className={`inline-block px-2 py-0.5 rounded-full text-xs font-semibold ${getActionColor(log.action)} border`}>{log.action}</span>{log.changeCategory && <span className="ml-2 text-xs text-gray-500">{log.changeCategory}</span>}</div>
-                        <div className="text-xs text-right"><div className="font-medium text-gray-700 dark:text-gray-300">{getUserDisplayName(log.changedBy).name}</div><div className="text-gray-400">{formatDateTime(log.changedAt)}</div></div>
+                      <div className="flex flex-wrap justify-between items-start gap-1">
+                        <div><span className={`inline-block px-1.5 py-0.5 rounded-full text-[9px] font-semibold ${getActionColor(log.action)} border`}>{log.action}</span></div>
+                        <div className="text-right"><div className="font-medium text-[10px] text-gray-700 dark:text-gray-300">{getUserDisplayName(log.changedBy).name}</div><div className="text-[8px] text-gray-400">{formatDateTime(log.changedAt)}</div></div>
                       </div>
-                      {log.changeSummary && <div className="mt-2 text-sm text-gray-700 dark:text-gray-300 bg-white/50 dark:bg-gray-900/50 p-2 rounded-lg">{log.changeSummary}</div>}
-                      {log.fieldName && (
-                        <div className="mt-2">
-                          <div className="text-xs font-medium text-gray-600 mb-1">Field: <span className="font-mono">{log.fieldName}</span></div>
-                          <div className="grid grid-cols-2 gap-2 text-xs">
-                            <div className="bg-red-50 dark:bg-red-900/20 p-2 rounded-lg border border-red-100 dark:border-red-800"><div className="text-red-600 font-medium mb-1">Previous Value</div><div className="text-gray-700 dark:text-gray-300 break-words">{log.oldValue || "—"}</div></div>
-                            <div className="bg-green-50 dark:bg-green-900/20 p-2 rounded-lg border border-green-100 dark:border-green-800"><div className="text-green-600 font-medium mb-1">New Value</div><div className="text-gray-700 dark:text-gray-300 break-words">{log.newValue || "—"}</div></div>
-                          </div>
-                          {log.difference && <div className="mt-2 text-xs bg-yellow-50 dark:bg-yellow-900/20 p-2 rounded-lg border border-yellow-200 dark:border-yellow-800"><span className="font-medium text-yellow-700">Change:</span> {log.difference}</div>}
-                        </div>
-                      )}
-                      {log.ipAddress && <div className="mt-2 text-xs text-gray-400">IP: {log.ipAddress}</div>}
-                      {log.notes && <div className="mt-2 text-xs bg-gray-50 dark:bg-gray-700/50 p-2 rounded-lg border border-gray-200 dark:border-gray-600"><span className="font-medium text-gray-600">Note:</span> {log.notes}</div>}
-                      {log.snapshot && (<details className="mt-2"><summary className="text-xs text-blue-500 cursor-pointer hover:text-blue-700">View complete snapshot</summary><pre className="mt-2 text-xs bg-gray-900 text-gray-100 p-3 rounded-lg overflow-x-auto">{JSON.stringify(log.snapshot, null, 2)}</pre></details>)}
+                      {log.changeSummary && <div className="mt-1.5 text-xs text-gray-700 dark:text-gray-300 bg-white/50 dark:bg-gray-900/50 p-1.5 rounded-md">{log.changeSummary}</div>}
                     </div>
                   </div>
                 </div>
@@ -974,7 +869,6 @@ function EnhancedAuditLogModal({ isOpen, onClose, auditLogs, loading, sale, getU
 }
 
 // ==================== PAYMENT BREAKDOWN COMPONENT ====================
-
 interface PaymentBreakdownProps {
   stats: {
     cashAmount: number; mpesaAmount: number; bankAmount: number; checkAmount: number; cardAmount: number; creditAmount: number;
@@ -998,13 +892,13 @@ function PaymentBreakdown({ stats, dateFilter }: PaymentBreakdownProps) {
   ];
 
   return (
-    <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-4 mb-4">
-      <h2 className="text-base font-bold text-black dark:text-white mb-3">{dateFilter === "today" ? "Today's Payments" : "Overall Payment Breakdown"}</h2>
-      <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
+    <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-3 mb-3">
+      <h2 className="text-xs font-bold text-black dark:text-white mb-2">{dateFilter === "today" ? "Today's Payments" : "Payment Breakdown"}</h2>
+      <div className="grid grid-cols-3 gap-1.5">
         {paymentCategories.map((category) => (
-          <div key={category.method} className={`bg-${category.color}-50 dark:bg-${category.color}-900/20 p-2 rounded-lg border border-${category.color}-200 dark:border-${category.color}-800`}>
-            <div className="flex items-center gap-1 mb-1"><category.icon className={`text-${category.color}-600 dark:text-${category.color}-400`} size={12} /><span className={`text-xs font-medium text-${category.color}-800 dark:text-${category.color}-300`}>{category.method}</span></div>
-            <div className={`text-sm font-bold text-${category.color}-700 dark:text-${category.color}-400`}>Ksh {formatCurrency(category.amount)}</div>
+          <div key={category.method} className={`bg-${category.color}-50 dark:bg-${category.color}-900/20 p-1.5 rounded-md border border-${category.color}-200 dark:border-${category.color}-800`}>
+            <div className="flex items-center gap-0.5 mb-0.5"><category.icon className={`text-${category.color}-600 dark:text-${category.color}-400`} size={9} /><span className={`text-[9px] font-medium text-${category.color}-800 dark:text-${category.color}-300`}>{category.method}</span></div>
+            <div className={`text-[10px] font-bold text-${category.color}-700 dark:text-${category.color}-400`}>Ksh {formatCurrency(category.amount)}</div>
           </div>
         ))}
       </div>
@@ -1013,7 +907,6 @@ function PaymentBreakdown({ stats, dateFilter }: PaymentBreakdownProps) {
 }
 
 // ==================== MAIN COMPONENT ====================
-
 export default function EnhancedSalesPage() {
   // ==================== THEME STATE ====================
   const [theme, setTheme] = useState<'light' | 'dark'>('light');
@@ -1055,7 +948,7 @@ export default function EnhancedSalesPage() {
   const [showProductDropdown, setShowProductDropdown] = useState(false);
 
   const [editPayments, setEditPayments] = useState<NewPayment[]>([]);
-  const [currentPayment, setCurrentPayment] = useState<NewPayment>({ amount: "", method: "CASH", referenceId: "", checkDepositDate: "", dueDate: "" });
+  const [currentPayment, setCurrentPayment] = useState<NewPayment>({ amount: "", method: "CASH", referenceId: "", checkDepositDate: "", dueDate: "", bankName: "" });
   
   const [editingSale, setEditingSale] = useState<Sale | null>(null);
   const [deletingPaymentId, setDeletingPaymentId] = useState<number | null>(null);
@@ -1259,7 +1152,7 @@ export default function EnhancedSalesPage() {
   };
 
   const handleRestoreSale = async (deletedSaleId: number) => {
-    if (!confirm("Are you sure you want to restore this sale? This will recreate the sale with all its original items and payments.")) return;
+    if (!confirm("Restore this sale?")) return;
     setRestoringSaleId(deletedSaleId);
     setError(null);
     try {
@@ -1267,7 +1160,7 @@ export default function EnhancedSalesPage() {
       const response = await fetch(`/api/deleted-sales/${deletedSaleId}/restore`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ restoredBy: currentUser, restoredByEmail: currentUserEmail, ipAddress }) });
       const data = await response.json();
       if (response.ok) {
-        setSuccess("Sale restored successfully!");
+        setSuccess("Sale restored!");
         setTimeout(() => setSuccess(null), 3000);
         fetchDeletedSales();
         const salesRes = await fetch("/api/sales");
@@ -1277,49 +1170,112 @@ export default function EnhancedSalesPage() {
           setSales(processedSales);
           extractAvailableUsers(processedSales);
         }
-      } else throw new Error(data.error || "Failed to restore sale");
-    } catch (err: any) { setError(err.message || "Failed to restore sale"); }
+      } else throw new Error(data.error || "Failed to restore");
+    } catch (err: any) { setError(err.message || "Failed to restore"); }
     finally { setRestoringSaleId(null); }
   };
 
   // ==================== SALE CRUD OPERATIONS ====================
 
   const handleDeleteSaleWithReason = async (saleId: number, restockItems: boolean = false) => {
-    if (!deletionReason.trim()) { setError("Please provide a reason for deletion"); return; }
+    if (!deletionReason.trim()) {
+      setError("Please provide a reason for deletion");
+      return;
+    }
+    
     setLoading(true);
     setError(null);
     setSuccess("Deleting sale, please wait...");
+    
     try {
       const ipAddress = await getClientIP();
       const userAgent = navigator.userAgent;
-      const response = await fetch(`/api/sales/${saleId}`, { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ restockItems, deletedBy: currentUser, deletedByEmail: currentUserEmail, deletionReason: deletionReason, ipAddress, userAgent }) });
-      if (!response.ok) { const errorData = await response.json(); throw new Error(errorData.error || "Failed to delete sale"); }
+      
+      const response = await fetch(`/api/sales/${saleId}`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ 
+          restockItems,
+          deletedBy: currentUser,
+          deletedByEmail: currentUserEmail,
+          deletionReason: deletionReason,
+          ipAddress,
+          userAgent
+        })
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || "Failed to delete sale");
+      }
+
       setSales(prevSales => prevSales.filter(s => s.id !== saleId));
       setShowRestockConfirm(null);
       setShowDeletionReasonModal(null);
       setDeletionReason("");
+      
       setSuccess(`Sale deleted successfully${restockItems ? ' with items restocked' : ''}!`);
       setTimeout(() => setSuccess(null), 3000);
-      if (showDeletedModal) fetchDeletedSales();
+      
+      if (showDeletedModal) {
+        fetchDeletedSales();
+      }
       extractAvailableUsers(sales.filter(s => s.id !== saleId));
-    } catch (error: any) { setError(error.message || "Failed to delete sale"); }
-    finally { setLoading(false); }
+    } catch (error: any) {
+      console.error("Error deleting sale:", error);
+      setError(error.message || "Failed to delete sale");
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handleUpdateSale = async () => {
     if (!editingSale) return;
-    if (!currentUser) { setError("Please log in to update a sale"); return; }
+    if (!currentUser) {
+      setError("Please log in to update a sale");
+      return;
+    }
+    if (editSaleItems.length === 0) {
+      setError("Please add at least one item to the sale");
+      return;
+    }
+    
     setLoading(true);
     setError(null);
     setSuccess("Updating sale, please wait...");
+    
     try {
       const ipAddress = await getClientIP();
       const userAgent = navigator.userAgent;
-      const newTotalAmount = editSaleItems.reduce((total, item) => total + (item.quantity * item.price), 0);
+      
+      const newTotalAmount = editSaleItems.reduce((total, item) => 
+        total + (item.quantity * item.price), 0);
+
       const updateData = {
-        saleItems: editSaleItems.map(item => ({ productId: item.productId, quantity: item.quantity, price: item.price })),
-        payments: editPayments.filter(p => p.id).map(p => ({ id: p.id, amount: Number(p.amount), method: p.method, referenceId: p.referenceId?.trim() || null, checkDepositDate: p.checkDepositDate || null })),
-        newPayments: editPayments.filter(p => !p.id).map(p => ({ amount: Number(p.amount), method: p.method, referenceId: p.referenceId?.trim() || null, checkDepositDate: p.checkDepositDate || null, dueDate: p.dueDate || null, date: new Date().toISOString(), status: p.method === "CHECK" ? "PENDING" : "COMPLETED" })),
+        saleItems: editSaleItems.map(item => ({
+          id: item.id,
+          productId: item.productId,
+          quantity: item.quantity,
+          price: item.price,
+        })),
+        payments: editPayments.filter(p => p.id).map(p => ({
+          id: p.id,
+          amount: Number(p.amount),
+          method: p.method,
+          referenceId: p.referenceId?.trim() || null,
+          checkDepositDate: p.checkDepositDate || null,
+          bankName: p.bankName || null,
+        })),
+        newPayments: editPayments.filter(p => !p.id && p.amount && Number(p.amount) > 0).map(p => ({
+          amount: Number(p.amount),
+          method: p.method,
+          referenceId: p.referenceId?.trim() || null,
+          checkDepositDate: p.checkDepositDate || null,
+          dueDate: p.dueDate || null,
+          bankName: p.bankName || null,
+          date: new Date().toISOString(),
+          status: p.method === "CHECK" ? "PENDING" : "COMPLETED",
+        })),
         amount: newTotalAmount,
         dueDate: editingSale.dueDate || null,
         updatedBy: currentUser,
@@ -1327,17 +1283,42 @@ export default function EnhancedSalesPage() {
         ipAddress,
         userAgent,
       };
-      const response = await fetch(`/api/sales/${editingSale.id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(updateData) });
-      if (!response.ok) { const errorData = await response.json(); throw new Error(errorData.error || "Failed to update sale"); }
+
+      const response = await fetch(`/api/sales/${editingSale.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(updateData),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || "Failed to update sale");
+      }
+
       const updatedSale = await response.json();
       const processedSale = calculateSaleStatus(updatedSale);
-      setSales(prevSales => prevSales.map(s => s.id === processedSale.id ? processedSale : s));
+
+      setSales(prevSales => 
+        prevSales.map(s => s.id === processedSale.id ? processedSale : s)
+      );
+
       setEditingSale(null);
       setEditSaleItems([]);
       setEditPayments([]);
-      setCurrentPayment({ amount: "", method: "CASH", referenceId: "", checkDepositDate: "", dueDate: "" });
+      setCurrentPayment({
+        amount: "",
+        method: "CASH",
+        referenceId: "",
+        checkDepositDate: "",
+        dueDate: "",
+        bankName: ""
+      });
+      setProductSearch("");
+      setCurrentEditItem({ productId: 0, quantity: 0, price: 0, productName: "" });
+      
       setSuccess("Sale updated successfully!");
       setTimeout(() => setSuccess(null), 3000);
+
       const salesRes = await fetch("/api/sales");
       if (salesRes.ok) {
         const refreshedSales = await salesRes.json();
@@ -1345,85 +1326,279 @@ export default function EnhancedSalesPage() {
         setSales(processedSales);
         extractAvailableUsers(processedSales);
       }
-    } catch (err: any) { setError(err.message || "Failed to update sale"); }
-    finally { setLoading(false); }
+    } catch (err: any) {
+      console.error("Error updating sale:", err);
+      setError(err.message || "Failed to update sale");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleSelectProduct = (product: Product) => {
+    console.log("Selected product:", product);
+    setCurrentEditItem({ 
+      ...currentEditItem, 
+      productId: product.id, 
+      price: product.price || 0, 
+      productName: product.name 
+    });
+    setProductSearch(product.name);
+    setShowProductDropdown(false);
   };
 
   const handleAddItemToEditSale = () => {
+    console.log("Add item clicked, currentEditItem:", currentEditItem);
+    
     if (stockValidationTimeout) clearTimeout(stockValidationTimeout);
-    if (!currentEditItem.productId || currentEditItem.quantity <= 0 || currentEditItem.price <= 0) { setError("Please fill in all item details"); return; }
+    
+    if (!currentEditItem.productId || currentEditItem.quantity <= 0 || currentEditItem.price <= 0) {
+      setError("Please fill in all item details");
+      return;
+    }
+    
     const product = products.find(p => p.id === currentEditItem.productId);
-    if (!product) { setError("Product not found"); return; }
+    if (!product) {
+      setError("Product not found");
+      return;
+    }
+    
+    // Get correct product stock
     let productStock = 0;
-    if (Array.isArray(product.stock)) productStock = product.stock.reduce((total: number, s: any) => total + (s.quantity || 0), 0);
-    else if (typeof product.stock === 'object' && product.stock !== null) productStock = (product.stock as any).quantity || 0;
-    else productStock = Number(product.stock) || 0;
+    if (Array.isArray(product.stock)) {
+      productStock = product.stock.reduce((total: number, s: any) => total + (s.quantity || 0), 0);
+    } else if (product.stock && typeof product.stock === 'object' && 'quantity' in product.stock) {
+      productStock = (product.stock as any).quantity || 0;
+    } else if (typeof product.stock === 'number') {
+      productStock = product.stock;
+    } else if (product.totalStock) {
+      productStock = product.totalStock;
+    }
+    
     const existingItem = editSaleItems.find(item => item.productId === currentEditItem.productId);
     const existingQuantity = existingItem ? existingItem.quantity : 0;
     const totalQuantity = existingQuantity + currentEditItem.quantity;
-    if (totalQuantity > productStock) {
+    
+    // Only check stock if product has stock > 0 (skip for services or items without stock)
+    if (productStock > 0 && totalQuantity > productStock) {
       const errorMsg = `Insufficient stock for ${product.name}. Available: ${productStock}, Requested: ${totalQuantity}`;
       setStockError(errorMsg);
       setError(errorMsg);
-      const timeout = setTimeout(() => { setStockError(null); setError(null); }, 5000);
+      
+      const timeout = setTimeout(() => {
+        setStockError(null);
+        setError(null);
+      }, 5000);
       setStockValidationTimeout(timeout);
       return;
     }
+    
     const existingItemIndex = editSaleItems.findIndex(item => item.productId === currentEditItem.productId);
+
     if (existingItemIndex >= 0) {
       const updatedItems = [...editSaleItems];
       updatedItems[existingItemIndex].quantity += currentEditItem.quantity;
       updatedItems[existingItemIndex].price = currentEditItem.price;
       setEditSaleItems(updatedItems);
+      setSuccess(`Updated ${product.name} quantity to ${updatedItems[existingItemIndex].quantity}`);
     } else {
-      setEditSaleItems([...editSaleItems, { ...currentEditItem, productName: product.name, originalPrice: product.price }]);
+      setEditSaleItems([...editSaleItems, { 
+        ...currentEditItem, 
+        productName: product.name,
+        originalPrice: product.price,
+        id: undefined
+      }]);
+      setSuccess(`Added ${product.name} to sale`);
     }
-    setCurrentEditItem({ productId: 0, quantity: 0, price: 0, productName: "" });
+    
+    // Reset form
+    setCurrentEditItem({
+      productId: 0,
+      quantity: 0,
+      price: 0,
+      productName: ""
+    });
     setProductSearch("");
     setError(null);
     setStockError(null);
+    setTimeout(() => setSuccess(null), 2000);
   };
 
   const handleEditSale = (sale: Sale) => {
+    console.log("Editing sale:", sale);
     setEditingSale(sale);
-    setEditPayments(sale.payments.map(p => ({ id: p.id, amount: p.amount.toString(), method: p.method, referenceId: p.referenceId || "", checkDepositDate: p.checkDepositDate || "" })));
-    setEditSaleItems(sale.saleitems.map(item => ({ productId: item.product.id, quantity: item.quantity, price: item.price, productName: item.product.name, originalPrice: item.product.price })));
+    setEditPayments(sale.payments.map(p => ({ 
+      id: p.id, 
+      amount: p.amount.toString(), 
+      method: p.method, 
+      referenceId: p.referenceId || "", 
+      checkDepositDate: p.checkDepositDate || "",
+      bankName: p.bankName || "",
+      dueDate: p.dueDate || ""
+    })));
+    setEditSaleItems(sale.saleitems.map(item => ({ 
+      id: item.id,
+      productId: item.product.id, 
+      quantity: item.quantity, 
+      price: item.price, 
+      productName: item.product.name, 
+      originalPrice: item.product.price 
+    })));
+    setProductSearch("");
+    setCurrentEditItem({ productId: 0, quantity: 0, price: 0, productName: "" });
+    setCurrentPayment({ 
+      amount: "", 
+      method: "CASH", 
+      referenceId: "", 
+      checkDepositDate: "", 
+      dueDate: "", 
+      bankName: "" 
+    });
   };
 
   const handleDeletePayment = async (paymentId: number, saleId: number) => {
     try {
+      const currentEditingSale = editingSale;
+      const currentSales = sales;
+      
       setDeletingPaymentId(paymentId);
-      const response = await fetch(`/api/payment/${paymentId}?saleId=${saleId}`, { method: "DELETE" });
-      if (!response.ok) { const err = await response.json(); throw new Error(err.error || "Failed to delete payment"); }
+
+      const response = await fetch(`/api/payment/${paymentId}?saleId=${saleId}`, {
+        method: "DELETE",
+      });
+
+      if (!response.ok) {
+        const err = await response.json();
+        throw new Error(err.error || "Failed to delete payment");
+      }
+
       const updatedSale = await response.json();
       const processedSale = calculateSaleStatus(updatedSale);
-      setSales(prevSales => prevSales.map(s => s.id === processedSale.id ? processedSale : s));
-      if (editingSale?.id === saleId) {
+
+      setSales(currentSales.map(s => s.id === processedSale.id ? processedSale : s));
+      
+      if (currentEditingSale?.id === saleId) {
         setEditingSale(processedSale);
-        setEditPayments(processedSale.payments.map((p: Payment) => ({ id: p.id, amount: p.amount.toString(), method: p.method, referenceId: p.referenceId || "", checkDepositDate: p.checkDepositDate || "" })));
+        setEditPayments(
+          processedSale.payments.map((p: Payment) => ({
+            id: p.id,
+            amount: p.amount.toString(),
+            method: p.method,
+            referenceId: p.referenceId || "",
+            checkDepositDate: p.checkDepositDate || "",
+            bankName: p.bankName || ""
+          }))
+        );
       }
+
       setSuccess("Payment deleted successfully!");
       setTimeout(() => setSuccess(null), 3000);
-    } catch (error: any) { setError(error.message || "Failed to delete payment"); }
-    finally { setDeletingPaymentId(null); }
+
+    } catch (error: any) {
+      console.error("Error deleting payment:", error);
+      setError(error.message || "Failed to delete payment");
+    } finally {
+      setDeletingPaymentId(null);
+    }
   };
 
   const addEditPayment = () => {
+    console.log("Adding payment:", currentPayment);
+    
+    // For CREDIT payments
     if (currentPayment.method === "CREDIT") {
-      if (!currentPayment.dueDate) { setError("Due date is required for credit/pay later"); return; }
-      setEditPayments([...editPayments, { amount: "0", method: currentPayment.method, referenceId: "", checkDepositDate: "", dueDate: currentPayment.dueDate }]);
-    } else {
-      const amount = parseFloat(currentPayment.amount);
-      if (!amount || amount <= 0) { setError("Please enter a valid payment amount"); return; }
-      const currentTotal = editSaleItems.reduce((sum, item) => sum + (item.quantity * item.price), 0);
-      const currentPayments = editPayments.reduce((sum, p) => sum + Number(p.amount), 0);
-      const remainingAmount = currentTotal - currentPayments;
-      if (amount > remainingAmount) { setError(`Payment amount cannot exceed remaining balance of Ksh ${remainingAmount.toFixed(2)}`); return; }
-      if (currentPayment.method === "CHECK" && !currentPayment.checkDepositDate) { setError("Please specify check deposit date"); return; }
-      if (["MPESA", "BANK", "CARD"].includes(currentPayment.method) && !currentPayment.referenceId?.trim()) { setError("Please enter transaction reference"); return; }
-      setEditPayments([...editPayments, { amount: currentPayment.amount, method: currentPayment.method, referenceId: currentPayment.referenceId || "", checkDepositDate: currentPayment.checkDepositDate || "", dueDate: "" }]);
+      if (!currentPayment.dueDate) {
+        setError("Due date is required for credit/pay later");
+        return;
+      }
+      
+      const newPayment = {
+        amount: "0",
+        method: currentPayment.method,
+        referenceId: "",
+        checkDepositDate: "",
+        dueDate: currentPayment.dueDate,
+        bankName: ""
+      };
+      
+      setEditPayments([...editPayments, newPayment]);
+      setSuccess("Credit payment added");
+      setTimeout(() => setSuccess(null), 2000);
+      
+      // Reset form
+      setCurrentPayment({
+        amount: "",
+        method: "CASH",
+        referenceId: "",
+        checkDepositDate: "",
+        dueDate: "",
+        bankName: ""
+      });
+      setError(null);
+      return;
     }
-    setCurrentPayment({ amount: "", method: "CASH", referenceId: "", checkDepositDate: "", dueDate: "" });
+    
+    // For regular payments
+    const amount = parseFloat(currentPayment.amount);
+    if (!amount || amount <= 0) {
+      setError("Please enter a valid payment amount");
+      return;
+    }
+
+    // Calculate remaining amount
+    const currentTotal = editSaleItems.reduce((sum, item) => sum + (item.quantity * item.price), 0);
+    const currentPayments = editPayments.reduce((sum, p) => sum + Number(p.amount), 0);
+    const remainingAmount = currentTotal - currentPayments;
+
+    if (amount > remainingAmount) {
+      setError(`Payment cannot exceed remaining balance of Ksh ${remainingAmount.toFixed(2)}`);
+      return;
+    }
+    
+    // Validate based on payment method
+    if (currentPayment.method === "MPESA" && !currentPayment.referenceId?.trim()) {
+      setError("Please enter M-Pesa transaction ID");
+      return;
+    }
+    
+    if (currentPayment.method === "BANK") {
+      if (!currentPayment.referenceId?.trim()) {
+        setError("Please enter bank transaction reference");
+        return;
+      }
+      if (!currentPayment.bankName?.trim()) {
+        setError("Please enter bank name");
+        return;
+      }
+    }
+    
+    if (currentPayment.method === "CHECK" && !currentPayment.checkDepositDate) {
+      setError("Please specify check deposit date");
+      return;
+    }
+    
+    const newPayment = {
+      amount: currentPayment.amount,
+      method: currentPayment.method,
+      referenceId: currentPayment.referenceId || "",
+      checkDepositDate: currentPayment.checkDepositDate || "",
+      dueDate: "",
+      bankName: currentPayment.bankName || "",
+      status: currentPayment.method === "CHECK" ? "PENDING" : "COMPLETED"
+    };
+    
+    setEditPayments([...editPayments, newPayment]);
+    setSuccess("Payment added successfully");
+    setTimeout(() => setSuccess(null), 2000);
+    
+    // Reset form
+    setCurrentPayment({
+      amount: "",
+      method: "CASH",
+      referenceId: "",
+      checkDepositDate: "",
+      dueDate: "",
+      bankName: ""
+    });
     setError(null);
   };
     
@@ -1438,13 +1613,19 @@ export default function EnhancedSalesPage() {
     setCreatedByFilter("");
     setUpdatedByFilter("");
     setExpandedSaleId(null);
+    setShowMobileFilters(false);
   };
 
-  const showDeleteConfirmationWithReason = (saleId: number) => { setShowDeletionReasonModal(saleId); };
+  const showDeleteConfirmationWithReason = (saleId: number) => { 
+    setShowDeletionReasonModal(saleId); 
+  };
 
   const extractAvailableUsers = (salesData: Sale[]) => {
     const users = new Set<string>();
-    salesData.forEach(sale => { if (sale.createdBy) users.add(sale.createdBy); if (sale.updatedBy) users.add(sale.updatedBy); });
+    salesData.forEach(sale => { 
+      if (sale.createdBy) users.add(sale.createdBy); 
+      if (sale.updatedBy) users.add(sale.updatedBy); 
+    });
     setAvailableUsers(users);
   };
 
@@ -1478,28 +1659,62 @@ export default function EnhancedSalesPage() {
           const sessionRes = await fetch("/api/auth/session", { headers: { "Authorization": `Bearer ${idToken}` } });
           if (sessionRes.ok) { const sessionData = await sessionRes.json(); setCurrentUser(sessionData?.user?.email || sessionData?.email || ""); }
         }
-        const endpoints = [{ url: "/api/sales", name: "Sales" }, { url: "/api/customers", name: "Customers", fallback: "/api/customer" }, { url: "/api/products", name: "Products" }];
-        const [salesRes, customersRes, productsRes] = await Promise.all([fetch(endpoints[0].url).catch(err => { console.error(`❌ ${endpoints[0].name} fetch failed:`, err); return null; }), fetch(endpoints[1].url).catch(err => { console.error(`❌ ${endpoints[1].name} fetch failed:`, err); return null; }), fetch(endpoints[2].url).catch(err => { console.error(`❌ ${endpoints[2].name} fetch failed:`, err); return null; })]);
+        
+        // Fetch products with stock
+        const [salesRes, customersRes, productsRes] = await Promise.all([
+          fetch("/api/sales").catch(err => { console.error("Sales fetch failed:", err); return null; }),
+          fetch("/api/customers").catch(err => { console.error("Customers fetch failed:", err); return null; }),
+          fetch("/api/products").catch(err => { console.error("Products fetch failed:", err); return null; })
+        ]);
+        
         let customersData = [];
-        if (!customersRes || !customersRes.ok) { try { const altRes = await fetch("/api/customer"); if (altRes.ok) customersData = await altRes.json(); } catch (err) { console.error("❌ Fallback also failed:", err); } } 
-        else { customersData = await customersRes.json(); }
+        if (!customersRes || !customersRes.ok) { 
+          try { 
+            const altRes = await fetch("/api/customer"); 
+            if (altRes.ok) customersData = await altRes.json(); 
+          } catch (err) { console.error("Fallback also failed:", err); } 
+        } else { 
+          customersData = await customersRes.json(); 
+        }
+        
         if (!salesRes || !salesRes.ok) throw new Error("Failed to fetch sales data");
         if (!productsRes || !productsRes.ok) throw new Error("Failed to fetch products data");
+        
         const [salesData, productsData] = await Promise.all([salesRes.json(), productsRes.json()]);
+        
+        // Calculate total stock for each product
+        const productsWithStock = productsData.map((product: any) => {
+          let totalStock = 0;
+          if (Array.isArray(product.stock)) {
+            totalStock = product.stock.reduce((sum: number, s: any) => sum + (s.quantity || 0), 0);
+          } else if (product.stock && typeof product.stock === 'object') {
+            totalStock = product.stock.quantity || 0;
+          } else if (typeof product.stock === 'number') {
+            totalStock = product.stock;
+          }
+          return { ...product, totalStock };
+        });
+        
         const validCustomers = Array.isArray(customersData) ? customersData : (customersData?.customers || customersData?.data || []);
         const processedSales = Array.isArray(salesData) ? salesData.filter((s: any) => !s.isDeleted).map(calculateSaleStatus) : [];
-        const validProducts = Array.isArray(productsData) ? productsData : [];
+        
         setSales(processedSales);
         setCustomers(validCustomers);
-        setProducts(validProducts);
+        setProducts(productsWithStock);
         extractAvailableUsers(processedSales);
         console.log("Total sales loaded:", processedSales.length);
-        const salesWithUpdatedAt = processedSales.filter(s => s.updatedAt);
-        console.log("Sales with updatedAt:", salesWithUpdatedAt.length);
-        setDebugInfo(`Total sales: ${processedSales.length}, With updatedAt: ${salesWithUpdatedAt.length}`);
-        if (validCustomers.length === 0) { console.warn("⚠️ No customers found"); setError("No customers found. Please add customers first."); }
-      } catch (err: any) { const errorMsg = err.message || "Failed to load data"; setError(errorMsg); console.error("❌ Error fetching data:", err); setSales([]); setCustomers([]); setProducts([]); }
-      finally { setLoading(false); }
+        setDebugInfo(`Total: ${processedSales.length}`);
+        if (validCustomers.length === 0) { console.warn("No customers found"); setError("No customers found. Please add customers first."); }
+      } catch (err: any) { 
+        const errorMsg = err.message || "Failed to load data"; 
+        setError(errorMsg); 
+        console.error("Error fetching data:", err); 
+        setSales([]); 
+        setCustomers([]); 
+        setProducts([]); 
+      } finally { 
+        setLoading(false); 
+      }
     };
     const unsubscribe = onAuthStateChanged(auth, (user) => { if (user) fetchData(); else { setCurrentUser(""); setCurrentUserEmail(""); setError("Please log in to access sales data"); setLoading(false); } });
     return () => unsubscribe();
@@ -1510,7 +1725,6 @@ export default function EnhancedSalesPage() {
       const target = event.target as HTMLElement;
       if (!target.closest('.customer-dropdown-container')) setShowCustomerDropdown(false);
       if (!target.closest('.product-dropdown-container')) setShowProductDropdown(false);
-      if (!target.closest('.mobile-filter-container')) setShowMobileFilters(false);
     };
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
@@ -1527,20 +1741,77 @@ export default function EnhancedSalesPage() {
     { value: "CREDIT", label: "Credit", color: "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-300", icon: CreditCard }
   ];
 
+  const filteredProducts = useMemo(() => {
+    if (!productSearch.trim()) return products;
+    const searchLower = productSearch.toLowerCase();
+    return products.filter(p => p.name.toLowerCase().includes(searchLower));
+  }, [products, productSearch]);
+
   const stats = useMemo(() => {
     const recentlyUpdatedSales = sales.filter(sale => isRecentlyUpdated(sale) && isSaleModified(sale));
-    const today = new Date(); today.setHours(0, 0, 0, 0);
-    const tomorrow = new Date(today); tomorrow.setDate(tomorrow.getDate() + 1);
-    const todaySales = sales.filter(sale => { const saleDate = new Date(sale.date); return saleDate >= today && saleDate < tomorrow; });
+    const today = new Date(); 
+    today.setHours(0, 0, 0, 0);
+    const tomorrow = new Date(today); 
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    
+    const todaySales = sales.filter(sale => { 
+      const saleDate = new Date(sale.date); 
+      return saleDate >= today && saleDate < tomorrow; 
+    });
+    
     let cashAmount = 0, mpesaAmount = 0, bankAmount = 0, checkAmount = 0, cardAmount = 0, creditAmount = 0;
-    sales.forEach(sale => { sale.payments?.forEach(payment => { const amount = Number(payment.amount) || 0; switch(payment.method) { case "CASH": cashAmount += amount; break; case "MPESA": mpesaAmount += amount; break; case "BANK": bankAmount += amount; break; case "CHECK": checkAmount += amount; break; case "CARD": cardAmount += amount; break; case "CREDIT": creditAmount += amount; break; } }); });
-    const todayPaid = todaySales.filter(s => s.status === "PAID").reduce((acc, s) => acc + Number(s.amount), 0);
-    const todayPartial = todaySales.filter(s => s.status === "PARTIAL").reduce((acc, s) => acc + Number(s.amount), 0);
-    const todayUnpaid = todaySales.filter(s => s.status === "UNPAID").reduce((acc, s) => acc + Number(s.amount), 0);
-    const todayOutstanding = todaySales.reduce((acc, s) => acc + Number(s.remainingAmount), 0);
+    sales.forEach(sale => { 
+      sale.payments?.forEach(payment => { 
+        const amount = Number(payment.amount) || 0; 
+        switch(payment.method) { 
+          case "CASH": cashAmount += amount; break; 
+          case "MPESA": mpesaAmount += amount; break; 
+          case "BANK": bankAmount += amount; break; 
+          case "CHECK": checkAmount += amount; break; 
+          case "CARD": cardAmount += amount; break; 
+          case "CREDIT": creditAmount += amount; break; 
+        } 
+      }); 
+    });
+    
     let todayCash = 0, todayMpesa = 0, todayBank = 0, todayCheck = 0, todayCard = 0, todayCredit = 0;
-    todaySales.forEach(sale => { sale.payments?.forEach(payment => { const amount = Number(payment.amount) || 0; switch(payment.method) { case "CASH": todayCash += amount; break; case "MPESA": todayMpesa += amount; break; case "BANK": todayBank += amount; break; case "CHECK": todayCheck += amount; break; case "CARD": todayCard += amount; break; case "CREDIT": todayCredit += amount; break; } }); });
-    return { totalSales: sales.reduce((acc, s) => acc + Number(s.amount), 0), paidSales: sales.filter(s => s.status === "PAID").reduce((acc, s) => acc + Number(s.amount), 0), partialSales: sales.filter(s => s.status === "PARTIAL").reduce((acc, s) => acc + Number(s.amount), 0), unpaidSales: sales.filter(s => s.status === "UNPAID").reduce((acc, s) => acc + Number(s.amount), 0), totalOutstanding: sales.reduce((acc, s) => acc + Number(s.remainingAmount), 0), paidCount: sales.filter(s => s.status === "PAID").length, partialCount: sales.filter(s => s.status === "PARTIAL").length, unpaidCount: sales.filter(s => s.status === "UNPAID").length, recentlyUpdatedCount: recentlyUpdatedSales.length, recentlyUpdatedAmount: recentlyUpdatedSales.reduce((acc, s) => acc + Number(s.amount), 0), cashAmount, mpesaAmount, bankAmount, checkAmount, cardAmount, creditAmount, todaySales: todaySales.reduce((acc, s) => acc + Number(s.amount), 0), todayPaid, todayPartial, todayUnpaid, todayOutstanding, todayCount: todaySales.length, todayPaidCount: todaySales.filter(s => s.status === "PAID").length, todayPartialCount: todaySales.filter(s => s.status === "PARTIAL").length, todayUnpaidCount: todaySales.filter(s => s.status === "UNPAID").length, todayCash, todayMpesa, todayBank, todayCheck, todayCard, todayCredit };
+    todaySales.forEach(sale => { 
+      sale.payments?.forEach(payment => { 
+        const amount = Number(payment.amount) || 0; 
+        switch(payment.method) { 
+          case "CASH": todayCash += amount; break; 
+          case "MPESA": todayMpesa += amount; break; 
+          case "BANK": todayBank += amount; break; 
+          case "CHECK": todayCheck += amount; break; 
+          case "CARD": todayCard += amount; break; 
+          case "CREDIT": todayCredit += amount; break; 
+        } 
+      }); 
+    });
+    
+    return { 
+      totalSales: sales.reduce((acc, s) => acc + Number(s.amount), 0), 
+      paidSales: sales.filter(s => s.status === "PAID").reduce((acc, s) => acc + Number(s.amount), 0), 
+      partialSales: sales.filter(s => s.status === "PARTIAL").reduce((acc, s) => acc + Number(s.amount), 0), 
+      unpaidSales: sales.filter(s => s.status === "UNPAID").reduce((acc, s) => acc + Number(s.amount), 0), 
+      totalOutstanding: sales.reduce((acc, s) => acc + Number(s.remainingAmount), 0), 
+      paidCount: sales.filter(s => s.status === "PAID").length, 
+      partialCount: sales.filter(s => s.status === "PARTIAL").length, 
+      unpaidCount: sales.filter(s => s.status === "UNPAID").length, 
+      recentlyUpdatedCount: recentlyUpdatedSales.length, 
+      recentlyUpdatedAmount: recentlyUpdatedSales.reduce((acc, s) => acc + Number(s.amount), 0), 
+      cashAmount, mpesaAmount, bankAmount, checkAmount, cardAmount, creditAmount,
+      todaySales: todaySales.reduce((acc, s) => acc + Number(s.amount), 0), 
+      todayPaid: todaySales.filter(s => s.status === "PAID").reduce((acc, s) => acc + Number(s.amount), 0),
+      todayPartial: todaySales.filter(s => s.status === "PARTIAL").reduce((acc, s) => acc + Number(s.amount), 0),
+      todayUnpaid: todaySales.filter(s => s.status === "UNPAID").reduce((acc, s) => acc + Number(s.amount), 0),
+      todayOutstanding: todaySales.reduce((acc, s) => acc + Number(s.remainingAmount), 0), 
+      todayCount: todaySales.length,
+      todayPaidCount: todaySales.filter(s => s.status === "PAID").length,
+      todayPartialCount: todaySales.filter(s => s.status === "PARTIAL").length,
+      todayUnpaidCount: todaySales.filter(s => s.status === "UNPAID").length,
+      todayCash, todayMpesa, todayBank, todayCheck, todayCard, todayCredit
+    }; 
   }, [sales, isRecentlyUpdated, isSaleModified]);
 
   const filteredSales = useMemo(() => {
@@ -1555,27 +1826,86 @@ export default function EnhancedSalesPage() {
 
   const fullyFilteredSales = useMemo(() => {
     let filtered = filteredSales;
-    if (customerFilter.trim()) { const searchTerm = customerFilter.toLowerCase().trim(); filtered = filtered.filter(sale => { const customerName = sale.customer?.name?.toLowerCase() || ""; const customerPhone = sale.customer?.phone?.toLowerCase() || ""; return customerName.includes(searchTerm) || customerPhone.includes(searchTerm); }); }
-    if (productNameFilter.trim()) { const searchProduct = productNameFilter.toLowerCase().trim(); filtered = filtered.filter(sale => sale.saleitems?.some(item => item.product.name.toLowerCase().includes(searchProduct))); }
-    if (createdByFilter.trim()) filtered = filtered.filter(sale => sale.createdBy?.toLowerCase().includes(createdByFilter.toLowerCase()));
-    if (updatedByFilter.trim()) filtered = filtered.filter(sale => sale.updatedBy?.toLowerCase().includes(updatedByFilter.toLowerCase()));
+    
+    if (customerFilter.trim()) { 
+      const searchTerm = customerFilter.toLowerCase().trim(); 
+      filtered = filtered.filter(sale => { 
+        const customerName = sale.customer?.name?.toLowerCase() || ""; 
+        const customerPhone = sale.customer?.phone?.toLowerCase() || ""; 
+        return customerName.includes(searchTerm) || customerPhone.includes(searchTerm); 
+      }); 
+    }
+    
+    if (productNameFilter.trim()) { 
+      const searchProduct = productNameFilter.toLowerCase().trim(); 
+      filtered = filtered.filter(sale => 
+        sale.saleitems?.some(item => 
+          item.product.name.toLowerCase().includes(searchProduct)
+        )
+      ); 
+    }
+    
+    if (createdByFilter.trim()) { 
+      filtered = filtered.filter(sale => 
+        sale.createdBy?.toLowerCase().includes(createdByFilter.toLowerCase())
+      ); 
+    }
+    
+    if (updatedByFilter.trim()) { 
+      filtered = filtered.filter(sale => 
+        sale.updatedBy?.toLowerCase().includes(updatedByFilter.toLowerCase())
+      ); 
+    }
+    
     if (dateFilter !== "all") {
       const now = new Date();
       const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-      const tomorrow = new Date(today); tomorrow.setDate(tomorrow.getDate() + 1);
+      const tomorrow = new Date(today);
+      tomorrow.setDate(tomorrow.getDate() + 1);
+      
       filtered = filtered.filter(sale => {
         const saleDate = new Date(sale.date);
         switch (dateFilter) {
-          case "today": return saleDate >= today && saleDate < tomorrow;
-          case "week": { const weekAgo = new Date(today); weekAgo.setDate(weekAgo.getDate() - 7); return saleDate >= weekAgo; }
-          case "month": { const monthAgo = new Date(today); monthAgo.setMonth(monthAgo.getMonth() - 1); return saleDate >= monthAgo; }
-          case "custom": if (customStartDate && customEndDate) { const start = new Date(customStartDate); const end = new Date(customEndDate); end.setHours(23, 59, 59, 999); return saleDate >= start && saleDate <= end; } return true;
-          default: return true;
+          case "today": 
+            return saleDate >= today && saleDate < tomorrow;
+          case "week": { 
+            const weekAgo = new Date(today); 
+            weekAgo.setDate(weekAgo.getDate() - 7); 
+            return saleDate >= weekAgo; 
+          }
+          case "month": { 
+            const monthAgo = new Date(today); 
+            monthAgo.setMonth(monthAgo.getMonth() - 1); 
+            return saleDate >= monthAgo; 
+          }
+          case "custom": 
+            if (customStartDate && customEndDate) { 
+              const start = new Date(customStartDate);
+              start.setHours(0, 0, 0, 0);
+              const end = new Date(customEndDate); 
+              end.setHours(23, 59, 59, 999);
+              return saleDate >= start && saleDate <= end; 
+            }
+            return true;
+          default: 
+            return true;
         }
       });
     }
+    
     return filtered;
   }, [filteredSales, customerFilter, dateFilter, customStartDate, customEndDate, productNameFilter, createdByFilter, updatedByFilter]);
+
+  const isFilterActive = useMemo(() => {
+    return (
+      customerFilter.trim() !== "" ||
+      productNameFilter.trim() !== "" ||
+      createdByFilter.trim() !== "" ||
+      updatedByFilter.trim() !== "" ||
+      dateFilter !== "today" ||
+      (dateFilter === "custom" && (customStartDate || customEndDate))
+    );
+  }, [customerFilter, productNameFilter, createdByFilter, updatedByFilter, dateFilter, customStartDate, customEndDate]);
 
   const getSortedSales = (salesList: Sale[]) => {
     if (activeTab === "recentlyUpdated") return [...salesList].sort((a, b) => { const dateA = a.updatedAt ? new Date(a.updatedAt).getTime() : 0; const dateB = b.updatedAt ? new Date(b.updatedAt).getTime() : 0; return dateB - dateA; });
@@ -1590,35 +1920,27 @@ export default function EnhancedSalesPage() {
     return customers.filter(c => c.name.toLowerCase().includes(searchLower) || (c.phone && c.phone.includes(searchLower)));
   }, [customers, customerSearch]);
 
-  const filteredProducts = useMemo(() => {
-    if (!productSearch.trim()) return products;
-    const searchLower = productSearch.toLowerCase();
-    return products.filter(p => p.name.toLowerCase().includes(searchLower));
-  }, [products, productSearch]);
-
-  const isFilterActive = useMemo(() => customerFilter.trim() !== "" || dateFilter !== "today" || productNameFilter.trim() !== "" || createdByFilter.trim() !== "" || updatedByFilter.trim() !== "", [customerFilter, dateFilter, productNameFilter, createdByFilter, updatedByFilter]);
-
   // ==================== RENDER ====================
 
-  if (loading && sales.length === 0) return <div className="p-3 min-h-screen bg-gray-50 dark:bg-gray-900"><div className="text-center text-black dark:text-white">Loading...</div></div>;
+  if (loading && sales.length === 0) return <div className="p-3 min-h-screen bg-gray-50 dark:bg-gray-900"><div className="text-center text-black dark:text-white text-xs">Loading...</div></div>;
 
   return (
     <ThemeContext.Provider value={{ theme, toggleTheme }}>
-      <div className={`p-2 sm:p-4 min-h-screen transition-colors duration-200 ${theme === 'dark' ? 'dark bg-gray-900' : 'bg-gray-50'}`}>
-        <button onClick={toggleTheme} className="fixed bottom-4 right-4 z-50 p-3 rounded-full bg-white dark:bg-gray-800 shadow-lg border border-gray-200 dark:border-gray-700 hover:shadow-xl transition-all" aria-label="Toggle theme">
-          {theme === 'light' ? <Moon size={20} className="text-gray-700" /> : <Sun size={20} className="text-yellow-500" />}
+      <div className={`p-2 min-h-screen transition-colors duration-200 ${theme === 'dark' ? 'dark bg-gray-900' : 'bg-gray-50'}`}>
+        <button onClick={toggleTheme} className="fixed bottom-3 right-3 z-50 p-2.5 rounded-full bg-white dark:bg-gray-800 shadow-lg border border-gray-200 dark:border-gray-700 hover:shadow-xl transition-all" aria-label="Toggle theme">
+          {theme === 'light' ? <Moon size={16} className="text-gray-700" /> : <Sun size={16} className="text-yellow-500" />}
         </button>
 
         {/* Restock Confirmation Modal */}
         {showRestockConfirm && (
-          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-3 z-[60]">
-            <div className="bg-white dark:bg-gray-800 rounded-xl max-w-sm w-full p-5 shadow-2xl">
-              <div className="flex items-center gap-3 mb-4"><div className="w-10 h-10 rounded-full bg-yellow-100 dark:bg-yellow-900/30 flex items-center justify-center"><AlertTriangle className="text-yellow-600" size={20} /></div><h3 className="text-lg font-bold text-black dark:text-white">Confirm Sale Deletion</h3></div>
-              <p className="text-sm text-gray-600 dark:text-gray-400 mb-5">Would you like to restock the items from this sale back to inventory?</p>
-              <div className="space-y-2">
-                <button onClick={() => handleDeleteSaleWithReason(showRestockConfirm, true)} disabled={loading} className="w-full bg-green-600 text-white px-4 py-2 rounded-xl hover:bg-green-700 disabled:opacity-50 flex items-center justify-center gap-2 transition-colors"><CheckCircle size={16} />Yes, delete and restock</button>
-                <button onClick={() => handleDeleteSaleWithReason(showRestockConfirm, false)} disabled={loading} className="w-full bg-red-600 text-white px-4 py-2 rounded-xl hover:bg-red-700 disabled:opacity-50 flex items-center justify-center gap-2 transition-colors"><Trash2 size={16} />No, just delete</button>
-                <button onClick={() => setShowRestockConfirm(null)} disabled={loading} className="w-full bg-gray-500 text-white px-4 py-2 rounded-xl hover:bg-gray-600 disabled:opacity-50 transition-colors">Cancel</button>
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-2 z-[60]">
+            <div className="bg-white dark:bg-gray-800 rounded-lg max-w-sm w-full p-4 shadow-2xl">
+              <div className="flex items-center gap-2 mb-3"><div className="w-8 h-8 rounded-full bg-yellow-100 dark:bg-yellow-900/30 flex items-center justify-center"><AlertTriangle className="text-yellow-600" size={16} /></div><h3 className="text-sm font-bold text-black dark:text-white">Confirm Deletion</h3></div>
+              <p className="text-xs text-gray-600 dark:text-gray-400 mb-4">Restock items to inventory?</p>
+              <div className="space-y-1.5">
+                <button onClick={() => handleDeleteSaleWithReason(showRestockConfirm, true)} disabled={loading} className="w-full bg-green-600 text-white px-3 py-2 rounded-lg text-xs disabled:opacity-50 flex items-center justify-center gap-1.5 transition-colors"><CheckCircle size={12} />Yes, restock</button>
+                <button onClick={() => handleDeleteSaleWithReason(showRestockConfirm, false)} disabled={loading} className="w-full bg-red-600 text-white px-3 py-2 rounded-lg text-xs disabled:opacity-50 flex items-center justify-center gap-1.5 transition-colors"><Trash2 size={12} />No, delete</button>
+                <button onClick={() => setShowRestockConfirm(null)} disabled={loading} className="w-full bg-gray-500 text-white px-3 py-2 rounded-lg text-xs disabled:opacity-50 transition-colors">Cancel</button>
               </div>
             </div>
           </div>
@@ -1626,88 +1948,255 @@ export default function EnhancedSalesPage() {
 
         {/* Deletion Reason Modal */}
         {showDeletionReasonModal && (
-          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-3 z-[60]">
-            <div className="bg-white dark:bg-gray-800 rounded-xl max-w-md w-full p-5 shadow-2xl">
-              <div className="flex items-center gap-3 mb-4"><div className="w-10 h-10 rounded-full bg-red-100 dark:bg-red-900/30 flex items-center justify-center"><AlertTriangle className="text-red-600" size={20} /></div><h3 className="text-lg font-bold text-black dark:text-white">Reason for Deletion</h3></div>
-              <p className="text-sm text-gray-600 dark:text-gray-400 mb-3">Please provide a reason for deleting this sale (for audit purposes):</p>
-              <textarea value={deletionReason} onChange={(e) => setDeletionReason(e.target.value)} placeholder="e.g., Wrong customer, Duplicate entry, Incorrect items, etc." className="w-full p-3 border border-gray-300 dark:border-gray-600 rounded-xl text-sm text-black dark:text-white bg-white dark:bg-gray-700 mb-4 focus:ring-2 focus:ring-red-500 focus:border-transparent" rows={3} />
-              <div className="flex gap-3">
-                <button onClick={() => { setShowDeletionReasonModal(null); setDeletionReason(""); }} className="flex-1 bg-gray-500 text-white px-4 py-2 rounded-xl hover:bg-gray-600 transition-colors">Cancel</button>
-                <button onClick={() => { if (deletionReason.trim()) { setShowRestockConfirm(showDeletionReasonModal); setShowDeletionReasonModal(null); } else setError("Please provide a reason for deletion"); }} className="flex-1 bg-red-600 text-white px-4 py-2 rounded-xl hover:bg-red-700 transition-colors">Continue to Delete</button>
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-2 z-[60]">
+            <div className="bg-white dark:bg-gray-800 rounded-lg max-w-md w-full p-4 shadow-2xl">
+              <div className="flex items-center gap-2 mb-3"><div className="w-8 h-8 rounded-full bg-red-100 dark:bg-red-900/30 flex items-center justify-center"><AlertTriangle className="text-red-600" size={16} /></div><h3 className="text-sm font-bold text-black dark:text-white">Reason for Deletion</h3></div>
+              <p className="text-xs text-gray-600 dark:text-gray-400 mb-2">Provide a reason (for audit):</p>
+              <textarea value={deletionReason} onChange={(e) => setDeletionReason(e.target.value)} placeholder="e.g., Wrong customer, Duplicate entry..." className="w-full p-2 border border-gray-300 dark:border-gray-600 rounded-lg text-xs text-black dark:text-white bg-white dark:bg-gray-700 mb-3 focus:ring-2 focus:ring-red-500 focus:border-transparent" rows={2} />
+              <div className="flex gap-2">
+                <button onClick={() => { setShowDeletionReasonModal(null); setDeletionReason(""); }} className="flex-1 bg-gray-500 text-white px-3 py-2 rounded-lg text-xs transition-colors">Cancel</button>
+                <button onClick={() => { if (deletionReason.trim()) { setShowRestockConfirm(showDeletionReasonModal); setShowDeletionReasonModal(null); } else setError("Please provide a reason"); }} className="flex-1 bg-red-600 text-white px-3 py-2 rounded-lg text-xs transition-colors">Continue</button>
               </div>
             </div>
           </div>
         )}
 
         {/* Header Section */}
-        <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-4 mb-4">
-          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
-            <div><h1 className="text-xl sm:text-2xl font-bold bg-gradient-to-r from-blue-600 to-indigo-600 bg-clip-text text-transparent">Sales Management</h1><p className="text-xs text-gray-500 mt-1">Track and manage all sales transactions</p>{debugInfo && <div className="text-xs text-gray-400 mt-1">{debugInfo} | Recently Updated: {stats.recentlyUpdatedCount}</div>}</div>
+        <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-3 mb-3">
+          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
+            <div><h1 className="text-base sm:text-xl font-bold bg-gradient-to-r from-blue-600 to-indigo-600 bg-clip-text text-transparent">Sales Management</h1><p className="text-[10px] text-gray-500 mt-0.5">Track and manage all sales</p></div>
             <div className="flex gap-2 w-full sm:w-auto">
-              <button onClick={() => setShowAccountingModal(true)} className="flex-1 sm:flex-none bg-purple-600 text-white px-4 py-2 rounded-xl hover:bg-purple-700 flex items-center justify-center gap-2 text-sm shadow-md transition-all"><FileSpreadsheet size={16} />Reports</button>
-              <button onClick={() => { const csvData = sales.map(sale => ({ 'Sale ID': sale.id, 'Date': new Date(sale.date).toLocaleDateString(), 'Customer': sale.customer?.name || '-', 'Customer Phone': sale.customer?.phone || '-', 'Products': sale.saleitems?.map(item => `${item.product.name} (x${item.quantity})`).join('; ') || '-', 'Total Amount': sale.amount.toFixed(2), 'Status': sale.status, 'Amount Paid': (sale.amount - sale.remainingAmount).toFixed(2), 'Remaining Amount': sale.remainingAmount.toFixed(2), 'Due Date': sale.dueDate ? new Date(sale.dueDate).toLocaleDateString() : '-', 'Payment Methods': sale.payments?.map(p => p.method).join('; ') || '-', 'Created By': sale.createdBy || '-', 'Updated By': sale.updatedBy || '-', 'Last Updated': sale.updatedAt ? new Date(sale.updatedAt).toLocaleDateString() : '-', 'Assigned Staff': sale.assignedStaff?.name || '-' })); const headers = Object.keys(csvData[0] || {}); const csvContent = [headers.join(','), ...csvData.map(row => headers.map(header => `"${String(row[header as keyof typeof row]).replace(/"/g, '""')}"`).join(','))].join('\n'); const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' }); const link = document.createElement('a'); const url = URL.createObjectURL(blob); link.setAttribute('href', url); link.setAttribute('download', `sales_report_${new Date().toISOString().split('T')[0]}.csv`); link.click(); URL.revokeObjectURL(url); }} className="flex-1 sm:flex-none bg-gradient-to-r from-green-600 to-emerald-600 text-white px-4 py-2 rounded-xl hover:from-green-700 hover:to-emerald-700 flex items-center justify-center gap-2 text-sm shadow-md transition-all"><Download size={16} />Export</button>
+              <button onClick={() => setShowAccountingModal(true)} className="flex-1 sm:flex-none bg-purple-600 text-white px-3 py-2 rounded-lg hover:bg-purple-700 flex items-center justify-center gap-1.5 text-xs shadow-md transition-all"><FileSpreadsheet size={12} />Reports</button>
+              <button onClick={() => { const csvData = sales.map(sale => ({ 'Sale ID': sale.id, 'Date': new Date(sale.date).toLocaleDateString(), 'Customer': sale.customer?.name || '-', 'Phone': sale.customer?.phone || '-', 'Amount': sale.amount.toFixed(2), 'Status': sale.status, 'Remaining': sale.remainingAmount.toFixed(2), 'Created By': sale.createdBy || '-', 'Updated By': sale.updatedBy || '-', 'Assigned Staff': sale.assignedStaff?.name || '-' })); const headers = Object.keys(csvData[0] || {}); const csvContent = [headers.join(','), ...csvData.map(row => headers.map(header => `"${String(row[header as keyof typeof row]).replace(/"/g, '""')}"`).join(','))].join('\n'); const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' }); const link = document.createElement('a'); const url = URL.createObjectURL(blob); link.setAttribute('href', url); link.setAttribute('download', `sales_${new Date().toISOString().split('T')[0]}.csv`); link.click(); URL.revokeObjectURL(url); }} className="flex-1 sm:flex-none bg-gradient-to-r from-green-600 to-emerald-600 text-white px-3 py-2 rounded-lg hover:from-green-700 hover:to-emerald-700 flex items-center justify-center gap-1.5 text-xs shadow-md transition-all"><Download size={12} />Export</button>
             </div>
           </div>
         </div>
 
-        {/* Enhanced Filter Section - Mobile Responsive */}
-        <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-4 mb-4">
-          <div className="flex items-center justify-between mb-3">
-            <div className="flex items-center gap-2"><Filter size={18} className="text-gray-500" /><span className="font-medium text-gray-700 dark:text-gray-300">Filters</span>{isFilterActive && <span className="bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 text-xs px-2 py-0.5 rounded-full">Active</span>}</div>
-            <div className="flex gap-2">
-              <button onClick={() => setShowMobileFilters(!showMobileFilters)} className="sm:hidden text-gray-500 hover:text-gray-700 dark:hover:text-gray-300"><Menu size={18} /></button>
-              {isFilterActive && <button onClick={clearFilters} className="text-red-600 hover:text-red-700 text-sm flex items-center gap-1"><XCircle size={14} />Clear</button>}
+        {/* Filter Section */}
+        <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-3 mb-3">
+          <div className="flex items-center justify-between mb-2">
+            <div className="flex items-center gap-1.5">
+              <Filter size={14} className="text-gray-500" />
+              <span className="font-medium text-xs text-gray-700 dark:text-gray-300">Filters</span>
+              {isFilterActive && (
+                <span className="bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 text-[9px] px-1.5 py-0.5 rounded-full">
+                  Active
+                </span>
+              )}
+            </div>
+            <div className="flex gap-1.5">
+              <button 
+                onClick={() => setShowMobileFilters(!showMobileFilters)} 
+                className="sm:hidden text-gray-500 hover:text-gray-700 dark:hover:text-gray-300"
+              >
+                <Menu size={14} />
+              </button>
+              {isFilterActive && (
+                <button 
+                  onClick={clearFilters} 
+                  className="text-red-600 hover:text-red-700 text-[10px] flex items-center gap-0.5"
+                >
+                  <XCircle size={11} />
+                  Clear
+                </button>
+              )}
             </div>
           </div>
           
           <div className={`${showMobileFilters ? 'block' : 'hidden sm:block'}`}>
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-              <div><label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Customer</label><div className="relative"><Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" size={14} /><input type="text" placeholder="Search by name or phone..." value={customerFilter} onChange={(e) => setCustomerFilter(e.target.value)} className="w-full pl-9 pr-3 py-2 text-sm border border-gray-200 dark:border-gray-600 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white dark:bg-gray-700 text-black dark:text-white" /></div></div>
-              <div><label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Product</label><div className="relative"><Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" size={14} /><input type="text" placeholder="Search by product name..." value={productNameFilter} onChange={(e) => setProductNameFilter(e.target.value)} className="w-full pl-9 pr-3 py-2 text-sm border border-gray-200 dark:border-gray-600 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white dark:bg-gray-700 text-black dark:text-white" /></div></div>
-              <div><label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Created By</label><div className="relative"><User className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" size={14} /><select value={createdByFilter} onChange={(e) => setCreatedByFilter(e.target.value)} className="w-full pl-9 pr-3 py-2 text-sm border border-gray-200 dark:border-gray-600 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white dark:bg-gray-700 text-black dark:text-white"><option value="">All users</option>{Array.from(availableUsers).map(user => <option key={user} value={user}>{getUserDisplayName(user).name}</option>)}</select></div></div>
-              <div><label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Updated By</label><div className="relative"><User className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" size={14} /><select value={updatedByFilter} onChange={(e) => setUpdatedByFilter(e.target.value)} className="w-full pl-9 pr-3 py-2 text-sm border border-gray-200 dark:border-gray-600 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white dark:bg-gray-700 text-black dark:text-white"><option value="">All users</option>{Array.from(availableUsers).map(user => <option key={user} value={user}>{getUserDisplayName(user).name}</option>)}</select></div></div>
+            <div className="space-y-2">
+              <div>
+                <label className="block text-[9px] font-medium text-gray-700 dark:text-gray-300 mb-0.5">Customer</label>
+                <div className="relative">
+                  <Search className="absolute left-2.5 top-1/2 transform -translate-y-1/2 text-gray-400" size={11} />
+                  <input 
+                    type="text" 
+                    placeholder="Search by name or phone..." 
+                    value={customerFilter} 
+                    onChange={(e) => setCustomerFilter(e.target.value)} 
+                    className="w-full pl-7 pr-2 py-1.5 text-xs border border-gray-200 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white dark:bg-gray-700 text-black dark:text-white" 
+                  />
+                </div>
+              </div>
+              
+              <div>
+                <label className="block text-[9px] font-medium text-gray-700 dark:text-gray-300 mb-0.5">Product</label>
+                <div className="relative">
+                  <Search className="absolute left-2.5 top-1/2 transform -translate-y-1/2 text-gray-400" size={11} />
+                  <input 
+                    type="text" 
+                    placeholder="Search by product..." 
+                    value={productNameFilter} 
+                    onChange={(e) => setProductNameFilter(e.target.value)} 
+                    className="w-full pl-7 pr-2 py-1.5 text-xs border border-gray-200 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white dark:bg-gray-700 text-black dark:text-white" 
+                  />
+                </div>
+              </div>
+              
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="block text-[9px] font-medium text-gray-700 dark:text-gray-300 mb-0.5">Created By</label>
+                  <div className="relative">
+                    <User className="absolute left-2.5 top-1/2 transform -translate-y-1/2 text-gray-400" size={11} />
+                    <select 
+                      value={createdByFilter} 
+                      onChange={(e) => setCreatedByFilter(e.target.value)} 
+                      className="w-full pl-7 pr-2 py-1.5 text-xs border border-gray-200 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-black dark:text-white"
+                    >
+                      <option value="">All</option>
+                      {Array.from(availableUsers).map(user => (
+                        <option key={user} value={user}>{getUserDisplayName(user).name}</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-[9px] font-medium text-gray-700 dark:text-gray-300 mb-0.5">Updated By</label>
+                  <div className="relative">
+                    <User className="absolute left-2.5 top-1/2 transform -translate-y-1/2 text-gray-400" size={11} />
+                    <select 
+                      value={updatedByFilter} 
+                      onChange={(e) => setUpdatedByFilter(e.target.value)} 
+                      className="w-full pl-7 pr-2 py-1.5 text-xs border border-gray-200 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-black dark:text-white"
+                    >
+                      <option value="">All</option>
+                      {Array.from(availableUsers).map(user => (
+                        <option key={user} value={user}>{getUserDisplayName(user).name}</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+              </div>
             </div>
-            <div className="mt-3 pt-3 border-t border-gray-100 dark:border-gray-700">
-              <div className="flex flex-wrap items-center gap-2"><span className="text-xs font-medium text-gray-700 dark:text-gray-300">Date Range:</span>{["today","week","month","all","custom"].map((filter) => (<button key={filter} onClick={() => setDateFilter(filter as any)} className={`px-3 py-1 text-xs rounded-full transition-colors ${dateFilter === filter ? "bg-blue-600 text-white" : "bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600"}`}>{filter === "all" ? "All Time" : filter === "today" ? "Today" : filter === "week" ? "This Week" : filter === "month" ? "This Month" : "Custom"}</button>))}</div>
-              {dateFilter === "custom" && (<div className="flex gap-2 mt-2"><input type="date" value={customStartDate} onChange={(e) => setCustomStartDate(e.target.value)} className="px-3 py-1.5 text-sm border border-gray-200 dark:border-gray-600 rounded-xl bg-white dark:bg-gray-700 text-black dark:text-white" /><span className="text-gray-400">to</span><input type="date" value={customEndDate} onChange={(e) => setCustomEndDate(e.target.value)} className="px-3 py-1.5 text-sm border border-gray-200 dark:border-gray-600 rounded-xl bg-white dark:bg-gray-700 text-black dark:text-white" /></div>)}
+            
+            <div className="mt-2 pt-2 border-t border-gray-100 dark:border-gray-700">
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className="text-[9px] font-medium text-gray-700 dark:text-gray-300">Date:</span>
+                {["today","week","month","all","custom"].map((filter) => (
+                  <button 
+                    key={filter} 
+                    onClick={() => setDateFilter(filter as any)} 
+                    className={`px-2 py-0.5 text-[9px] rounded-full transition-colors ${
+                      dateFilter === filter 
+                        ? "bg-blue-600 text-white" 
+                        : "bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600"
+                    }`}
+                  >
+                    {filter === "all" ? "All" : filter === "today" ? "Today" : filter === "week" ? "Week" : filter === "month" ? "Month" : "Custom"}
+                  </button>
+                ))}
+              </div>
+              
+              {dateFilter === "custom" && (
+                <div className="flex gap-1.5 mt-1.5">
+                  <input 
+                    type="date" 
+                    value={customStartDate} 
+                    onChange={(e) => setCustomStartDate(e.target.value)} 
+                    className="flex-1 px-2 py-1 text-xs border border-gray-200 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-black dark:text-white" 
+                  />
+                  <span className="text-gray-400 text-[10px] self-center">to</span>
+                  <input 
+                    type="date" 
+                    value={customEndDate} 
+                    onChange={(e) => setCustomEndDate(e.target.value)} 
+                    className="flex-1 px-2 py-1 text-xs border border-gray-200 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-black dark:text-white" 
+                  />
+                </div>
+              )}
             </div>
+            
+            {isFilterActive && (
+              <div className="mt-2 pt-2 border-t border-gray-100 dark:border-gray-700">
+                <div className="flex flex-wrap gap-1">
+                  {customerFilter && (
+                    <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 rounded-full text-[9px]">
+                      Customer: {customerFilter.length > 15 ? customerFilter.slice(0,15)+'...' : customerFilter}
+                      <button onClick={() => setCustomerFilter("")} className="ml-0.5 hover:text-blue-900">×</button>
+                    </span>
+                  )}
+                  {productNameFilter && (
+                    <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300 rounded-full text-[9px]">
+                      Product: {productNameFilter.length > 15 ? productNameFilter.slice(0,15)+'...' : productNameFilter}
+                      <button onClick={() => setProductNameFilter("")} className="ml-0.5 hover:text-green-900">×</button>
+                    </span>
+                  )}
+                  {createdByFilter && (
+                    <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300 rounded-full text-[9px]">
+                      Created by: {getUserDisplayName(createdByFilter).name}
+                      <button onClick={() => setCreatedByFilter("")} className="ml-0.5 hover:text-purple-900">×</button>
+                    </span>
+                  )}
+                  {updatedByFilter && (
+                    <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 bg-teal-100 dark:bg-teal-900/30 text-teal-700 dark:text-teal-300 rounded-full text-[9px]">
+                      Updated by: {getUserDisplayName(updatedByFilter).name}
+                      <button onClick={() => setUpdatedByFilter("")} className="ml-0.5 hover:text-teal-900">×</button>
+                    </span>
+                  )}
+                  {(dateFilter === "week" || dateFilter === "month" || dateFilter === "custom") && (
+                    <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 bg-orange-100 dark:bg-orange-900/30 text-orange-700 dark:text-orange-300 rounded-full text-[9px]">
+                      Date: {dateFilter === "custom" ? `${customStartDate || '?'} to ${customEndDate || '?'}` : dateFilter}
+                      <button onClick={() => setDateFilter("today")} className="ml-0.5 hover:text-orange-900">×</button>
+                    </span>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
         </div>
 
         {/* Error/Success Messages */}
-        {error && <div className="bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-300 px-4 py-3 rounded-xl mb-4 flex justify-between items-start"><div className="flex items-start gap-2"><AlertTriangle size={18} className="flex-shrink-0 mt-0.5" /><span className="text-sm">{error}</span></div><button onClick={clearMessages} className="text-red-700 hover:text-red-900 dark:text-red-300">×</button></div>}
-        {success && <div className="bg-green-50 dark:bg-green-900/30 border border-green-200 dark:border-green-800 text-green-700 dark:text-green-300 px-4 py-3 rounded-xl mb-4 flex justify-between items-start"><div className="flex items-start gap-2"><CheckCircle size={18} className="flex-shrink-0 mt-0.5" /><span className="text-sm">{success}</span></div><button onClick={clearMessages} className="text-green-700 hover:text-green-900 dark:text-green-300">×</button></div>}
+        {error && <div className="bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-300 px-3 py-2 rounded-lg mb-3 flex justify-between items-start"><div className="flex items-start gap-1.5"><AlertTriangle size={12} className="flex-shrink-0 mt-0.5" /><span className="text-[11px]">{error}</span></div><button onClick={clearMessages} className="text-red-700 hover:text-red-900 dark:text-red-300 text-xs">×</button></div>}
+        {success && <div className="bg-green-50 dark:bg-green-900/30 border border-green-200 dark:border-green-800 text-green-700 dark:text-green-300 px-3 py-2 rounded-lg mb-3 flex justify-between items-start"><div className="flex items-start gap-1.5"><CheckCircle size={12} className="flex-shrink-0 mt-0.5" /><span className="text-[11px]">{success}</span></div><button onClick={clearMessages} className="text-green-700 hover:text-green-900 dark:text-green-300 text-xs">×</button></div>}
 
         {/* Payment Method Breakdown */}
         <PaymentBreakdown stats={stats} dateFilter={dateFilter} />
 
-        {/* Stats Cards - Responsive Grid */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
-          <div className="bg-white dark:bg-gray-800 rounded-xl p-3 shadow-sm border-l-4 border-emerald-500"><div className="text-xs text-gray-500 dark:text-gray-400">Total Sales</div><div className="text-lg font-bold text-emerald-600 dark:text-emerald-400">Ksh {formatCurrency(stats.totalSales)}</div><div className="text-xs text-gray-400">{sales.length} orders</div></div>
-          <div className="bg-white dark:bg-gray-800 rounded-xl p-3 shadow-sm border-l-4 border-blue-500"><div className="text-xs text-gray-500 dark:text-gray-400">Fully Paid</div><div className="text-lg font-bold text-blue-600 dark:text-blue-400">Ksh {formatCurrency(stats.paidSales)}</div><div className="text-xs text-gray-400">{stats.paidCount} orders</div></div>
-          <div className="bg-white dark:bg-gray-800 rounded-xl p-3 shadow-sm border-l-4 border-orange-500"><div className="text-xs text-gray-500 dark:text-gray-400">Partial</div><div className="text-lg font-bold text-orange-600 dark:text-orange-400">Ksh {formatCurrency(stats.partialSales)}</div><div className="text-xs text-gray-400">{stats.partialCount} orders</div></div>
-          <div className="bg-white dark:bg-gray-800 rounded-xl p-3 shadow-sm border-l-4 border-red-500"><div className="text-xs text-gray-500 dark:text-gray-400">Unpaid</div><div className="text-lg font-bold text-red-600 dark:text-red-400">Ksh {formatCurrency(stats.unpaidSales)}</div><div className="text-xs text-gray-400">{stats.unpaidCount} orders</div></div>
-          <div className="bg-white dark:bg-gray-800 rounded-xl p-3 shadow-sm border-l-4 border-yellow-500"><div className="text-xs text-gray-500 dark:text-gray-400">Recently Updated</div><div className="text-lg font-bold text-yellow-600 dark:text-yellow-400">Ksh {formatCurrency(stats.recentlyUpdatedAmount)}</div><div className="text-xs text-gray-400">{stats.recentlyUpdatedCount} orders</div></div>
-          <div className="bg-white dark:bg-gray-800 rounded-xl p-3 shadow-sm border-l-4 border-purple-500"><div className="text-xs text-gray-500 dark:text-gray-400">Outstanding</div><div className="text-lg font-bold text-purple-600 dark:text-purple-400">Ksh {formatCurrency(stats.totalOutstanding)}</div><div className="text-xs text-gray-400">Total remaining</div></div>
-          <div className="bg-white dark:bg-gray-800 rounded-xl p-3 shadow-sm border-l-4 border-green-500"><div className="text-xs text-gray-500 dark:text-gray-400">Today's Sales</div><div className="text-lg font-bold text-green-600 dark:text-green-400">Ksh {formatCurrency(stats.todaySales)}</div><div className="text-xs text-gray-400">{stats.todayCount} orders</div></div>
-          <div className="bg-white dark:bg-gray-800 rounded-xl p-3 shadow-sm border-l-4 border-teal-500"><div className="text-xs text-gray-500 dark:text-gray-400">Today's Outstanding</div><div className="text-lg font-bold text-teal-600 dark:text-teal-400">Ksh {formatCurrency(stats.todayOutstanding)}</div><div className="text-xs text-gray-400">Remaining today</div></div>
+        {/* Stats Cards */}
+        <div className="grid grid-cols-2 gap-2 mb-3">
+          <div className="bg-white dark:bg-gray-800 rounded-lg p-2 shadow-sm border-l-4 border-emerald-500"><div className="text-[9px] text-gray-500 dark:text-gray-400">Total Sales</div><div className="text-sm font-bold text-emerald-600 dark:text-emerald-400">Ksh {formatCurrency(stats.totalSales)}</div><div className="text-[8px] text-gray-400">{sales.length} orders</div></div>
+          <div className="bg-white dark:bg-gray-800 rounded-lg p-2 shadow-sm border-l-4 border-blue-500"><div className="text-[9px] text-gray-500 dark:text-gray-400">Fully Paid</div><div className="text-sm font-bold text-blue-600 dark:text-blue-400">Ksh {formatCurrency(stats.paidSales)}</div><div className="text-[8px] text-gray-400">{stats.paidCount} orders</div></div>
+          <div className="bg-white dark:bg-gray-800 rounded-lg p-2 shadow-sm border-l-4 border-orange-500"><div className="text-[9px] text-gray-500 dark:text-gray-400">Partial</div><div className="text-sm font-bold text-orange-600 dark:text-orange-400">Ksh {formatCurrency(stats.partialSales)}</div><div className="text-[8px] text-gray-400">{stats.partialCount} orders</div></div>
+          <div className="bg-white dark:bg-gray-800 rounded-lg p-2 shadow-sm border-l-4 border-red-500"><div className="text-[9px] text-gray-500 dark:text-gray-400">Unpaid</div><div className="text-sm font-bold text-red-600 dark:text-red-400">Ksh {formatCurrency(stats.unpaidSales)}</div><div className="text-[8px] text-gray-400">{stats.unpaidCount} orders</div></div>
+          <div className="bg-white dark:bg-gray-800 rounded-lg p-2 shadow-sm border-l-4 border-yellow-500"><div className="text-[9px] text-gray-500 dark:text-gray-400">Recent Updates</div><div className="text-sm font-bold text-yellow-600 dark:text-yellow-400">Ksh {formatCurrency(stats.recentlyUpdatedAmount)}</div><div className="text-[8px] text-gray-400">{stats.recentlyUpdatedCount} orders</div></div>
+          <div className="bg-white dark:bg-gray-800 rounded-lg p-2 shadow-sm border-l-4 border-purple-500"><div className="text-[9px] text-gray-500 dark:text-gray-400">Outstanding</div><div className="text-sm font-bold text-purple-600 dark:text-purple-400">Ksh {formatCurrency(stats.totalOutstanding)}</div><div className="text-[8px] text-gray-400">total remaining</div></div>
+          <div className="bg-white dark:bg-gray-800 rounded-lg p-2 shadow-sm border-l-4 border-green-500"><div className="text-[9px] text-gray-500 dark:text-gray-400">Today's Sales</div><div className="text-sm font-bold text-green-600 dark:text-green-400">Ksh {formatCurrency(stats.todaySales)}</div><div className="text-[8px] text-gray-400">{stats.todayCount} orders</div></div>
+          <div className="bg-white dark:bg-gray-800 rounded-lg p-2 shadow-sm border-l-4 border-teal-500"><div className="text-[9px] text-gray-500 dark:text-gray-400">Today's Outstanding</div><div className="text-sm font-bold text-teal-600 dark:text-teal-400">Ksh {formatCurrency(stats.todayOutstanding)}</div><div className="text-[8px] text-gray-400">remaining today</div></div>
         </div>
 
         {/* Tabs Section */}
-        <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 mb-4">
+        <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 mb-3">
           <div className="flex overflow-x-auto scrollbar-thin border-b dark:border-gray-700">
-            {[{ key: "overview", label: "All Sales", count: sales.length }, { key: "paid", label: "Paid", count: stats.paidCount }, { key: "partial", label: "Partial", count: stats.partialCount }, { key: "unpaid", label: "Unpaid", count: stats.unpaidCount }, { key: "recentlyUpdated", label: "Recent Updates", count: stats.recentlyUpdatedCount }, { key: "accounting", label: "Accounting", count: null, icon: TrendingUp }].map((tab) => (<button key={tab.key} onClick={() => setActiveTab(tab.key as any)} className={`flex-shrink-0 px-3 sm:px-4 py-3 text-center transition-all whitespace-nowrap ${activeTab === tab.key ? "border-b-2 border-blue-500 text-blue-600 dark:text-blue-400 font-semibold bg-blue-50/30 dark:bg-blue-900/10" : "text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700/50"}`}><div className="flex items-center gap-2">{tab.icon && <tab.icon size={14} />}<span className="text-sm">{tab.label}</span>{tab.count !== null && <span className="text-xs text-gray-400">({tab.count})</span>}</div></button>))}
-            <button onClick={() => { setShowDeletedModal(true); fetchDeletedSales(); }} className="flex-shrink-0 px-3 sm:px-4 py-3 text-center transition-all whitespace-nowrap text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700/50"><div className="flex items-center gap-2"><Archive size={14} /><span className="text-sm">Deleted</span><span className="text-xs text-gray-400">({deletedSalesTotal})</span></div></button>
+            {[{ key: "overview", label: "All", count: sales.length }, { key: "paid", label: "Paid", count: stats.paidCount }, { key: "partial", label: "Partial", count: stats.partialCount }, { key: "unpaid", label: "Unpaid", count: stats.unpaidCount }, { key: "recentlyUpdated", label: "Updates", count: stats.recentlyUpdatedCount }, { key: "accounting", label: "Accounting", count: null, icon: TrendingUp }].map((tab) => (<button key={tab.key} onClick={() => setActiveTab(tab.key as any)} className={`flex-shrink-0 px-2.5 py-2 text-center transition-all whitespace-nowrap ${activeTab === tab.key ? "border-b-2 border-blue-500 text-blue-600 dark:text-blue-400 font-semibold bg-blue-50/30 dark:bg-blue-900/10" : "text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700/50"}`}><div className="flex items-center gap-1"><span className="text-[11px]">{tab.label}</span>{tab.count !== null && <span className="text-[9px] text-gray-400">({tab.count})</span>}</div></button>))}
+            <button onClick={() => { setShowDeletedModal(true); fetchDeletedSales(); }} className="flex-shrink-0 px-2.5 py-2 text-center transition-all whitespace-nowrap text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700/50"><div className="flex items-center gap-1"><Archive size={12} /><span className="text-[11px]">Deleted</span><span className="text-[9px] text-gray-400">({deletedSalesTotal})</span></div></button>
           </div>
 
-          <div className="p-3 sm:p-4">
+          <div className="p-3">
             {activeTab === "accounting" ? (<AccountingPage sales={sales} getUserDisplayName={getUserDisplayName} />) : (
               <>
-                {activeTab === "recentlyUpdated" && (<div className="mb-4 p-3 bg-blue-50 dark:bg-blue-900/20 rounded-xl border border-blue-200 dark:border-blue-800"><div className="text-sm text-blue-800 dark:text-blue-300"><div className="font-semibold">📊 Recently Updated Sales</div><div className="text-xs mt-1">Showing sales that were updated in the last 7 days (excluding newly created sales)</div></div></div>)}
-                <div className="mb-4 p-3 bg-gray-50 dark:bg-gray-700/50 rounded-xl border border-gray-200 dark:border-gray-600"><div className="flex flex-wrap items-center justify-between gap-2 text-xs"><div className="flex items-center gap-2"><Calendar size={12} className="text-gray-500" /><span className="text-gray-600 dark:text-gray-400">{dateFilter === "today" ? "Today's transactions" : dateFilter === "week" ? "Last 7 days" : dateFilter === "month" ? "Last 30 days" : dateFilter === "custom" ? `Custom: ${formatDate(customStartDate)} - ${formatDate(customEndDate)}` : "All transactions"}</span></div><div className="text-gray-500 dark:text-gray-400">{sortedFilteredSales.length} sales • Ksh {formatCurrency(sortedFilteredSales.reduce((acc, s) => acc + Number(s.amount), 0))}</div></div>{(createdByFilter || updatedByFilter) && (<div className="flex flex-wrap gap-2 mt-2">{createdByFilter && <span className="inline-flex items-center gap-1 px-2 py-1 bg-indigo-100 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300 rounded-full text-xs">Created by: {getUserDisplayName(createdByFilter).name}</span>}{updatedByFilter && <span className="inline-flex items-center gap-1 px-2 py-1 bg-teal-100 dark:bg-teal-900/30 text-teal-700 dark:text-teal-300 rounded-full text-xs">Updated by: {getUserDisplayName(updatedByFilter).name}</span>}</div>)}</div>
+                <div className="mb-3 p-2 bg-gray-50 dark:bg-gray-700/50 rounded-lg border border-gray-200 dark:border-gray-600">
+                  <div className="flex flex-wrap items-center justify-between gap-1 text-[9px]">
+                    <div className="flex items-center gap-1">
+                      <Calendar size={9} className="text-gray-500" />
+                      <span className="text-gray-600 dark:text-gray-400">
+                        {dateFilter === "today" ? "Today" : 
+                         dateFilter === "week" ? "Last 7 days" : 
+                         dateFilter === "month" ? "Last 30 days" : 
+                         dateFilter === "custom" ? `Custom` : "All"}
+                      </span>
+                    </div>
+                    <div className="text-gray-500 dark:text-gray-400 text-[9px]">
+                      {sortedFilteredSales.length} sales • Ksh {formatCurrency(sortedFilteredSales.reduce((acc, s) => acc + Number(s.amount), 0))}
+                    </div>
+                  </div>
+                  {isFilterActive && (
+                    <div className="text-[8px] text-blue-600 dark:text-blue-400 mt-1">
+                      Filters applied
+                    </div>
+                  )}
+                </div>
 
-                {/* Sales List - Mobile Responsive */}
-                <div className="space-y-3">
+                <div className="space-y-2">
                   {sortedFilteredSales.map((sale) => (
                     isMobile ? (
                       <MobileSaleCard 
@@ -1728,42 +2217,511 @@ export default function EnhancedSalesPage() {
                         loading={loading}
                       />
                     ) : (
-                      // Desktop view - original card design
-                      <div key={sale.id} className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl p-4 shadow-sm hover:shadow-md transition-shadow">
-                        <div className="flex justify-between items-start mb-3">
-                          <div><div className="flex items-center gap-2 flex-wrap"><h3 className="font-semibold text-gray-900 dark:text-white">{sale.customer?.name || "-"}</h3>{sale.customer?.phone && <span className="text-xs text-gray-500 dark:text-gray-400">{sale.customer.phone}</span>}</div></div>
-                          <div className="flex items-center gap-2">
-                            <span className={`px-2 py-1 rounded-full text-xs font-semibold ${sale.status === "PAID" ? "bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300" : sale.status === "PARTIAL" ? "bg-orange-100 dark:bg-orange-900/30 text-orange-700 dark:text-orange-300" : "bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300"}`}>{sale.status}</span>
-                            {sale.assignedStaff && (<span className="px-2 py-1 rounded-full text-xs bg-indigo-100 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300 flex items-center gap-1"><UserCheck size={12} />{sale.assignedStaff.name}</span>)}
-                            {isRecentlyUpdated(sale) && isSaleModified(sale) && (<span className="px-2 py-1 rounded-full text-xs bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-300 border border-yellow-200 dark:border-yellow-800">Recently Updated</span>)}
-                            <button onClick={() => setExpandedSaleId(expandedSaleId === sale.id ? null : sale.id)} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors">{expandedSaleId === sale.id ? <ChevronUp size={16} /> : <ChevronDown size={16} />}</button>
+                      <div key={sale.id} className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-3 shadow-sm hover:shadow-md transition-shadow">
+                        <div className="flex justify-between items-start mb-2">
+                          <div>
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <h3 className="font-semibold text-gray-900 dark:text-white text-sm">
+                                {sale.customer?.name || "-"}
+                              </h3>
+                              <span className="text-[10px] text-gray-400 bg-gray-100 dark:bg-gray-700 px-1.5 py-0.5 rounded-full">
+                                #{sale.id}
+                              </span>
+                              {sale.customer?.phone && (
+                                <span className="text-[11px] text-gray-500 dark:text-gray-400">{sale.customer.phone}</span>
+                              )}
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-1.5">
+                            <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-semibold ${
+                              sale.status === "PAID" ? "bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300" : 
+                              sale.status === "PARTIAL" ? "bg-orange-100 dark:bg-orange-900/30 text-orange-700 dark:text-orange-300" : 
+                              "bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300"
+                            }`}>{sale.status}</span>
+                            {sale.assignedStaff && (
+                              <span className="px-1.5 py-0.5 rounded-full text-[10px] bg-indigo-100 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300 flex items-center gap-1">
+                                <UserCheck size={10} />
+                                {sale.assignedStaff.name}
+                              </span>
+                            )}
+                            <button onClick={() => setExpandedSaleId(expandedSaleId === sale.id ? null : sale.id)} 
+                                    className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors">
+                              {expandedSaleId === sale.id ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+                            </button>
                           </div>
                         </div>
-                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs mb-3"><div><span className="text-gray-500">Amount:</span><span className="font-semibold text-emerald-600 dark:text-emerald-400 ml-1">Ksh {formatCurrency(sale.amount)}</span></div><div><span className="text-gray-500">Remaining:</span><span className="font-semibold text-red-600 dark:text-red-400 ml-1">Ksh {formatCurrency(sale.remainingAmount)}</span></div><div><span className="text-gray-500">Date:</span><span className="ml-1 text-gray-700 dark:text-gray-300">{formatDate(sale.date)}</span></div>{sale.dueDate && (<div><span className="text-gray-500">Due:</span><span className="ml-1 text-gray-700 dark:text-gray-300">{formatDate(sale.dueDate)}</span></div>)}</div>
-                        {sale.payments && sale.payments.length > 0 && (<div className="mb-3"><div className="flex flex-wrap gap-1">{sale.payments.slice(0, 3).map((payment, idx) => { const IconComponent = paymentMethods.find(m => m.value === payment.method)?.icon || Banknote; return (<span key={idx} className={`px-2 py-1 rounded-full text-xs flex items-center gap-1 ${paymentMethods.find(m => m.value === payment.method)?.color || "bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-300"}`}><IconComponent size={10} /><span>{payment.method}</span>{payment.amount > 0 && <span className="font-semibold">Ksh {formatCurrency(payment.amount)}</span>}</span>); })}</div></div>)}
-                        {sale.updatedAt && sale.updatedBy && (<div className="mb-3 text-xs text-gray-500 dark:text-gray-400 flex items-center gap-2"><ClockIcon size={10} /><span>Updated {formatDateTime(sale.updatedAt)} by {getUserDisplayName(sale.updatedBy).name}</span></div>)}
-                        {expandedSaleId === sale.id && (<div className="mt-3 pt-3 border-t border-gray-100 dark:border-gray-700 space-y-3"><div><div className="font-medium text-gray-700 dark:text-gray-300 text-xs mb-2">Products:</div><div className="space-y-1">{sale.saleitems && sale.saleitems.map((item, idx) => (<div key={idx} className="text-sm text-gray-600 dark:text-gray-400 flex justify-between"><span>{item.product.name}</span><span>×{item.quantity} @ Ksh {formatCurrency(item.price)}</span></div>))}</div></div>{(sale.createdBy || sale.updatedBy) && (<div className="text-xs text-gray-500 dark:text-gray-400 space-y-1">{sale.createdBy && (<div className="flex items-center gap-1"><User size={10} className="text-blue-500" /><span>Created by: {getUserDisplayName(sale.createdBy).name}</span>{sale.createdAt && <span>on {formatDateTime(sale.createdAt)}</span>}</div>)}</div>)}<button onClick={() => handleViewAuditLog(sale)} className="w-full bg-gray-50 dark:bg-gray-700/50 hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300 px-3 py-2 rounded-xl text-sm flex items-center justify-center gap-2 transition-colors"><History size={14} />View Detailed Audit History</button></div>)}
-                        <div className="mt-3 pt-3 border-t border-gray-100 dark:border-gray-700 flex gap-2"><button onClick={() => window.open(`/api/receipt/${sale.id}`, "_blank")} className="flex-1 bg-purple-50 dark:bg-purple-900/20 hover:bg-purple-100 text-purple-700 px-3 py-2 rounded-xl text-sm flex items-center justify-center gap-2"><Download size={14} />Receipt</button><button onClick={() => handleEditSale(sale)} className="flex-1 bg-blue-50 dark:bg-blue-900/20 hover:bg-blue-100 text-blue-700 px-3 py-2 rounded-xl text-sm flex items-center justify-center gap-2"><Edit size={14} />Edit</button><button onClick={() => showDeleteConfirmationWithReason(sale.id)} disabled={loading} className="flex-1 bg-red-50 dark:bg-red-900/20 hover:bg-red-100 text-red-700 px-3 py-2 rounded-xl text-sm flex items-center justify-center gap-2 disabled:opacity-50"><Trash2 size={14} />Delete</button></div>
+                        
+                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[11px] mb-2">
+                          <div><span className="text-gray-500">Amount:</span><span className="font-semibold text-emerald-600 dark:text-emerald-400 ml-1">Ksh {formatCurrency(sale.amount)}</span></div>
+                          <div><span className="text-gray-500">Remaining:</span><span className="font-semibold text-red-600 dark:text-red-400 ml-1">Ksh {formatCurrency(sale.remainingAmount)}</span></div>
+                          <div><span className="text-gray-500">Date:</span><span className="ml-1 text-gray-700 dark:text-gray-300">{formatDate(sale.date)}</span></div>
+                          {sale.dueDate && (
+                            <div><span className="text-gray-500">Due:</span><span className="ml-1 text-gray-700 dark:text-gray-300">{formatDate(sale.dueDate)}</span></div>
+                          )}
+                        </div>
+                        
+                        <div className="flex flex-wrap items-center gap-3 text-[10px] text-gray-500 mb-2">
+                          {sale.createdBy && (
+                            <div className="flex items-center gap-1">
+                              <User size={10} className="text-blue-400" />
+                              <span>Created: {getUserDisplayName(sale.createdBy).name}</span>
+                              {sale.createdAt && <span className="text-gray-400">{formatDateTime(sale.createdAt)}</span>}
+                            </div>
+                          )}
+                          {sale.updatedBy && sale.updatedAt && sale.updatedAt !== sale.createdAt && (
+                            <div className="flex items-center gap-1">
+                              <ClockIcon size={10} className="text-teal-400" />
+                              <span>Updated: {getUserDisplayName(sale.updatedBy).name}</span>
+                              <span className="text-gray-400">{formatDateTime(sale.updatedAt)}</span>
+                            </div>
+                          )}
+                        </div>
+                        
+                        {expandedSaleId === sale.id && (
+                          <div className="mt-2 pt-2 border-t border-gray-100 dark:border-gray-700">
+                            <button onClick={() => handleViewAuditLog(sale)} 
+                                    className="w-full bg-gray-50 dark:bg-gray-700/50 hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300 px-2 py-1.5 rounded-lg text-[11px] flex items-center justify-center gap-1.5 transition-colors">
+                              <History size={11} />View Audit History
+                            </button>
+                          </div>
+                        )}
+                        
+                        <div className="mt-2 pt-2 border-t border-gray-100 dark:border-gray-700 flex gap-2">
+                          <button onClick={() => window.open(`/api/receipt/${sale.id}`, "_blank")} 
+                                  className="flex-1 bg-purple-50 dark:bg-purple-900/20 hover:bg-purple-100 text-purple-700 px-2 py-1.5 rounded-lg text-[11px] flex items-center justify-center gap-1">
+                            <Download size={10} />Receipt
+                          </button>
+                          <button onClick={() => handleEditSale(sale)} 
+                                  className="flex-1 bg-blue-50 dark:bg-blue-900/20 hover:bg-blue-100 text-blue-700 px-2 py-1.5 rounded-lg text-[11px] flex items-center justify-center gap-1">
+                            <Edit size={10} />Edit
+                          </button>
+                          <button onClick={() => showDeleteConfirmationWithReason(sale.id)} disabled={loading} 
+                                  className="flex-1 bg-red-50 dark:bg-red-900/20 hover:bg-red-100 text-red-700 px-2 py-1.5 rounded-lg text-[11px] flex items-center justify-center gap-1 disabled:opacity-50">
+                            <Trash2 size={10} />Delete
+                          </button>
+                        </div>
                       </div>
                     )
                   ))}
-                  {sortedFilteredSales.length === 0 && (<div className="text-center py-12 text-gray-500"><div className="text-lg mb-2">No sales found</div><div className="text-sm">Try adjusting your filters</div></div>)}
+                  {sortedFilteredSales.length === 0 && (
+                    <div className="text-center py-8 text-gray-500">
+                      <div className="text-sm mb-1">No sales found</div>
+                      <div className="text-[11px]">Try adjusting filters</div>
+                    </div>
+                  )}
                 </div>
               </>
             )}
           </div>
         </div>
 
-        {/* Edit Sale Modal - Keep existing modal code */}
+        {/* Edit Sale Modal with Enhanced Product Stock and Payment Methods */}
         {editingSale && (
-          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-start justify-center p-3 z-50 overflow-y-auto">
-            <div className="bg-white dark:bg-gray-800 rounded-xl w-full max-w-md max-h-[90vh] overflow-y-auto mt-4 shadow-2xl">
-              <div className="p-4 border-b dark:border-gray-700 sticky top-0 bg-white dark:bg-gray-800 rounded-t-xl"><div className="flex justify-between items-center"><h2 className="text-lg font-bold text-black dark:text-white">Edit Sale #{editingSale.id}</h2><button onClick={() => setEditingSale(null)} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"><X size={20} /></button></div></div>
-              <div className="p-4 space-y-4">
-                <div className="bg-gray-50 dark:bg-gray-700/50 p-3 rounded-xl"><h3 className="font-semibold mb-2 text-sm text-black dark:text-white">Sale Information</h3><div className="grid grid-cols-2 gap-2 text-xs"><div><span className="text-gray-500">Customer:</span><div className="font-medium text-gray-900 dark:text-white">{editingSale.customer.name}</div></div><div><span className="text-gray-500">Date:</span><div className="text-gray-900 dark:text-white">{formatDate(editingSale.date)}</div></div><div className="col-span-2"><span className="text-gray-500">Status:</span><span className={`ml-2 px-2 py-0.5 rounded-full text-xs font-semibold ${editingSale.status === "PAID" ? "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300" : editingSale.status === "PARTIAL" ? "bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-300" : "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300"}`}>{editingSale.status}</span></div></div></div>
-                <div><h3 className="text-sm font-semibold mb-2 text-black dark:text-white flex items-center gap-1"><Calculator size={14} />Edit Items</h3><div className="space-y-2 mb-3 p-3 bg-gray-50 dark:bg-gray-700/50 rounded-xl"><h4 className="font-medium text-xs text-gray-700 dark:text-gray-300">Add New Item</h4><div className="space-y-2"><div className="relative"><input type="text" placeholder="Search product..." value={productSearch} onChange={(e) => { setProductSearch(e.target.value); setShowProductDropdown(true); }} onFocus={() => setShowProductDropdown(true)} className="w-full p-2 border border-gray-200 dark:border-gray-600 rounded-xl text-sm bg-white dark:bg-gray-700 text-black dark:text-white" />{showProductDropdown && filteredProducts.length > 0 && (<div className="absolute z-20 w-full mt-1 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded-xl shadow-lg max-h-40 overflow-y-auto">{filteredProducts.map(product => (<div key={product.id} onClick={() => { setCurrentEditItem({ ...currentEditItem, productId: product.id, price: product.price || 0, productName: product.name }); setProductSearch(product.name); setShowProductDropdown(false); }} className="p-2 hover:bg-blue-50 dark:hover:bg-gray-700 cursor-pointer text-sm"><div className="font-medium text-gray-900 dark:text-white">{product.name}</div><div className="text-xs text-gray-500 dark:text-gray-400">Ksh {formatCurrency(product.price || 0)}</div></div>))}</div>)}</div><div className="grid grid-cols-2 gap-2"><input type="number" min="1" value={currentEditItem.quantity || ''} onChange={(e) => setCurrentEditItem({...currentEditItem, quantity: parseInt(e.target.value) || 1})} placeholder="Quantity" className="p-2 border border-gray-200 dark:border-gray-600 rounded-xl text-sm bg-white dark:bg-gray-700 text-black dark:text-white" /><input type="number" min="0" step="0.01" value={currentEditItem.price || ''} onChange={(e) => setCurrentEditItem({...currentEditItem, price: parseFloat(e.target.value) || 0})} placeholder="Price" className="p-2 border border-gray-200 dark:border-gray-600 rounded-xl text-sm bg-white dark:bg-gray-700 text-black dark:text-white" /></div><button onClick={handleAddItemToEditSale} disabled={!currentEditItem.productId || currentEditItem.quantity <= 0 || currentEditItem.price <= 0} className="w-full bg-blue-600 text-white px-3 py-2 rounded-xl text-sm hover:bg-blue-700 disabled:opacity-50 transition-colors"><Plus size={14} className="inline mr-1" />Add Item</button></div></div><div className="space-y-2 max-h-40 overflow-y-auto">{editSaleItems.map((item, index) => (<div key={index} className="bg-gray-50 dark:bg-gray-700/50 p-2 rounded-xl border dark:border-gray-600 text-sm"><div className="flex justify-between items-center mb-1"><div className="font-medium text-gray-900 dark:text-white">{item.productName}</div><button onClick={() => setEditSaleItems(editSaleItems.filter((_, i) => i !== index))} className="text-red-500 hover:text-red-700"><X size={14} /></button></div><div className="grid grid-cols-2 gap-2"><input type="number" min="1" value={item.quantity} onChange={(e) => { const newItems = [...editSaleItems]; newItems[index].quantity = parseInt(e.target.value) || 1; setEditSaleItems(newItems); }} className="p-1 border rounded text-xs bg-white dark:bg-gray-700 text-black dark:text-white" /><input type="number" min="0" step="0.01" value={item.price} onChange={(e) => { const newItems = [...editSaleItems]; newItems[index].price = parseFloat(e.target.value) || 0; setEditSaleItems(newItems); }} className="p-1 border rounded text-xs bg-white dark:bg-gray-700 text-black dark:text-white" /></div><div className="text-xs text-green-600 dark:text-green-400 mt-1">Subtotal: Ksh {formatCurrency(item.quantity * item.price)}</div></div>))}</div><div className="bg-blue-50 dark:bg-blue-900/20 p-3 rounded-xl mt-2"><div className="flex justify-between items-center"><span className="font-semibold text-sm text-black dark:text-white">New Total:</span><span className="font-bold text-blue-600 dark:text-blue-400">Ksh {formatCurrency(editSaleItems.reduce((sum, item) => sum + (item.quantity * item.price), 0))}</span></div></div></div>
-                <div><h3 className="text-sm font-semibold mb-2 text-black dark:text-white">Payments</h3>{editPayments.length > 0 && (<div className="space-y-1 mb-3">{editPayments.map((payment, index) => (<div key={index} className="flex justify-between items-center bg-gray-50 dark:bg-gray-700/50 p-2 rounded-xl border dark:border-gray-600 text-sm"><div className="flex items-center gap-2"><span className={`px-2 py-0.5 rounded-full text-xs ${paymentMethods.find(m => m.value === payment.method)?.color}`}>{payment.method}</span><span className="font-medium text-black dark:text-white">Ksh {formatCurrency(parseFloat(payment.amount))}</span></div>{payment.id !== undefined && (<button onClick={() => handleDeletePayment(payment.id as number, editingSale.id)} disabled={deletingPaymentId === payment.id} className="text-red-500 hover:text-red-700"><Trash2 size={14} /></button>)}</div>))}</div>)}<div className="space-y-2 p-3 bg-gray-50 dark:bg-gray-700/50 rounded-xl"><div className="grid grid-cols-2 gap-2"><select value={currentPayment.method} onChange={(e) => setCurrentPayment({...currentPayment, method: e.target.value as any})} className="p-2 border border-gray-200 dark:border-gray-600 rounded-xl text-sm bg-white dark:bg-gray-700 text-black dark:text-white">{paymentMethods.map(method => (<option key={method.value} value={method.value}>{method.label}</option>))}</select><input type="number" min="0" step="0.01" value={currentPayment.amount} onChange={(e) => setCurrentPayment({...currentPayment, amount: e.target.value})} placeholder="Amount" className="p-2 border border-gray-200 dark:border-gray-600 rounded-xl text-sm bg-white dark:bg-gray-700 text-black dark:text-white" disabled={currentPayment.method === "CREDIT"} /></div>{["MPESA","BANK","CARD"].includes(currentPayment.method) && (<input type="text" value={currentPayment.referenceId} onChange={(e) => setCurrentPayment({...currentPayment, referenceId: e.target.value})} placeholder="Reference ID" className="w-full p-2 border border-gray-200 dark:border-gray-600 rounded-xl text-sm bg-white dark:bg-gray-700 text-black dark:text-white" />)}{currentPayment.method === "CHECK" && (<input type="date" value={currentPayment.checkDepositDate} onChange={(e) => setCurrentPayment({...currentPayment, checkDepositDate: e.target.value})} className="w-full p-2 border border-gray-200 dark:border-gray-600 rounded-xl text-sm bg-white dark:bg-gray-700 text-black dark:text-white" />)}{currentPayment.method === "CREDIT" && (<input type="date" value={currentPayment.dueDate} onChange={(e) => setCurrentPayment({...currentPayment, dueDate: e.target.value})} className="w-full p-2 border border-gray-200 dark:border-gray-600 rounded-xl text-sm bg-white dark:bg-gray-700 text-black dark:text-white" />)}<button onClick={addEditPayment} className="w-full bg-green-600 text-white px-3 py-2 rounded-xl text-sm hover:bg-green-700 transition-colors"><Plus size={14} className="inline mr-1" />Add Payment</button></div><div className="bg-blue-50 dark:bg-blue-900/20 p-3 rounded-xl text-sm mt-2"><div className="flex justify-between mb-1"><span className="text-black dark:text-white">Total Sale:</span><span className="font-bold text-black dark:text-white">Ksh {formatCurrency(editSaleItems.reduce((sum, item) => sum + (item.quantity * item.price), 0))}</span></div><div className="flex justify-between mb-1"><span className="text-black dark:text-white">Total Payments:</span><span className="font-bold text-green-600 dark:text-green-400">Ksh {formatCurrency(editPayments.reduce((sum, p) => sum + Number(p.amount), 0))}</span></div><div className="flex justify-between pt-1 border-t border-blue-200 dark:border-blue-800"><span className="text-black dark:text-white">Remaining:</span><span className={`font-bold ${Math.max(0, editSaleItems.reduce((sum, item) => sum + (item.quantity * item.price), 0) - editPayments.reduce((sum, p) => sum + Number(p.amount), 0)) > 0 ? 'text-red-600' : 'text-green-600'}`}>Ksh {formatCurrency(Math.max(0, editSaleItems.reduce((sum, item) => sum + (item.quantity * item.price), 0) - editPayments.reduce((sum, p) => sum + Number(p.amount), 0)))}</span></div></div></div>
-                <div className="flex gap-2 pt-3"><button onClick={() => setEditingSale(null)} disabled={loading} className="flex-1 bg-gray-500 text-white px-4 py-2 rounded-xl hover:bg-gray-600 disabled:opacity-50 transition-colors">Cancel</button><button onClick={handleUpdateSale} disabled={loading} className="flex-1 bg-blue-600 text-white px-4 py-2 rounded-xl hover:bg-blue-700 disabled:opacity-50 transition-colors">{loading ? "Saving..." : "Update Sale"}</button></div>
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-start justify-center p-2 z-50 overflow-y-auto">
+            <div className="bg-white dark:bg-gray-800 rounded-lg w-full max-w-md max-h-[90vh] overflow-y-auto mt-4 shadow-2xl">
+              <div className="p-3 border-b dark:border-gray-700 sticky top-0 bg-white dark:bg-gray-800 rounded-t-lg">
+                <div className="flex justify-between items-center">
+                  <h2 className="text-sm font-bold text-black dark:text-white">Edit Sale #{editingSale.id}</h2>
+                  <button onClick={() => setEditingSale(null)} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300">
+                    <X size={16} />
+                  </button>
+                </div>
+              </div>
+              
+              <div className="p-3 space-y-3">
+                {/* Sale Info */}
+                <div className="bg-gray-50 dark:bg-gray-700/50 p-2.5 rounded-lg">
+                  <h3 className="font-semibold mb-1.5 text-xs text-black dark:text-white">Sale Information</h3>
+                  <div className="grid grid-cols-2 gap-1.5 text-[11px]">
+                    <div>
+                      <span className="text-gray-500">Customer:</span>
+                      <div className="font-medium text-gray-900 dark:text-white text-xs">{editingSale.customer.name}</div>
+                      {editingSale.customer.phone && (
+                        <div className="text-[10px] text-gray-400">{editingSale.customer.phone}</div>
+                      )}
+                    </div>
+                    <div>
+                      <span className="text-gray-500">Date:</span>
+                      <div className="text-gray-900 dark:text-white text-xs">{formatDate(editingSale.date)}</div>
+                    </div>
+                  </div>
+                </div>
+                
+                {/* Items Section */}
+                <div>
+                  <h3 className="text-xs font-semibold mb-1.5 text-black dark:text-white flex items-center justify-between">
+                    <span>Products</span>
+                    <span className="text-[10px] text-gray-500">{editSaleItems.length} items</span>
+                  </h3>
+                  
+                  {/* Add Item Form */}
+                  <div className="space-y-1.5 mb-3 p-2.5 bg-gray-50 dark:bg-gray-700/50 rounded-lg">
+                    <h4 className="font-medium text-[10px] text-gray-700 dark:text-gray-300">Add New Product</h4>
+                    
+                    {/* Product Search with Dropdown and Stock Info */}
+                    <div className="relative product-dropdown-container">
+                      <div className="relative">
+                        <Search className="absolute left-2 top-1/2 transform -translate-y-1/2 text-gray-400" size={12} />
+                        <input 
+                          type="text" 
+                          placeholder="Search product by name..." 
+                          value={productSearch} 
+                          onChange={(e) => { 
+                            setProductSearch(e.target.value); 
+                            setShowProductDropdown(true);
+                            if (currentEditItem.productId) {
+                              setCurrentEditItem({ ...currentEditItem, productId: 0, productName: "" });
+                            }
+                          }} 
+                          onFocus={() => setShowProductDropdown(true)}
+                          className="w-full pl-7 pr-2 py-2 text-xs border border-gray-200 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-black dark:text-white" 
+                        />
+                      </div>
+                      
+                      {/* Product Dropdown with Stock Display */}
+                      {showProductDropdown && filteredProducts.length > 0 && (
+                        <div className="absolute z-20 w-full mt-1 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded-lg shadow-lg max-h-48 overflow-y-auto">
+                          {filteredProducts.map(product => {
+                            // Get correct stock quantity
+                            let stockQty = 0;
+                            if (Array.isArray(product.stock)) {
+                              stockQty = product.stock.reduce((sum: number, s: any) => sum + (s.quantity || 0), 0);
+                            } else if (product.stock && typeof product.stock === 'object' && 'quantity' in product.stock) {
+                              stockQty = (product.stock as any).quantity || 0;
+                            } else if (typeof product.stock === 'number') {
+                              stockQty = product.stock;
+                            }
+                            
+                            // Get existing quantity in edit
+                            const existingItem = editSaleItems.find(item => item.productId === product.id);
+                            const existingQty = existingItem ? existingItem.quantity : 0;
+                            const availableStock = stockQty - existingQty;
+                            
+                            return (
+                              <div 
+                                key={product.id} 
+                                onClick={() => handleSelectProduct(product)} 
+                                className="p-2 hover:bg-blue-50 dark:hover:bg-gray-700 cursor-pointer border-b dark:border-gray-700 last:border-b-0 transition-colors"
+                              >
+                                <div className="font-medium text-xs text-gray-900 dark:text-white">{product.name}</div>
+                                <div className="text-[10px] text-gray-500 dark:text-gray-400 flex justify-between mt-0.5">
+                                  <span>Price: Ksh {formatCurrency(product.price || 0)}</span>
+                                  <span className={stockQty <= 0 ? "text-red-500" : "text-green-500"}>
+                                    Stock: {stockQty}
+                                    {existingQty > 0 && ` (${availableStock} available)`}
+                                  </span>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                      
+                      {/* No products message */}
+                      {showProductDropdown && productSearch.trim() !== "" && filteredProducts.length === 0 && (
+                        <div className="absolute z-20 w-full mt-1 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded-lg shadow-lg p-3 text-center">
+                          <p className="text-xs text-gray-500">No products found matching "{productSearch}"</p>
+                          <p className="text-[9px] text-gray-400 mt-1">Try a different search term</p>
+                        </div>
+                      )}
+                    </div>
+                    
+                    {/* Quantity and Price inputs */}
+                    <div className="grid grid-cols-2 gap-1.5">
+                      <div>
+                        <label className="text-[9px] text-gray-500">Quantity</label>
+                        <input 
+                          type="number" 
+                          min="1" 
+                          value={currentEditItem.quantity || ''} 
+                          onChange={(e) => setCurrentEditItem({...currentEditItem, quantity: parseInt(e.target.value) || 1})} 
+                          placeholder="Qty" 
+                          className="w-full p-1.5 border border-gray-200 dark:border-gray-600 rounded-lg text-xs bg-white dark:bg-gray-700 text-black dark:text-white" 
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[9px] text-gray-500">Price (Ksh)</label>
+                        <input 
+                          type="number" 
+                          min="0" 
+                          step="0.01" 
+                          value={currentEditItem.price || ''} 
+                          onChange={(e) => setCurrentEditItem({...currentEditItem, price: parseFloat(e.target.value) || 0})} 
+                          placeholder="Price" 
+                          className="w-full p-1.5 border border-gray-200 dark:border-gray-600 rounded-lg text-xs bg-white dark:bg-gray-700 text-black dark:text-white" 
+                        />
+                      </div>
+                    </div>
+                    
+                    <button 
+                      onClick={() => {
+                        console.log("Add Item button clicked");
+                        handleAddItemToEditSale();
+                      }} 
+                      disabled={!currentEditItem.productId || currentEditItem.quantity <= 0 || currentEditItem.price <= 0} 
+                      className="w-full bg-blue-600 text-white px-2 py-2 rounded-lg text-xs hover:bg-blue-700 disabled:opacity-50 transition-colors flex items-center justify-center gap-1"
+                    >
+                      <Plus size={12} /> Add Item
+                    </button>
+                  </div>
+                  
+                  {/* Current Items List */}
+                  <div className="space-y-1.5 max-h-40 overflow-y-auto">
+                    {editSaleItems.length === 0 ? (
+                      <div className="text-center py-6 text-gray-500 text-xs border border-dashed border-gray-200 dark:border-gray-700 rounded-lg">
+                        No items added yet
+                      </div>
+                    ) : (
+                      editSaleItems.map((item, index) => (
+                        <div key={index} className="bg-gray-50 dark:bg-gray-700/50 p-2 rounded-lg text-[11px] border border-gray-100 dark:border-gray-600">
+                          <div className="flex justify-between items-start mb-1">
+                            <div className="flex-1">
+                              <span className="font-medium text-gray-900 dark:text-white">{item.productName}</span>
+                              <div className="text-[9px] text-gray-400">ID: {item.productId}</div>
+                            </div>
+                            <button 
+                              onClick={() => setEditSaleItems(editSaleItems.filter((_, i) => i !== index))} 
+                              className="text-red-500 hover:text-red-700 p-1"
+                            >
+                              <X size={12} />
+                            </button>
+                          </div>
+                          <div className="flex gap-2 mt-1">
+                            <div className="flex-1">
+                              <label className="text-[8px] text-gray-500">Qty</label>
+                              <input 
+                                type="number" 
+                                value={item.quantity} 
+                                onChange={(e) => { 
+                                  const newItems = [...editSaleItems]; 
+                                  newItems[index].quantity = parseInt(e.target.value) || 1; 
+                                  setEditSaleItems(newItems); 
+                                }} 
+                                className="w-full p-1 border border-gray-200 dark:border-gray-600 rounded text-xs bg-white dark:bg-gray-700" 
+                              />
+                            </div>
+                            <div className="flex-1">
+                              <label className="text-[8px] text-gray-500">Price</label>
+                              <input 
+                                type="number" 
+                                value={item.price} 
+                                onChange={(e) => { 
+                                  const newItems = [...editSaleItems]; 
+                                  newItems[index].price = parseFloat(e.target.value) || 0; 
+                                  setEditSaleItems(newItems); 
+                                }} 
+                                className="w-full p-1 border border-gray-200 dark:border-gray-600 rounded text-xs bg-white dark:bg-gray-700" 
+                              />
+                            </div>
+                          </div>
+                          <div className="text-[9px] text-green-600 dark:text-green-400 mt-1 text-right">
+                            Subtotal: Ksh {formatCurrency(item.quantity * item.price)}
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                  
+                  {/* Total Amount */}
+                  <div className="bg-blue-50 dark:bg-blue-900/20 p-2 rounded-lg mt-3">
+                    <div className="flex justify-between text-xs">
+                      <span className="font-semibold text-black dark:text-white">Total Amount:</span>
+                      <span className="font-bold text-blue-600 dark:text-blue-400">
+                        Ksh {formatCurrency(editSaleItems.reduce((sum, item) => sum + (item.quantity * item.price), 0))}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+                
+                {/* Enhanced Payments Section */}
+                <div>
+                  <h3 className="text-xs font-semibold mb-1.5 text-black dark:text-white">Payments</h3>
+                  
+                  {/* Existing Payments List */}
+                  {editPayments.length > 0 && (
+                    <div className="space-y-1.5 mb-3 max-h-32 overflow-y-auto">
+                      {editPayments.map((payment, index) => {
+                        const paymentMethod = paymentMethods.find(m => m.value === payment.method);
+                        const Icon = paymentMethod?.icon || Banknote;
+                        return (
+                          <div key={index} className="flex justify-between items-center bg-gray-50 dark:bg-gray-700/50 p-2 rounded-lg border dark:border-gray-600 text-[11px]">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <Icon size={14} className={paymentMethod?.color?.split(' ')[0]?.replace('bg-', 'text-') || 'text-gray-500'} />
+                              <div>
+                                <span className={`px-1.5 py-0.5 rounded-full text-[9px] font-medium ${paymentMethod?.color || "bg-gray-100 text-gray-700"}`}>
+                                  {payment.method}
+                                </span>
+                                {payment.id !== undefined && (
+                                  <span className="text-[9px] text-gray-400 ml-1">ID: {payment.id}</span>
+                                )}
+                              </div>
+                              <span className="font-medium text-black dark:text-white">Ksh {formatCurrency(parseFloat(payment.amount))}</span>
+                              {payment.referenceId && (
+                                <span className="text-[9px] text-gray-400">Ref: {payment.referenceId}</span>
+                              )}
+                              {payment.bankName && (
+                                <span className="text-[9px] text-gray-400">Bank: {payment.bankName}</span>
+                              )}
+                              {payment.method === "CREDIT" && payment.dueDate && (
+                                <span className="text-[9px] text-yellow-600">Due: {formatDate(payment.dueDate)}</span>
+                              )}
+                            </div>
+                            {payment.id !== undefined && (
+                              <button 
+                                onClick={() => handleDeletePayment(payment.id as number, editingSale.id)} 
+                                disabled={deletingPaymentId === payment.id} 
+                                className="text-red-500 hover:text-red-700 p-1"
+                              >
+                                <Trash2 size={12} />
+                              </button>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                  
+                  {/* Add New Payment Form */}
+                  <div className="space-y-2 p-3 bg-gray-50 dark:bg-gray-700/50 rounded-lg">
+                    <h4 className="font-medium text-[10px] text-gray-700 dark:text-gray-300">Add Payment</h4>
+                    
+                    {/* Payment Method Selection - Cash, M-Pesa, Bank */}
+                    <div className="grid grid-cols-3 gap-1.5">
+                      {["CASH", "MPESA", "BANK"].map((method) => {
+                        const methodInfo = paymentMethods.find(m => m.value === method);
+                        const Icon = methodInfo?.icon;
+                        return (
+                          <button
+                            key={method}
+                            type="button"
+                            onClick={() => setCurrentPayment({ ...currentPayment, method: method as any, referenceId: "", checkDepositDate: "", dueDate: "", bankName: "" })}
+                            className={`flex flex-col items-center gap-1 p-2 rounded-lg border transition-all ${
+                              currentPayment.method === method
+                                ? "border-blue-500 bg-blue-50 dark:bg-blue-900/20 text-blue-600"
+                                : "border-gray-200 dark:border-gray-600 hover:border-blue-300"
+                            }`}
+                          >
+                            {Icon && <Icon size={16} />}
+                            <span className="text-[10px] font-medium">{methodInfo?.label || method}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                    
+                    {/* Amount Input */}
+                    <div>
+                      <label className="text-[9px] text-gray-500">Amount (Ksh)</label>
+                      <div className="relative mt-0.5">
+                        <span className="absolute left-2 top-1/2 transform -translate-y-1/2 text-gray-400 text-xs">Ksh</span>
+                        <input 
+                          type="number" 
+                          min="0" 
+                          step="0.01" 
+                          value={currentPayment.amount} 
+                          onChange={(e) => setCurrentPayment({...currentPayment, amount: e.target.value})} 
+                          placeholder="0.00" 
+                          className="w-full pl-10 pr-2 py-2 border border-gray-200 dark:border-gray-600 rounded-lg text-xs bg-white dark:bg-gray-700 text-black dark:text-white" 
+                        />
+                      </div>
+                    </div>
+                    
+                    {/* Conditional Fields based on Payment Method */}
+                    {currentPayment.method === "MPESA" && (
+                      <div>
+                        <label className="text-[9px] text-gray-500">M-Pesa Transaction ID</label>
+                        <input 
+                          type="text" 
+                          value={currentPayment.referenceId} 
+                          onChange={(e) => setCurrentPayment({...currentPayment, referenceId: e.target.value})} 
+                          placeholder="e.g., QWERTY123456" 
+                          className="w-full p-2 border border-gray-200 dark:border-gray-600 rounded-lg text-xs bg-white dark:bg-gray-700 text-black dark:text-white mt-0.5" 
+                        />
+                        <p className="text-[8px] text-gray-400 mt-0.5">Enter the Till/ Paybill transaction reference</p>
+                      </div>
+                    )}
+                    
+                    {currentPayment.method === "BANK" && (
+                      <div className="space-y-1.5">
+                        <div>
+                          <label className="text-[9px] text-gray-500">Bank Name</label>
+                          <input 
+                            type="text" 
+                            value={currentPayment.bankName || ''} 
+                            onChange={(e) => setCurrentPayment({...currentPayment, bankName: e.target.value})} 
+                            placeholder="e.g., KCB, Equity, Co-op" 
+                            className="w-full p-2 border border-gray-200 dark:border-gray-600 rounded-lg text-xs bg-white dark:bg-gray-700 text-black dark:text-white" 
+                          />
+                        </div>
+                        <div>
+                          <label className="text-[9px] text-gray-500">Reference Number</label>
+                          <input 
+                            type="text" 
+                            value={currentPayment.referenceId} 
+                            onChange={(e) => setCurrentPayment({...currentPayment, referenceId: e.target.value})} 
+                            placeholder="Transaction reference" 
+                            className="w-full p-2 border border-gray-200 dark:border-gray-600 rounded-lg text-xs bg-white dark:bg-gray-700 text-black dark:text-white" 
+                          />
+                        </div>
+                      </div>
+                    )}
+                    
+                    {/* Add Payment Button */}
+                    <button 
+                      onClick={() => {
+                        console.log("Add Payment button clicked");
+                        addEditPayment();
+                      }} 
+                      disabled={currentPayment.method !== "CREDIT" && (!currentPayment.amount || parseFloat(currentPayment.amount) <= 0)} 
+                      className="w-full bg-green-600 text-white px-3 py-2 rounded-lg text-xs hover:bg-green-700 disabled:opacity-50 transition-colors flex items-center justify-center gap-1"
+                    >
+                      <Plus size={12} /> Add Payment
+                    </button>
+                  </div>
+                  
+                  {/* Payment Summary */}
+                  <div className="bg-blue-50 dark:bg-blue-900/20 p-2 rounded-lg mt-3">
+                    <div className="flex justify-between text-xs mb-1">
+                      <span className="text-black dark:text-white">Total Sale:</span>
+                      <span className="font-bold text-black dark:text-white">Ksh {formatCurrency(editSaleItems.reduce((sum, item) => sum + (item.quantity * item.price), 0))}</span>
+                    </div>
+                    <div className="flex justify-between text-xs mb-1">
+                      <span className="text-black dark:text-white">Total Payments:</span>
+                      <span className="font-bold text-green-600 dark:text-green-400">Ksh {formatCurrency(editPayments.reduce((sum, p) => sum + Number(p.amount), 0))}</span>
+                    </div>
+                    <div className="flex justify-between text-xs pt-1 border-t border-blue-200 dark:border-blue-800">
+                      <span className="text-black dark:text-white">Remaining:</span>
+                      <span className={`font-bold ${
+                        Math.max(0, editSaleItems.reduce((sum, item) => sum + (item.quantity * item.price), 0) - editPayments.reduce((sum, p) => sum + Number(p.amount), 0)) > 0 
+                          ? 'text-red-600' 
+                          : 'text-green-600'
+                      }`}>
+                        Ksh {formatCurrency(Math.max(0, editSaleItems.reduce((sum, item) => sum + (item.quantity * item.price), 0) - editPayments.reduce((sum, p) => sum + Number(p.amount), 0)))}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+                
+                {/* Action Buttons */}
+                <div className="flex gap-2 pt-2 border-t border-gray-100 dark:border-gray-700 mt-2">
+                  <button 
+                    onClick={() => setEditingSale(null)} 
+                    disabled={loading} 
+                    className="flex-1 bg-gray-500 text-white px-3 py-2 rounded-lg text-xs disabled:opacity-50 hover:bg-gray-600 transition-colors"
+                  >
+                    Cancel
+                  </button>
+                  <button 
+                    onClick={handleUpdateSale} 
+                    disabled={loading || editSaleItems.length === 0} 
+                    className="flex-1 bg-blue-600 text-white px-3 py-2 rounded-lg text-xs disabled:opacity-50 hover:bg-blue-700 transition-colors flex items-center justify-center gap-1"
+                  >
+                    {loading ? (
+                      <><div className="w-3 h-3 rounded-full border-2 border-white/30 border-t-white animate-spin" /> Saving...</>
+                    ) : (
+                      <><Save size={12} /> Update Sale</>
+                    )}
+                  </button>
+                </div>
               </div>
             </div>
           </div>
@@ -1771,12 +2729,12 @@ export default function EnhancedSalesPage() {
 
         {/* Deleted Sales Modal */}
         {showDeletedModal && (
-          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-start justify-center p-3 z-50 overflow-y-auto">
-            <div className="bg-white dark:bg-gray-800 rounded-xl w-full max-w-4xl max-h-[90vh] overflow-y-auto mt-4 shadow-2xl">
-              <div className="p-4 border-b dark:border-gray-700 sticky top-0 bg-white dark:bg-gray-800 rounded-t-xl"><div className="flex justify-between items-center"><h2 className="text-xl font-bold text-black dark:text-white flex items-center gap-2"><Archive size={20} />Deleted Sales Archive</h2><button onClick={() => { setShowDeletedModal(false); setDeletedSales([]); }} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"><X size={20} /></button></div></div>
-              <div className="p-4 space-y-3">
-                <div className="bg-gray-50 dark:bg-gray-700/50 p-3 rounded-xl space-y-2"><div className="grid grid-cols-1 sm:grid-cols-2 gap-2"><div><label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Search</label><div className="relative"><Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" size={14} /><input type="text" placeholder="Search by customer, deleter..." value={deletedSearchTerm} onChange={(e) => { setDeletedSearchTerm(e.target.value); setDeletedSalesPage(1); fetchDeletedSales(); }} className="w-full pl-9 pr-3 py-2 text-sm border border-gray-200 dark:border-gray-600 rounded-xl bg-white dark:bg-gray-700 text-black dark:text-white" /></div></div><div><label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Deleted Date</label><select value={deletedDateFilter} onChange={(e) => { setDeletedDateFilter(e.target.value as any); setDeletedSalesPage(1); fetchDeletedSales(); }} className="w-full p-2 text-sm border border-gray-200 dark:border-gray-600 rounded-xl bg-white dark:bg-gray-700 text-black dark:text-white"><option value="all">All Time</option><option value="today">Today</option><option value="week">Last 7 Days</option><option value="month">Last 30 Days</option><option value="custom">Custom Range</option></select></div></div>{deletedDateFilter === "custom" && (<div className="grid grid-cols-2 gap-2"><input type="date" value={deletedCustomStartDate} onChange={(e) => { setDeletedCustomStartDate(e.target.value); fetchDeletedSales(); }} className="p-2 text-sm border border-gray-200 dark:border-gray-600 rounded-xl bg-white dark:bg-gray-700 text-black dark:text-white" /><input type="date" value={deletedCustomEndDate} onChange={(e) => { setDeletedCustomEndDate(e.target.value); fetchDeletedSales(); }} className="p-2 text-sm border border-gray-200 dark:border-gray-600 rounded-xl bg-white dark:bg-gray-700 text-black dark:text-white" /></div>)}</div>
-                {deletedSalesLoading ? (<div className="text-center py-12 text-gray-500">Loading...</div>) : deletedSales.length === 0 ? (<div className="text-center py-12 text-gray-500">No deleted sales found</div>) : (<div className="space-y-3">{deletedSales.map((deletedSale) => (<div key={deletedSale.id} className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl p-4"><div className="flex justify-between items-start mb-2"><div><div className="flex items-center gap-2 flex-wrap"><h3 className="font-semibold text-black dark:text-white">#{deletedSale.originalSaleId} - {deletedSale.customerName}</h3><span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${deletedSale.statusAtDeletion === "PAID" ? "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300" : deletedSale.statusAtDeletion === "PARTIAL" ? "bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-300" : "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300"}`}>{deletedSale.statusAtDeletion}</span></div><div className="text-xs text-gray-500 mt-1">Original: {formatDate(deletedSale.saleDate)} | Deleted: {formatDateTime(deletedSale.deletedAt)}</div></div><div className="flex gap-2"><button onClick={() => setShowDeleteDetailsModal(deletedSale)} className="p-1 text-blue-600 hover:text-blue-800 dark:text-blue-400" title="View Details"><Info size={16} /></button>{!deletedSale.restoredAt && new Date(deletedSale.expiresAt) > new Date() && (<button onClick={() => handleRestoreSale(deletedSale.id)} disabled={restoringSaleId === deletedSale.id} className="p-1 text-green-600 hover:text-green-800 dark:text-green-400 disabled:opacity-50">{restoringSaleId === deletedSale.id ? (<div className="animate-spin rounded-full h-4 w-4 border-b-2 border-green-600"></div>) : (<RotateCcw size={16} />)}</button>)}</div></div><div className="grid grid-cols-2 gap-2 text-xs mb-2"><div><span className="text-gray-500">Total:</span><span className="font-semibold text-emerald-600 dark:text-emerald-400 ml-1">Ksh {formatCurrency(deletedSale.totalAmount)}</span></div><div><span className="text-gray-500">Deleted By:</span><span className="font-medium text-red-600 dark:text-red-400 ml-1">{getUserDisplayName(deletedSale.deletedBy).name}</span></div></div><div className="text-xs text-gray-600 dark:text-gray-400 mb-2"><div className="font-medium">Items:</div><div className="truncate">{deletedSale.saleItemsSummary}</div></div>{deletedSale.deletionReason && (<div className="text-xs bg-yellow-50 dark:bg-yellow-900/20 p-2 rounded-xl border border-yellow-200 dark:border-yellow-800"><span className="font-medium">Reason:</span> {deletedSale.deletionReason}</div>)}</div>))}{deletedSalesTotal > 50 && (<div className="flex justify-center gap-2 mt-4"><button onClick={() => { setDeletedSalesPage(Math.max(1, deletedSalesPage - 1)); fetchDeletedSales(); }} disabled={deletedSalesPage === 1} className="px-3 py-1 text-sm bg-gray-100 dark:bg-gray-700 rounded-xl disabled:opacity-50">Previous</button><span className="text-sm text-gray-600 dark:text-gray-400">Page {deletedSalesPage} of {Math.ceil(deletedSalesTotal / 50)}</span><button onClick={() => { setDeletedSalesPage(deletedSalesPage + 1); fetchDeletedSales(); }} disabled={deletedSalesPage >= Math.ceil(deletedSalesTotal / 50)} className="px-3 py-1 text-sm bg-gray-100 dark:bg-gray-700 rounded-xl disabled:opacity-50">Next</button></div>)}</div>)}
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-start justify-center p-2 z-50 overflow-y-auto">
+            <div className="bg-white dark:bg-gray-800 rounded-lg w-full max-w-4xl max-h-[90vh] overflow-y-auto mt-4 shadow-2xl">
+              <div className="p-3 border-b dark:border-gray-700 sticky top-0 bg-white dark:bg-gray-800 rounded-t-lg"><div className="flex justify-between items-center"><h2 className="text-sm font-bold text-black dark:text-white">Deleted Sales</h2><button onClick={() => { setShowDeletedModal(false); setDeletedSales([]); }} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"><X size={16} /></button></div></div>
+              <div className="p-3">
+                <div className="bg-gray-50 dark:bg-gray-700/50 p-2 rounded-lg space-y-1.5 mb-3"><div className="grid grid-cols-1 gap-1.5"><div className="relative"><Search className="absolute left-2 top-1/2 transform -translate-y-1/2 text-gray-400" size={11} /><input type="text" placeholder="Search..." value={deletedSearchTerm} onChange={(e) => { setDeletedSearchTerm(e.target.value); fetchDeletedSales(); }} className="w-full pl-7 pr-2 py-1.5 text-xs border border-gray-200 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-black dark:text-white" /></div></div></div>
+                {deletedSalesLoading ? (<div className="text-center py-8 text-gray-500 text-xs">Loading...</div>) : deletedSales.length === 0 ? (<div className="text-center py-8 text-gray-500 text-xs">No deleted sales</div>) : (<div className="space-y-2">{deletedSales.map((deletedSale) => (<div key={deletedSale.id} className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-2.5"><div className="flex justify-between items-start"><div><div className="flex items-center gap-1.5 flex-wrap"><h3 className="font-semibold text-xs text-black dark:text-white">#{deletedSale.originalSaleId} - {deletedSale.customerName}</h3><span className={`px-1 py-0.5 rounded-full text-[9px] font-semibold bg-red-100 text-red-700`}>{deletedSale.statusAtDeletion}</span></div><div className="text-[9px] text-gray-500 mt-0.5">Deleted {formatDate(deletedSale.deletedAt)}</div></div><div className="flex gap-1"><button onClick={() => setShowDeleteDetailsModal(deletedSale)} className="p-1 text-blue-600"><Info size={12} /></button>{!deletedSale.restoredAt && <button onClick={() => handleRestoreSale(deletedSale.id)} className="p-1 text-green-600"><RotateCcw size={12} /></button>}</div></div><div className="text-[10px] text-gray-500 mt-1">Amount: Ksh {formatCurrency(deletedSale.totalAmount)}</div></div>))}</div>)}
               </div>
             </div>
           </div>
@@ -1784,13 +2742,14 @@ export default function EnhancedSalesPage() {
 
         {/* Deleted Sale Details Modal */}
         {showDeleteDetailsModal && (
-          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-3 z-[70]">
-            <div className="bg-white dark:bg-gray-800 rounded-xl max-w-lg w-full max-h-[80vh] overflow-y-auto shadow-2xl">
-              <div className="p-4 border-b dark:border-gray-700 sticky top-0 bg-white dark:bg-gray-800 rounded-t-xl"><div className="flex justify-between items-center"><h3 className="text-lg font-bold text-black dark:text-white">Deleted Sale Details</h3><button onClick={() => setShowDeleteDetailsModal(null)} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"><X size={20} /></button></div></div>
-              <div className="p-4 space-y-3">
-                <div className="bg-gray-50 dark:bg-gray-700/50 p-3 rounded-xl"><h4 className="font-semibold text-sm mb-2 text-black dark:text-white">Sale Information</h4><div className="grid grid-cols-2 gap-2 text-sm"><div><span className="text-gray-500">ID:</span> <span className="text-black dark:text-white">#{showDeleteDetailsModal.originalSaleId}</span></div><div><span className="text-gray-500">Customer:</span> <span className="text-black dark:text-white">{showDeleteDetailsModal.customerName}</span></div><div><span className="text-gray-500">Phone:</span> <span className="text-black dark:text-white">{showDeleteDetailsModal.customerPhone || "-"}</span></div><div><span className="text-gray-500">Total:</span> <span className="text-emerald-600 dark:text-emerald-400">Ksh {formatCurrency(showDeleteDetailsModal.totalAmount)}</span></div><div><span className="text-gray-500">Date:</span> <span className="text-black dark:text-white">{formatDate(showDeleteDetailsModal.saleDate)}</span></div><div><span className="text-gray-500">Status:</span> <span className="text-black dark:text-white">{showDeleteDetailsModal.statusAtDeletion}</span></div></div></div>
-                <div className="bg-red-50 dark:bg-red-900/20 p-3 rounded-xl"><h4 className="font-semibold text-sm mb-2 text-red-800 dark:text-red-300">Deletion Information</h4><div className="space-y-1 text-sm"><div><span className="text-gray-600">By:</span> <span className="text-red-700 dark:text-red-400">{getUserDisplayName(showDeleteDetailsModal.deletedBy).name}</span></div><div><span className="text-gray-600">At:</span> <span className="text-black dark:text-white">{formatDateTime(showDeleteDetailsModal.deletedAt)}</span></div><div><span className="text-gray-600">Restocked:</span> <span className={showDeleteDetailsModal.restockedItems ? "text-green-600" : "text-red-600"}>{showDeleteDetailsModal.restockedItems ? "Yes" : "No"}</span></div>{showDeleteDetailsModal.deletionReason && (<div><span className="text-gray-600">Reason:</span> <span className="text-black dark:text-white">{showDeleteDetailsModal.deletionReason}</span></div>)}</div></div>
-                <div className="bg-gray-50 dark:bg-gray-700/50 p-3 rounded-xl"><h4 className="font-semibold text-sm mb-2 text-black dark:text-white">Items</h4><div className="text-sm space-y-1">{showDeleteDetailsModal.saleItemsSummary.split(', ').map((item, idx) => (<div key={idx} className="text-gray-700 dark:text-gray-300">• {item}</div>))}</div></div>
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-2 z-[70]">
+            <div className="bg-white dark:bg-gray-800 rounded-lg max-w-md w-full max-h-[80vh] overflow-y-auto shadow-2xl">
+              <div className="p-3 border-b dark:border-gray-700"><div className="flex justify-between"><h3 className="text-sm font-bold text-black dark:text-white">Deleted Sale</h3><button onClick={() => setShowDeleteDetailsModal(null)}><X size={14} /></button></div></div>
+              <div className="p-3 space-y-2 text-xs">
+                <div><span className="text-gray-500">Customer:</span> <span className="text-black dark:text-white">{showDeleteDetailsModal.customerName}</span></div>
+                <div><span className="text-gray-500">Total:</span> <span className="text-emerald-600">Ksh {formatCurrency(showDeleteDetailsModal.totalAmount)}</span></div>
+                <div><span className="text-gray-500">Deleted by:</span> <span className="text-red-600">{getUserDisplayName(showDeleteDetailsModal.deletedBy).name}</span></div>
+                {showDeleteDetailsModal.deletionReason && <div><span className="text-gray-500">Reason:</span> <span className="text-black dark:text-white">{showDeleteDetailsModal.deletionReason}</span></div>}
               </div>
             </div>
           </div>

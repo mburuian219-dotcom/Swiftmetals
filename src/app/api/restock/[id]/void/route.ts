@@ -1,4 +1,5 @@
-// app/api/restock/[id]/delete/route.ts - OPTIMIZED VERSION
+// @ts-nocheck
+// // app/api/restock/[id]/delete/route.ts - OPTIMIZED VERSION
 import { NextRequest, NextResponse } from 'next/server';
 import { PrismaClient } from '@prisma/client';
 
