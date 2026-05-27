@@ -6,6 +6,11 @@ type Sale = {
   date: string;
   items: string;
   amount: number;
+  status?: string;
+  createdBy?: string;
+  updatedBy?: string;
+  createdAt?: string;
+  updatedAt?: string;
 };
 
 type Payment = {
@@ -24,6 +29,10 @@ type Debtor = {
   balance: number;
   sales: Sale[];
   payments: Payment[];
+  lastUpdatedBy?: string;
+  lastUpdatedAt?: string;
+  createdBy?: string;
+  createdAt?: string;
 };
 
 type FormData = {
@@ -74,20 +83,31 @@ export default function DebtorsSection() {
           sale.items.toLowerCase().includes(query)
         ) ||
         debtor.balance.toString().includes(query) ||
-        debtor.totalSales.toString().includes(query)
+        debtor.totalSales.toString().includes(query) ||
+        (debtor.lastUpdatedBy && debtor.lastUpdatedBy.toLowerCase().includes(query))
       );
     }
     
     // Apply sorting
     if (sortConfig) {
       result.sort((a, b) => {
-        const aValue = a[sortConfig.key];
-        const bValue = b[sortConfig.key];
+        let aValue = a[sortConfig.key];
+        let bValue = b[sortConfig.key];
         
-        if (aValue < bValue) {
+        // Handle special cases for dates and undefined values
+        if (sortConfig.key === 'lastUpdatedAt') {
+          aValue = a.lastUpdatedAt || '';
+          bValue = b.lastUpdatedAt || '';
+        }
+        
+        // Handle undefined or null values
+        const aVal = aValue !== undefined && aValue !== null ? aValue : '';
+        const bVal = bValue !== undefined && bValue !== null ? bValue : '';
+        
+        if (aVal < bVal) {
           return sortConfig.direction === 'asc' ? -1 : 1;
         }
-        if (aValue > bValue) {
+        if (aVal > bVal) {
           return sortConfig.direction === 'asc' ? 1 : -1;
         }
         return 0;
@@ -104,7 +124,7 @@ export default function DebtorsSection() {
       
       // Fetch all sales with a timeout
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 100000); // 100s timeout
+      const timeoutId = setTimeout(() => controller.abort(), 100000);
       
       const response = await fetch("/api/sales", { signal: controller.signal });
       clearTimeout(timeoutId);
@@ -131,6 +151,10 @@ export default function DebtorsSection() {
               balance: 0,
               sales: [],
               payments: [],
+              lastUpdatedBy: sale.updatedBy || sale.createdBy || "System",
+              lastUpdatedAt: sale.updatedAt || sale.createdAt,
+              createdBy: sale.createdBy,
+              createdAt: sale.createdAt,
             });
           }
 
@@ -138,6 +162,13 @@ export default function DebtorsSection() {
           debtor.totalSales += sale.amount;
           debtor.paid += sale.totalPaid;
           debtor.balance = debtor.totalSales - debtor.paid;
+
+          // Update last updated info if this sale is more recent
+          const saleUpdatedAt = sale.updatedAt || sale.createdAt;
+          if (saleUpdatedAt && (!debtor.lastUpdatedAt || new Date(saleUpdatedAt) > new Date(debtor.lastUpdatedAt))) {
+            debtor.lastUpdatedBy = sale.updatedBy || sale.createdBy || "System";
+            debtor.lastUpdatedAt = saleUpdatedAt;
+          }
 
           // Build items string from saleitems
           const itemsStr = sale.saleitems
@@ -149,6 +180,11 @@ export default function DebtorsSection() {
             date: sale.date,
             items: itemsStr,
             amount: sale.amount,
+            status: sale.status,
+            createdBy: sale.createdBy,
+            updatedBy: sale.updatedBy,
+            createdAt: sale.createdAt,
+            updatedAt: sale.updatedAt,
           });
 
           // Add payment history - filter only cleared payments
@@ -181,7 +217,7 @@ export default function DebtorsSection() {
     }
   };
 
-  // Function to download debtors as CSV - UPDATED WITH ALL IMPROVEMENTS
+  // Function to download debtors as CSV - ENHANCED WITH AUDIT INFO
   const downloadDebtorsCSV = () => {
     if (filteredDebtors.length === 0) {
       alert("No debtors to download.");
@@ -189,11 +225,12 @@ export default function DebtorsSection() {
     }
 
     try {
-      // Define CSV headers - REMOVED EMAIL COLUMN, ADDED SALE STATUS, CREATED BY, UPDATED BY
+      // Define CSV headers
       const headers = [
         "Customer ID",
         "Customer Name",
         "Phone",
+        "Email",
         "Total Sales (KES)",
         "Amount Paid (KES)",
         "Balance (KES)",
@@ -203,7 +240,9 @@ export default function DebtorsSection() {
         "Sale Status",
         "Last Payment Date",
         "Created By",
-        "Updated By"
+        "Created At",
+        "Last Updated By",
+        "Last Updated At"
       ];
 
       // Prepare data rows
@@ -213,12 +252,12 @@ export default function DebtorsSection() {
           ? new Date(debtor.sales[debtor.sales.length - 1].date).toLocaleDateString()
           : "-";
         
-        // Calculate last payment date - NOW SHOWS DASH (-) instead of N/A
+        // Calculate last payment date
         const lastPayment = debtor.payments.length > 0
           ? new Date(debtor.payments[debtor.payments.length - 1].date).toLocaleDateString()
           : "-";
         
-        // Calculate payment rate as clean percentage - NO DECIMAL PLACES
+        // Calculate payment rate as clean percentage
         const paymentRate = debtor.totalSales > 0 
           ? ((debtor.paid / debtor.totalSales) * 100).toFixed(0)
           : "0";
@@ -226,15 +265,15 @@ export default function DebtorsSection() {
         // Determine sale status
         const saleStatus = debtor.balance === debtor.totalSales ? "UNPAID" : "PARTIALLY PAID";
         
-        // Get created by and updated by from sales data
-        // This would need to come from your API - for now using placeholder
-        const createdBy = "System"; // Replace with actual data from API
-        const updatedBy = "System"; // Replace with actual data from API
+        // Format dates for CSV
+        const createdAt = debtor.createdAt ? new Date(debtor.createdAt).toLocaleString() : "-";
+        const updatedAt = debtor.lastUpdatedAt ? new Date(debtor.lastUpdatedAt).toLocaleString() : "-";
 
         return [
           debtor.id,
           `"${debtor.name.replace(/"/g, '""')}"`,
           `"${debtor.phone}"`,
+          `"${debtor.email}"`,
           formatCurrencyForCSV(debtor.totalSales),
           formatCurrencyForCSV(debtor.paid),
           formatCurrencyForCSV(debtor.balance),
@@ -243,8 +282,10 @@ export default function DebtorsSection() {
           lastSale,
           saleStatus,
           lastPayment,
-          createdBy,
-          updatedBy
+          debtor.createdBy || "System",
+          createdAt,
+          debtor.lastUpdatedBy || "System",
+          updatedAt
         ];
       });
 
@@ -270,7 +311,6 @@ export default function DebtorsSection() {
       document.body.removeChild(link);
       URL.revokeObjectURL(url);
       
-      // Show success message
       alert(`Debtors report downloaded successfully!`);
     } catch (error) {
       console.error("Error generating CSV:", error);
@@ -280,7 +320,6 @@ export default function DebtorsSection() {
 
   // Helper function to format currency for CSV (without commas)
   const formatCurrencyForCSV = (amount: number) => {
-    // No rounding - exact values
     return Number(amount || 0).toFixed(2);
   };
 
@@ -340,24 +379,22 @@ export default function DebtorsSection() {
 
   // Single Receipt Download
   const handleDownloadReceipt = (saleId: number) => {
-    // Open single receipt in new tab
     const receiptUrl = `/api/receipt/${saleId}`;
     window.open(receiptUrl, '_blank');
   };
 
   // Full Statement Download
   const handleDownloadStatement = (debtor: Debtor) => {
-    // Open customer statement in new tab
     const statementUrl = `/api/customer-receipt/${debtor.id}`;
     window.open(statementUrl, '_blank');
   };
 
-  // Generate receipt download link for PDF (for single receipt)
+  // Generate receipt download link for PDF
   const generateReceiptDownloadLink = (saleId: number): string => {
     return `${window.location.origin}/api/receipt/${saleId}`;
   };
 
-  // Generate statement download link (for full statement)
+  // Generate statement download link
   const generateStatementLink = (customerId: number): string => {
     return `${window.location.origin}/api/customer-receipt/${customerId}`;
   };
@@ -380,15 +417,14 @@ Outstanding Balance: KES ${formatCurrency(debtor.balance)}
 
 We kindly request that you settle this outstanding balance at your earliest convenience.
 
-Attached is the receipt.  ${receiptLink}
+View your receipt here: ${receiptLink}
 
 Best regards,
 Swiftmetals`;
   };
 
-  // Generate overall account reminder message (for all outstanding sales)
+  // Generate overall account reminder message
   const generateAccountReminderMessage = (debtor: Debtor): string => {
-    // Generate links for all outstanding sales (single receipts)
     const receiptLinks = debtor.sales.map(sale => 
       `Sale #${sale.id} (${formatDate(sale.date)}): ${generateReceiptDownloadLink(sale.id)}`
     ).join('\n');
@@ -414,25 +450,20 @@ Swiftmetals`;
 
   const formatPhoneToKenyaCode = (phone: string): string => {
     if (!phone) return '';
-    // Remove all non-digit characters
     let cleaned = phone.replace(/\D/g, '');
     
-    // If starts with 0 and length is 10 (local format), convert to 254
     if (cleaned.startsWith('0') && cleaned.length === 10) {
       return '254' + cleaned.slice(1);
     }
     
-    // If already starts with 254, return as is
     if (cleaned.startsWith('254')) {
       return cleaned;
     }
     
-    // If starts with +254, remove the +
     if (phone.startsWith('+254')) {
       return cleaned;
     }
     
-    // Otherwise assume it needs 254 prefix
     return '254' + cleaned;
   };
 
@@ -450,7 +481,6 @@ Swiftmetals`;
     window.location.href = smsUrl;
   };
 
-  // Send email with receipt links
   const sendEmailMessage = (debtor: Debtor) => {
     const subject = encodeURIComponent(`Payment Reminder - ${debtor.name} - Swiftmetals`);
     const body = encodeURIComponent(generateAccountReminderMessage(debtor));
@@ -462,10 +492,22 @@ Swiftmetals`;
     Number(amount || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
   const formatDate = (dateString: string) => {
+    if (!dateString) return "-";
     return new Date(dateString).toLocaleDateString("en-US", {
       year: "numeric",
       month: "short",
       day: "numeric",
+    });
+  };
+
+  const formatDateTime = (dateString?: string) => {
+    if (!dateString) return "-";
+    return new Date(dateString).toLocaleDateString("en-US", {
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
     });
   };
 
@@ -493,7 +535,7 @@ Swiftmetals`;
                 type="text"
                 value={searchQuery}
                 onChange={handleSearch}
-                placeholder="Search by name, phone, email, items..."
+                placeholder="Search by name, phone, updater..."
                 className="pl-10 pr-10 py-2.5 border border-gray-300 rounded-lg w-full focus:ring-2 focus:ring-amber-500 focus:border-transparent focus:outline-none text-sm"
               />
               {searchQuery && (
@@ -506,12 +548,12 @@ Swiftmetals`;
               )}
             </div>
             
-            {/* CSV Download Button - UPDATED with improved report */}
+            {/* CSV Download Button */}
             <button
               onClick={downloadDebtorsCSV}
               disabled={filteredDebtors.length === 0}
               className="bg-gradient-to-r from-green-500 to-emerald-500 hover:from-green-600 hover:to-emerald-600 text-white px-4 md:px-6 py-2.5 rounded-lg font-medium transition flex items-center gap-2 shadow-lg hover:shadow-xl text-sm md:text-base w-full sm:w-auto justify-center disabled:opacity-50 disabled:cursor-not-allowed"
-              title={filteredDebtors.length === 0 ? "No debtors to download" : "Download CSV report with enhanced columns"}
+              title={filteredDebtors.length === 0 ? "No debtors to download" : "Download CSV report with audit columns"}
             >
               <Download className="w-4 h-4 md:w-5 md:h-5" /> Download CSV Report
             </button>
@@ -537,14 +579,12 @@ Swiftmetals`;
                   </span>
                 )}
               </p>
-              {searchQuery && (
-                <button
-                  onClick={clearSearch}
-                  className="text-sm text-blue-600 hover:text-blue-800 flex items-center gap-1"
-                >
-                  <X className="w-3 h-3" /> Clear search
-                </button>
-              )}
+              <button
+                onClick={clearSearch}
+                className="text-sm text-blue-600 hover:text-blue-800 flex items-center gap-1"
+              >
+                <X className="w-3 h-3" /> Clear search
+              </button>
             </div>
           </div>
         )}
@@ -588,7 +628,7 @@ Swiftmetals`;
             {/* Sortable Header - Desktop */}
             {debtors.length > 0 && (
               <div className="hidden lg:grid grid-cols-12 gap-4 mb-3 px-4">
-                <div className="col-span-4">
+                <div className="col-span-3">
                   <button
                     onClick={() => handleSort('name')}
                     className="flex items-center gap-1 text-xs font-semibold text-gray-700 hover:text-gray-900 group"
@@ -624,13 +664,22 @@ Swiftmetals`;
                     <SortIcon sortKey="balance" />
                   </button>
                 </div>
-                <div className="col-span-2 text-right">
+                <div className="col-span-2">
+                  <button
+                    onClick={() => handleSort('lastUpdatedBy')}
+                    className="flex items-center justify-center gap-1 text-xs font-semibold text-gray-700 hover:text-gray-900 group"
+                  >
+                    Last Updated By
+                    <SortIcon sortKey="lastUpdatedBy" />
+                  </button>
+                </div>
+                <div className="col-span-1 text-right">
                   <span className="text-xs font-semibold text-gray-700">Actions</span>
                 </div>
               </div>
             )}
 
-            {/* Debtors List - PAGE REMAINS UNCHANGED */}
+            {/* Debtors List */}
             <div className="space-y-2">
               {filteredDebtors.length === 0 ? (
                 <div className="bg-white rounded-lg p-8 md:p-12 text-center shadow-sm">
@@ -678,7 +727,7 @@ Swiftmetals`;
                         </div>
 
                         {/* Center: Stats Grid */}
-                        <div className="hidden lg:grid grid-cols-3 gap-4 flex-shrink-0">
+                        <div className="hidden lg:grid grid-cols-4 gap-4 flex-shrink-0">
                           <div className="text-center">
                             <p className="text-xs text-gray-500 mb-1">Sales</p>
                             <p className="text-sm font-bold text-blue-600">KES {formatCurrency(debtor.totalSales)}</p>
@@ -691,6 +740,12 @@ Swiftmetals`;
                             <p className="text-xs text-gray-500 mb-1">Rate</p>
                             <p className="text-sm font-bold text-purple-600">
                               {debtor.totalSales > 0 ? Math.round((debtor.paid / debtor.totalSales) * 100) : 0}%
+                            </p>
+                          </div>
+                          <div className="text-left">
+                            <p className="text-xs text-gray-500 mb-1">Last Updated</p>
+                            <p className="text-xs font-medium text-gray-700 truncate" title={`${debtor.lastUpdatedBy} at ${formatDateTime(debtor.lastUpdatedAt)}`}>
+                              {debtor.lastUpdatedBy}
                             </p>
                           </div>
                         </div>
@@ -746,8 +801,8 @@ Swiftmetals`;
                         </div>
                       </div>
 
-                      {/* Mobile Stats - Show only on small screens */}
-                      <div className="grid grid-cols-3 gap-2 mt-3 lg:hidden">
+                      {/* Mobile Stats */}
+                      <div className="grid grid-cols-4 gap-2 mt-3 lg:hidden">
                         <div className="bg-blue-50 rounded p-2">
                           <p className="text-xs text-gray-600 mb-1">Sales</p>
                           <p className="text-xs font-bold text-blue-600">KES {formatCurrency(debtor.totalSales)}</p>
@@ -762,12 +817,30 @@ Swiftmetals`;
                             {debtor.totalSales > 0 ? Math.round((debtor.paid / debtor.totalSales) * 100) : 0}%
                           </p>
                         </div>
+                        <div className="bg-gray-50 rounded p-2">
+                          <p className="text-xs text-gray-600 mb-1">Updated</p>
+                          <p className="text-xs font-bold text-gray-700 truncate">{debtor.lastUpdatedBy}</p>
+                        </div>
                       </div>
                     </div>
 
                     {/* Expanded Details */}
                     {expandedId === debtor.id && (
                       <div className="px-3 md:px-4 pb-3 md:pb-4 space-y-3 border-t border-gray-200 bg-gray-50">
+                        {/* Last Updated Info */}
+                        <div className="bg-gray-100 rounded-lg p-2.5 flex flex-col sm:flex-row justify-between gap-2 text-xs">
+                          <div className="flex items-center gap-2">
+                            <span className="font-medium text-gray-600">Created:</span>
+                            <span className="text-gray-700">{debtor.createdBy || "System"}</span>
+                            <span className="text-gray-400">{formatDateTime(debtor.createdAt)}</span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span className="font-medium text-gray-600">Last Updated:</span>
+                            <span className="text-gray-700">{debtor.lastUpdatedBy || "System"}</span>
+                            <span className="text-gray-400">{formatDateTime(debtor.lastUpdatedAt)}</span>
+                          </div>
+                        </div>
+
                         {/* Download Full Statement Button */}
                         <div className="flex justify-end">
                           <button
@@ -783,29 +856,47 @@ Swiftmetals`;
                         <div>
                           <h4 className="text-sm font-bold text-gray-900 mb-2 flex items-center gap-2">
                             <FileText className="w-4 h-4 text-amber-600" />
-                            Sales History
+                            Sales History ({debtor.sales.length} sales)
                           </h4>
                           {debtor.sales.length > 0 ? (
-                            <div className="space-y-1.5">
+                            <div className="space-y-1.5 max-h-60 overflow-y-auto">
                               {debtor.sales.map((sale) => (
-                                <div key={sale.id} className="bg-white rounded p-2.5 flex items-center justify-between gap-2 hover:bg-gray-50 transition">
-                                  <div className="flex-1 min-w-0">
-                                    <div className="flex items-center gap-2">
-                                      <p className="font-semibold text-gray-900 text-xs">#{sale.id}</p>
-                                      <span className="text-xs text-gray-400">•</span>
-                                      <p className="text-xs text-gray-500">{formatDate(sale.date)}</p>
+                                <div key={sale.id} className="bg-white rounded p-2.5 transition hover:bg-gray-50">
+                                  <div className="flex items-center justify-between gap-2">
+                                    <div className="flex-1 min-w-0">
+                                      <div className="flex items-center gap-2 flex-wrap">
+                                        <p className="font-semibold text-gray-900 text-xs">#{sale.id}</p>
+                                        <span className="text-xs text-gray-400">•</span>
+                                        <p className="text-xs text-gray-500">{formatDate(sale.date)}</p>
+                                        {sale.status && (
+                                          <>
+                                            <span className="text-xs text-gray-400">•</span>
+                                            <span className={`text-xs px-1.5 py-0.5 rounded-full ${
+                                              sale.status === "UNPAID" ? "bg-red-100 text-red-700" : "bg-orange-100 text-orange-700"
+                                            }`}>
+                                              {sale.status}
+                                            </span>
+                                          </>
+                                        )}
+                                      </div>
+                                      <p className="text-xs text-gray-600 mt-0.5 truncate">{sale.items}</p>
+                                      <div className="flex flex-wrap gap-3 mt-1 text-[10px] text-gray-400">
+                                        {sale.createdBy && <span>Created: {sale.createdBy}</span>}
+                                        {sale.updatedBy && sale.updatedBy !== sale.createdBy && (
+                                          <span>Updated: {sale.updatedBy}</span>
+                                        )}
+                                      </div>
                                     </div>
-                                    <p className="text-xs text-gray-600 mt-0.5 truncate">{sale.items}</p>
-                                  </div>
-                                  <div className="flex items-center gap-2 flex-shrink-0">
-                                    <p className="font-bold text-gray-900 text-xs whitespace-nowrap">KES {formatCurrency(sale.amount)}</p>
-                                    <button
-                                      onClick={() => handleDownloadReceipt(sale.id)}
-                                      className="p-1.5 text-blue-600 hover:bg-blue-50 rounded transition"
-                                      title="Download Single Receipt"
-                                    >
-                                      <Download className="w-3.5 h-3.5" />
-                                    </button>
+                                    <div className="flex items-center gap-2 flex-shrink-0">
+                                      <p className="font-bold text-gray-900 text-xs whitespace-nowrap">KES {formatCurrency(sale.amount)}</p>
+                                      <button
+                                        onClick={() => handleDownloadReceipt(sale.id)}
+                                        className="p-1.5 text-blue-600 hover:bg-blue-50 rounded transition"
+                                        title="Download Single Receipt"
+                                      >
+                                        <Download className="w-3.5 h-3.5" />
+                                      </button>
+                                    </div>
                                   </div>
                                 </div>
                               ))}
@@ -820,9 +911,9 @@ Swiftmetals`;
                           <div>
                             <h4 className="text-sm font-bold text-gray-900 mb-2 flex items-center gap-2">
                               <Send className="w-4 h-4 text-green-600" />
-                              Payment History
+                              Payment History ({debtor.payments.length} payments)
                             </h4>
-                            <div className="space-y-1.5">
+                            <div className="space-y-1.5 max-h-40 overflow-y-auto">
                               {debtor.payments.map((payment, idx) => (
                                 <div key={idx} className="bg-white rounded p-2.5 flex items-center justify-between gap-2">
                                   <div className="flex items-center gap-2 flex-1 min-w-0">
@@ -870,8 +961,8 @@ Swiftmetals`;
                             <div className="text-xs text-gray-500 mt-2">
                               <p className="font-medium mb-1">Document Options:</p>
                               <ul className="list-disc pl-4 space-y-0.5">
-                                <li><strong>Single Receipt</strong>: Download individual receipt for each sale (opens receipt API)</li>
-                                <li><strong>Full Statement</strong>: Download complete account statement with all purchases (opens customer statement API)</li>
+                                <li><strong>Single Receipt</strong>: Download individual receipt for each sale</li>
+                                <li><strong>Full Statement</strong>: Download complete account statement with all purchases</li>
                                 <li><strong>Messages</strong>: Include both individual receipt links and full statement link</li>
                               </ul>
                             </div>
@@ -923,7 +1014,18 @@ Swiftmetals`;
                   <ul className="mt-1 ml-2">
                     <li>• Single Receipt: Opens receipt API</li>
                     <li>• Full Statement: Opens customer statement API</li>
-                    <li>• CSV Export: Download all debtors as spreadsheet</li>
+                    <li>• CSV Export: Download all debtors as spreadsheet with audit trail</li>
+                  </ul>
+                </p>
+              </div>
+              <div className="bg-purple-50 border border-purple-200 rounded-lg p-4">
+                <p className="text-sm text-purple-800">
+                  <strong>Audit Information:</strong>
+                  <ul className="mt-1 ml-2">
+                    <li>• Shows who created each debtor (through sales)</li>
+                    <li>• Shows who last updated each debtor</li>
+                    <li>• Timestamps for all changes</li>
+                    <li>• CSV report includes full audit trail</li>
                   </ul>
                 </p>
               </div>
