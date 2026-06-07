@@ -32,6 +32,7 @@ model customer {
   sale              sale[]
   smsreminder       smsreminder[]
   deletedsale       deletedsale[]        // Added relation
+  tradeins          tradein[]   
 }
 
 model expense {
@@ -124,6 +125,7 @@ model payment {
   checkDepositDate DateTime?
   status           payment_status @default(PENDING)
   sale             sale           @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  tradeins         tradein[]
 
   @@index([isVerified])
   @@index([method])
@@ -308,6 +310,7 @@ model sale {
 
   assignedStaffId  Int?
   assignedStaff    staff? @relation("AssignedSales", fields: [assignedStaffId], references: [id])
+  tradeins         tradein[]
 
   @@index([assignedStaffId])
   @@index([createdById])
@@ -420,6 +423,38 @@ model systemsetting {
   updatedAt   DateTime
 
   @@index([key])
+}
+model tradein {
+  id              Int      @id @default(autoincrement())
+
+  saleId          Int
+  paymentId       Int?
+  customerId      Int
+
+  itemName        String
+  description     String?
+  category        String?
+
+  quantity        Int      @default(1)
+
+  estimatedValue  Float
+  agreedValue     Float
+
+  condition       String
+  status          String   @default("PENDING")
+
+  notes           String?
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  sale            sale     @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  payment         payment? @relation(fields: [paymentId], references: [id])
+  customer        customer @relation(fields: [customerId], references: [id])
+
+  @@index([saleId])
+  @@index([customerId])
+  @@index([status])
 }
 
 // ==================== NEW MODELS FOR AUDIT & SOFT DELETE ====================

@@ -6,7 +6,8 @@ import {
   Calculator, Save, ChevronDown, ChevronUp, Filter, Calendar, Search, XCircle, 
   User, DollarSign, Banknote, Smartphone, Landmark, CreditCard as CardIcon, 
   Archive, RotateCcw, Info, History, TrendingUp, TrendingDown, Clock as ClockIcon, 
-  Users, Receipt, FileSpreadsheet, Moon, Sun, Menu, UserCheck 
+  Users, Receipt, FileSpreadsheet, Moon, Sun, Menu, UserCheck, RefreshCw,
+  Package  // Add this
 } from "lucide-react";
 import { auth } from "@/lib/firebase";
 import { onAuthStateChanged } from "firebase/auth";
@@ -38,19 +39,21 @@ interface SaleItem {
 interface Payment {
   id?: number;
   amount: number;
-  method: "CASH" | "MPESA" | "BANK" | "CHECK" | "CARD" | "CREDIT";
+  method: "CASH" | "MPESA" | "BANK" | "CHECK" | "CARD" | "CREDIT" | "TRADE_IN";
   date: string;
   referenceId?: string | null;
   checkDepositDate?: string | null;
   dueDate?: string | null;
   status?: "PENDING" | "COMPLETED" | "BOUNCED" | "CLEARED";
   bankName?: string | null;
+  tradeItems?: TradeInExchangeItem[];
+  productionCost?: number;
 }
 
 interface NewPayment {
   id?: number;
   amount: string;
-  method: "CASH" | "MPESA" | "BANK" | "CHECK" | "CARD" | "CREDIT";
+  method: "CASH" | "MPESA" | "BANK" | "CHECK" | "CARD" | "CREDIT" | "TRADE_IN";
   referenceId?: string;
   checkDepositDate?: string;
   checkNumber?: string;
@@ -59,6 +62,20 @@ interface NewPayment {
   checkDate?: string;
   isVerified?: boolean;
   status?: "PENDING" | "CLEARED" | "BOUNCED";
+  tradeItems?: TradeInExchangeItem[];
+  productionCost?: number;
+}
+
+interface TradeInExchangeItem {
+  id: string;
+  itemName: string;
+  description?: string;
+  quantity: number;
+  agreedValue: number;
+  productionCost: number;
+  netValue: number;
+  condition: 'EXCELLENT' | 'GOOD' | 'FAIR' | 'POOR';
+  notes?: string;
 }
 
 interface Staff {
@@ -78,7 +95,7 @@ interface Sale {
   customer: Customer;
   payments: Payment[];
   remainingAmount: number;
-  paymentMethod?: "CASH" | "MPESA" | "BANK" | "CHECK" | "CARD" | "CREDIT" | "MULTIPLE";
+  paymentMethod?: "CASH" | "MPESA" | "BANK" | "CHECK" | "CARD" | "CREDIT" | "TRADE_IN" | "MULTIPLE";
   checkDepositDate?: string | null;
   createdBy?: string;
   updatedBy?: string;
@@ -88,6 +105,7 @@ interface Sale {
   deletedAt?: string;
   assignedStaff?: Staff | null;
   assignedStaffId?: number | null;
+  notes?: string | null;
 }
 
 interface NewSaleItem {
@@ -162,6 +180,256 @@ interface RecentlyClearedDebt {
 const ThemeContext = React.createContext({ theme: 'light', toggleTheme: () => {} });
 function useTheme() { return React.useContext(ThemeContext); }
 
+// ==================== TRADE-IN EXCHANGE MODAL ====================
+const TradeInExchangeModal = ({ isOpen, onClose, onAddTradeIn, formatCurrency, editSaleItems, editPayments }: any) => {
+  const [tradeItems, setTradeItems] = useState<TradeInExchangeItem[]>([]);
+  const [currentItem, setCurrentItem] = useState({
+    itemName: '',
+    quantity: 1,
+    agreedValue: 0,
+    productionCost: 0,
+    condition: 'GOOD' as const,
+    description: '',
+    notes: ''
+  });
+
+  const conditions = [
+    { value: 'EXCELLENT', label: 'Excellent', multiplier: 1.0, color: 'text-green-600' },
+    { value: 'GOOD', label: 'Good', multiplier: 0.8, color: 'text-blue-600' },
+    { value: 'FAIR', label: 'Fair', multiplier: 0.6, color: 'text-yellow-600' },
+    { value: 'POOR', label: 'Poor', multiplier: 0.4, color: 'text-red-600' }
+  ];
+
+  const handleAddItem = () => {
+    if (!currentItem.itemName || currentItem.agreedValue <= 0) {
+      alert('Please fill in item name and agreed value');
+      return;
+    }
+
+    const netValue = currentItem.agreedValue - currentItem.productionCost;
+    
+    setTradeItems([...tradeItems, {
+      id: Math.random().toString(36).substring(7),
+      itemName: currentItem.itemName,
+      description: currentItem.description,
+      quantity: currentItem.quantity,
+      agreedValue: currentItem.agreedValue,
+      productionCost: currentItem.productionCost,
+      netValue: netValue,
+      condition: currentItem.condition,
+      notes: currentItem.notes
+    }]);
+
+    setCurrentItem({
+      itemName: '',
+      quantity: 1,
+      agreedValue: 0,
+      productionCost: 0,
+      condition: 'GOOD',
+      description: '',
+      notes: ''
+    });
+  };
+
+  const handleRemoveItem = (id: string) => {
+    setTradeItems(tradeItems.filter(item => item.id !== id));
+  };
+
+  const totalNetValue = tradeItems.reduce((sum, item) => sum + (item.netValue * item.quantity), 0);
+
+  // Calculate sale total
+  const saleTotal = editSaleItems.reduce((sum, item) => sum + (item.quantity * item.price), 0);
+  const existingPayments = editPayments.reduce((sum, p) => sum + Number(p.amount), 0);
+  const remainingAfterTrade = saleTotal - existingPayments;
+
+  const handleSubmitTradeIn = () => {
+    if (tradeItems.length === 0) {
+      alert('Please add at least one trade-in item');
+      return;
+    }
+
+    if (totalNetValue > remainingAfterTrade) {
+      alert(`Trade-in net value (KES ${formatCurrency(totalNetValue)}) exceeds remaining balance (KES ${formatCurrency(remainingAfterTrade)})`);
+      return;
+    }
+
+    onAddTradeIn({
+      method: "TRADE_IN",
+      amount: totalNetValue.toString(),
+      tradeItems: tradeItems,
+      referenceId: `TRADE-${Date.now()}`,
+      status: "COMPLETED",
+      productionCost: tradeItems.reduce((sum, item) => sum + (item.productionCost * item.quantity), 0)
+    });
+    
+    setTradeItems([]);
+    onClose();
+  };
+
+  if (!isOpen) return null;
+
+  return (
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-2 z-[80]">
+      <div className="bg-white dark:bg-gray-800 rounded-lg max-w-md w-full max-h-[90vh] overflow-y-auto shadow-2xl">
+        <div className="p-3 border-b dark:border-gray-700 sticky top-0 bg-white dark:bg-gray-800 rounded-t-lg">
+          <div className="flex justify-between items-center">
+            <h3 className="text-sm font-bold text-black dark:text-white flex items-center gap-2">
+              <RefreshCw size={16} className="text-indigo-600" />
+              Trade-in Exchange
+            </h3>
+            <button onClick={onClose} className="text-gray-400 hover:text-gray-600">
+              <X size={16} />
+            </button>
+          </div>
+        </div>
+
+        <div className="p-3 space-y-3">
+          {/* Add Trade-in Item Form */}
+          <div className="bg-gray-50 dark:bg-gray-700/50 p-2.5 rounded-lg space-y-2">
+            <h4 className="text-xs font-semibold text-gray-700 dark:text-gray-300">Add Item for Exchange</h4>
+            
+            <input
+              type="text"
+              placeholder="Item name (e.g., double jemmbe,trowels etc)"
+              value={currentItem.itemName}
+              onChange={(e) => setCurrentItem({ ...currentItem, itemName: e.target.value })}
+              className="w-full p-1.5 text-xs border border-gray-200 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-black dark:text-white"
+            />
+            
+            <div className="grid grid-cols-2 gap-1.5">
+              <input
+                type="number"
+                placeholder="Quantity"
+                value={currentItem.quantity}
+                onChange={(e) => setCurrentItem({ ...currentItem, quantity: parseInt(e.target.value) || 1 })}
+                className="p-1.5 text-xs border border-gray-200 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-black dark:text-white"
+              />
+              <select
+                value={currentItem.condition}
+                onChange={(e) => {
+                  const condition = conditions.find(c => c.value === e.target.value);
+                  if (condition && currentItem.agreedValue) {
+                    setCurrentItem({ ...currentItem, condition: e.target.value as any });
+                  } else {
+                    setCurrentItem({ ...currentItem, condition: e.target.value as any });
+                  }
+                }}
+                className="p-1.5 text-xs border border-gray-200 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-black dark:text-white"
+              >
+                {conditions.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
+              </select>
+            </div>
+
+            <div className="grid grid-cols-2 gap-1.5">
+              <input
+                type="number"
+                placeholder="Agreed Value (KES)"
+                value={currentItem.agreedValue || ''}
+                onChange={(e) => setCurrentItem({ ...currentItem, agreedValue: parseFloat(e.target.value) || 0 })}
+                className="p-1.5 text-xs border border-gray-200 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-black dark:text-white"
+              />
+              <input
+                type="number"
+                placeholder="Production Cost (KES)"
+                value={currentItem.productionCost || ''}
+                onChange={(e) => setCurrentItem({ ...currentItem, productionCost: parseFloat(e.target.value) || 0 })}
+                className="p-1.5 text-xs border border-gray-200 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-black dark:text-white"
+              />
+            </div>
+
+            <div className="bg-blue-50 dark:bg-blue-900/20 p-1.5 rounded text-[10px]">
+              <span className="text-gray-600">Net Value: </span>
+              <span className="font-semibold text-green-600">
+                KES {formatCurrency((currentItem.agreedValue - currentItem.productionCost) * currentItem.quantity)}
+              </span>
+            </div>
+
+            <textarea
+              placeholder="Description (optional)"
+              value={currentItem.description}
+              onChange={(e) => setCurrentItem({ ...currentItem, description: e.target.value })}
+              rows={2}
+              className="w-full p-1.5 text-xs border border-gray-200 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-black dark:text-white"
+            />
+
+            <button
+              onClick={handleAddItem}
+              className="w-full bg-indigo-600 text-white py-1.5 rounded-lg text-xs flex items-center justify-center gap-1 hover:bg-indigo-700"
+            >
+              <Plus size={12} /> Add Item
+            </button>
+          </div>
+
+          {/* Trade-in Items List */}
+          {tradeItems.length > 0 && (
+            <div>
+              <h4 className="text-xs font-semibold text-gray-700 dark:text-gray-300 mb-1.5">
+                Items to Exchange ({tradeItems.length})
+              </h4>
+              <div className="space-y-1.5 max-h-48 overflow-y-auto">
+                {tradeItems.map(item => (
+                  <div key={item.id} className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-2">
+                    <div className="flex justify-between items-start">
+                      <div className="flex-1">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span className="font-medium text-xs text-black dark:text-white">{item.itemName}</span>
+                          <span className="text-[9px] text-gray-400">x{item.quantity}</span>
+                          <span className={`text-[9px] px-1 py-0.5 rounded-full ${
+                            item.condition === 'EXCELLENT' ? 'bg-green-100 text-green-700' :
+                            item.condition === 'GOOD' ? 'bg-blue-100 text-blue-700' :
+                            item.condition === 'FAIR' ? 'bg-yellow-100 text-yellow-700' :
+                            'bg-red-100 text-red-700'
+                          }`}>
+                            {item.condition}
+                          </span>
+                        </div>
+                        <div className="text-[9px] text-gray-500 mt-0.5">
+                          Agreed: KES {formatCurrency(item.agreedValue)} | 
+                          Cost: KES {formatCurrency(item.productionCost)}
+                        </div>
+                        <div className="text-[10px] text-green-600 font-medium">
+                          Net Credit: KES {formatCurrency(item.netValue * item.quantity)}
+                        </div>
+                        {item.description && (
+                          <div className="text-[8px] text-gray-400 mt-0.5">{item.description}</div>
+                        )}
+                      </div>
+                      <button onClick={() => handleRemoveItem(item.id)} className="text-red-500 hover:text-red-700 p-1">
+                        <Trash2 size={12} />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              
+              {/* Total Trade-in Value */}
+              <div className="bg-indigo-50 dark:bg-indigo-900/20 p-2 rounded-lg mt-2">
+                <div className="flex justify-between text-xs">
+                  <span className="text-gray-700 dark:text-gray-300">Total Net Credit:</span>
+                  <span className="font-bold text-indigo-600">KES {formatCurrency(totalNetValue)}</span>
+                </div>
+                <div className="flex justify-between text-xs mt-1">
+                  <span className="text-gray-700 dark:text-gray-300">Sale Balance After Trade:</span>
+                  <span className="font-bold text-blue-600">KES {formatCurrency(remainingAfterTrade - totalNetValue)}</span>
+                </div>
+              </div>
+            </div>
+          )}
+
+          <div className="flex gap-2 pt-2">
+            <button onClick={onClose} className="flex-1 bg-gray-500 text-white py-2 rounded-lg text-xs">
+              Cancel
+            </button>
+            <button onClick={handleSubmitTradeIn} className="flex-1 bg-indigo-600 text-white py-2 rounded-lg text-xs flex items-center justify-center gap-1">
+              <RefreshCw size={12} /> Apply Trade-in
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 // ==================== MOBILE SALE CARD ====================
 const MobileSaleCard = ({ sale, expandedSaleId, setExpandedSaleId, formatCurrency, formatDate, formatDateTime, getUserDisplayName, paymentMethods, isRecentlyUpdated, isSaleModified, handleViewAuditLog, handleEditSale, showDeleteConfirmationWithReason, loading }: any) => {
   const isExpanded = expandedSaleId === sale.id;
@@ -225,7 +493,7 @@ const MobileSaleCard = ({ sale, expandedSaleId, setExpandedSaleId, formatCurrenc
             return (
               <span key={i} className={`px-1.5 py-0.5 rounded-full text-[10px] flex items-center gap-1 ${m?.color || "bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300"}`}>
                 <Icon size={9} />
-                {p.method}
+                {p.method === "TRADE_IN" ? "Trade-in" : p.method}
               </span>
             );
           })}
@@ -319,15 +587,48 @@ const MobileSaleCard = ({ sale, expandedSaleId, setExpandedSaleId, formatCurrenc
                     return (
                       <div key={i} className={`flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-medium ${m?.color || "bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-300"}`}>
                         <Icon size={9} />
-                        <span>{p.method}</span>
+                        <span>{p.method === "TRADE_IN" ? "Trade-in" : p.method}</span>
                         {p.amount > 0 && <span className="opacity-80">· Ksh {formatCurrency(p.amount)}</span>}
                         {p.referenceId && <span className="text-[8px] opacity-70">({p.referenceId})</span>}
+                        {p.tradeItems && p.tradeItems.length > 0 && (
+                          <span className="text-[8px] opacity-70 ml-1">({p.tradeItems.length} items)</span>
+                        )}
                       </div>
                     );
                   })}
                 </div>
               </div>
             )}
+
+            {/* Display Trade-in Items in Audit History */}
+            {sale.payments?.filter(p => p.method === "TRADE_IN" && p.tradeItems?.length > 0).map((payment, idx) => (
+              <div key={idx} className="bg-indigo-50 dark:bg-indigo-900/20 rounded-lg p-2 border border-indigo-200 dark:border-indigo-800">
+                <p className="text-[10px] font-semibold text-indigo-700 dark:text-indigo-300 mb-1.5 flex items-center gap-1">
+                  <RefreshCw size={10} /> Trade-in Items
+                </p>
+                <div className="space-y-1">
+                  {payment.tradeItems.map((item: TradeInExchangeItem, itemIdx: number) => (
+                    <div key={itemIdx} className="flex justify-between text-[10px]">
+                      <div>
+                        <span className="font-medium">{item.itemName}</span>
+                        <span className="text-gray-500 ml-1">x{item.quantity}</span>
+                        <span className="text-gray-400 ml-1">({item.condition})</span>
+                        {item.productionCost > 0 && (
+                          <span className="text-gray-400 ml-1">Cost: KES {formatCurrency(item.productionCost)}</span>
+                        )}
+                      </div>
+                      <div className="text-green-600">
+                        + KES {formatCurrency(item.netValue * item.quantity)}
+                      </div>
+                    </div>
+                  ))}
+                  <div className="border-t border-indigo-200 dark:border-indigo-800 mt-1 pt-1 flex justify-between font-semibold text-[10px]">
+                    <span>Total Trade-in Credit:</span>
+                    <span className="text-indigo-600">KES {formatCurrency(payment.amount)}</span>
+                  </div>
+                </div>
+              </div>
+            ))}
 
             {sale.saleitems?.length > 0 && (
               <div>
@@ -808,9 +1109,31 @@ function AccountingPage({ sales, getUserDisplayName }: { sales: Sale[], getUserD
   );
 }
 
-// ==================== ENHANCED AUDIT LOG MODAL ====================
-function EnhancedAuditLogModal({ isOpen, onClose, auditLogs, loading, sale, getUserDisplayName, formatDateTime }: { isOpen: boolean; onClose: () => void; auditLogs: AuditLog[]; loading: boolean; sale: Sale | null; getUserDisplayName: (email: string | null | undefined) => { name: string, email: string }; formatDateTime: (date: string | null | undefined) => string; }) {
+// ==================== ENHANCED AUDIT LOG MODAL WITH DETAILED INFO ====================
+function EnhancedAuditLogModal({ isOpen, onClose, auditLogs, loading, sale, getUserDisplayName, formatDateTime, formatCurrency }: { 
+  isOpen: boolean; 
+  onClose: () => void; 
+  auditLogs: AuditLog[]; 
+  loading: boolean; 
+  sale: Sale | null; 
+  getUserDisplayName: (email: string | null | undefined) => { name: string, email: string }; 
+  formatDateTime: (date: string | null | undefined) => string;
+  formatCurrency: (amount: number) => string;
+}) {
+  const [expandedLogs, setExpandedLogs] = useState<Set<number>>(new Set());
+  const [filterType, setFilterType] = useState<string>("all");
+
   if (!isOpen || !sale) return null;
+
+  const toggleLogExpand = (logId: number) => {
+    const newExpanded = new Set(expandedLogs);
+    if (newExpanded.has(logId)) {
+      newExpanded.delete(logId);
+    } else {
+      newExpanded.add(logId);
+    }
+    setExpandedLogs(newExpanded);
+  };
 
   const getActionColor = (action: string) => {
     switch (action) {
@@ -824,42 +1147,490 @@ function EnhancedAuditLogModal({ isOpen, onClose, auditLogs, loading, sale, getU
 
   const getActionIcon = (action: string) => {
     switch (action) {
-      case "CREATE": return <CheckCircle size={12} />;
-      case "UPDATE": return <Edit size={12} />;
-      case "DELETE": return <Trash2 size={12} />;
-      case "RESTORE": return <RotateCcw size={12} />;
-      default: return <History size={12} />;
+      case "CREATE": return <CheckCircle size={14} />;
+      case "UPDATE": return <Edit size={14} />;
+      case "DELETE": return <Trash2 size={14} />;
+      case "RESTORE": return <RotateCcw size={14} />;
+      default: return <History size={14} />;
     }
   };
 
+  // Parse audit log details
+  const parseAuditDetails = (log: AuditLog) => {
+    const details: { label: string; value: string; type?: string }[] = [];
+    
+    if (log.action === "CREATE") {
+      details.push({ label: "Action", value: "Sale Created", type: "success" });
+      if (log.snapshot?.after?.saleItems) {
+        const items = log.snapshot.after.saleItems;
+        details.push({ 
+          label: "Items", 
+          value: items.map((i: any) => `${i.quantity}x ${i.productName || `Product ${i.productId}`}`).join(", "),
+          type: "info"
+        });
+        details.push({ 
+          label: "Total Amount", 
+          value: `KES ${formatCurrency(log.snapshot.after.amount || 0)}`,
+          type: "amount"
+        });
+      }
+    }
+    
+    if (log.action === "DELETE") {
+      details.push({ label: "Action", value: "Sale Deleted", type: "danger" });
+      if (log.notes) {
+        const deleteInfo = log.notes;
+        if (deleteInfo.includes("Reason:")) {
+          const reasonMatch = deleteInfo.match(/Reason: ([^.]+)/);
+          if (reasonMatch) details.push({ label: "Reason", value: reasonMatch[1], type: "warning" });
+        }
+        if (deleteInfo.includes("Restocked:")) {
+          const restockedMatch = deleteInfo.match(/Restocked: (true|false)/);
+          if (restockedMatch) details.push({ 
+            label: "Items Restocked", 
+            value: restockedMatch[1] === "true" ? "Yes" : "No",
+            type: restockedMatch[1] === "true" ? "success" : "warning"
+          });
+        }
+      }
+    }
+    
+    if (log.action === "UPDATE") {
+      details.push({ label: "Action", value: "Sale Updated", type: "info" });
+      
+      // Parse field changes
+      if (log.fieldName) {
+        const fieldDisplay = log.fieldName.replace(/_/g, ' ').replace(/([A-Z])/g, ' $1').trim();
+        details.push({ 
+          label: `Changed ${fieldDisplay}`, 
+          value: `From: ${log.oldValue || "null"} → To: ${log.newValue || "null"}`,
+          type: "change"
+        });
+      }
+      
+      // Parse payment changes
+      if (log.fieldName?.includes("payment")) {
+        details.push({ 
+          label: "Payment Update", 
+          value: log.difference || "Payment details changed",
+          type: "payment"
+        });
+      }
+      
+      // Parse trade-in information
+      if (log.notes && log.notes.includes("TRADE_IN")) {
+        try {
+          const tradeMatch = log.notes.match(/TRADE_IN_ITEMS: (.+)/);
+          if (tradeMatch) {
+            details.push({ 
+              label: "Trade-in Items", 
+              value: tradeMatch[1],
+              type: "tradein"
+            });
+          }
+        } catch (e) {
+          // Ignore parse errors
+        }
+      }
+      
+      // Parse snapshot differences
+      if (log.snapshot?.before && log.snapshot?.after) {
+        const before = log.snapshot.before;
+        const after = log.snapshot.after;
+        
+        if (before.amount !== after.amount) {
+          details.push({ 
+            label: "Amount Change", 
+            value: `KES ${formatCurrency(before.amount || 0)} → KES ${formatCurrency(after.amount || 0)}`,
+            type: "amount"
+          });
+        }
+        
+        if (before.status !== after.status) {
+          details.push({ 
+            label: "Status Change", 
+            value: `${before.status || "UNKNOWN"} → ${after.status || "UNKNOWN"}`,
+            type: "status"
+          });
+        }
+        
+        // Check for item changes
+        if (before.saleItems && after.saleItems) {
+          const beforeItems = before.saleItems;
+          const afterItems = after.saleItems;
+          
+          const addedItems = afterItems.filter((a: any) => !beforeItems.some((b: any) => b.productId === a.productId));
+          const removedItems = beforeItems.filter((b: any) => !afterItems.some((a: any) => a.productId === b.productId));
+          const modifiedItems = afterItems.filter((a: any) => {
+            const beforeItem = beforeItems.find((b: any) => b.productId === a.productId);
+            return beforeItem && (beforeItem.quantity !== a.quantity || beforeItem.price !== a.price);
+          });
+          
+          if (addedItems.length > 0) {
+            details.push({ 
+              label: "Items Added", 
+              value: addedItems.map((i: any) => `${i.quantity}x ${i.productName || `Product ${i.productId}`}`).join(", "),
+              type: "success"
+            });
+          }
+          
+          if (removedItems.length > 0) {
+            details.push({ 
+              label: "Items Removed", 
+              value: removedItems.map((i: any) => `${i.quantity}x ${i.productName || `Product ${i.productId}`}`).join(", "),
+              type: "danger"
+            });
+          }
+          
+          if (modifiedItems.length > 0) {
+            modifiedItems.forEach((item: any) => {
+              const beforeItem = beforeItems.find((b: any) => b.productId === item.productId);
+              if (beforeItem.quantity !== item.quantity) {
+                details.push({ 
+                  label: `Quantity Change (${item.productName})`, 
+                  value: `${beforeItem.quantity} → ${item.quantity}`,
+                  type: "change"
+                });
+              }
+              if (beforeItem.price !== item.price) {
+                details.push({ 
+                  label: `Price Change (${item.productName})`, 
+                  value: `KES ${formatCurrency(beforeItem.price)} → KES ${formatCurrency(item.price)}`,
+                  type: "amount"
+                });
+              }
+            });
+          }
+        }
+        
+        // Check for payment changes
+        if (before.payments && after.payments) {
+          const beforePayments = before.payments;
+          const afterPayments = after.payments;
+          
+          const addedPayments = afterPayments.filter((a: any) => !beforePayments.some((b: any) => b.id === a.id && b.id));
+          const removedPayments = beforePayments.filter((b: any) => !afterPayments.some((a: any) => a.id === b.id && a.id));
+          
+          addedPayments.forEach((payment: any) => {
+            if (payment.method === "TRADE_IN") {
+              details.push({ 
+                label: "Trade-in Payment Added", 
+                value: `KES ${formatCurrency(payment.amount)} - ${payment.tradeItems?.length || 0} items traded`,
+                type: "tradein"
+              });
+            } else {
+              details.push({ 
+                label: `${payment.method} Payment Added`, 
+                value: `KES ${formatCurrency(payment.amount)}`,
+                type: "payment"
+              });
+            }
+          });
+          
+          removedPayments.forEach((payment: any) => {
+            details.push({ 
+              label: "Payment Removed", 
+              value: `${payment.method}: KES ${formatCurrency(payment.amount)}`,
+              type: "danger"
+            });
+          });
+        }
+      }
+    }
+    
+    if (log.action === "RESTORE") {
+      details.push({ label: "Action", value: "Sale Restored from Archive", type: "success" });
+      if (log.changedBy) {
+        details.push({ label: "Restored By", value: getUserDisplayName(log.changedBy).name, type: "info" });
+      }
+      if (log.changedAt) {
+        details.push({ label: "Restored At", value: formatDateTime(log.changedAt), type: "info" });
+      }
+    }
+    
+    return details;
+  };
+
+  // Filter logs based on type
+  const filteredLogs = auditLogs.filter(log => {
+    if (filterType === "all") return true;
+    if (filterType === "tradein") {
+      return log.method === "TRADE_IN" || 
+             (log.notes && log.notes.includes("TRADE_IN")) ||
+             (log.difference && log.difference.includes("Trade-in"));
+    }
+    if (filterType === "payment") {
+      return log.fieldName?.includes("payment") || 
+             log.difference?.includes("payment") ||
+             log.difference?.includes("Payment");
+    }
+    if (filterType === "item") {
+      return log.fieldName?.includes("product") || 
+             log.fieldName?.includes("item") ||
+             log.difference?.includes("item") ||
+             log.difference?.includes("product");
+    }
+    return log.action.toLowerCase() === filterType.toLowerCase();
+  });
+
+  const filterOptions = [
+    { value: "all", label: "All Activities", icon: History },
+    { value: "CREATE", label: "Creations", icon: CheckCircle },
+    { value: "UPDATE", label: "Updates", icon: Edit },
+    { value: "DELETE", label: "Deletions", icon: Trash2 },
+    { value: "payment", label: "Payments", icon: CreditCard },
+    { value: "tradein", label: "Trade-ins", icon: RefreshCw },
+    { value: "item", label: "Items", icon: Package },
+  ];
+
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-2 z-[70]">
-      <div className="bg-white dark:bg-gray-800 rounded-lg max-w-3xl w-full max-h-[85vh] overflow-y-auto shadow-2xl">
-        <div className="p-3 border-b dark:border-gray-700 sticky top-0 bg-white dark:bg-gray-800 rounded-t-lg z-10">
-          <div className="flex justify-between items-center">
-            <div><h3 className="text-base font-bold text-black dark:text-white flex items-center gap-1.5"><History size={16} className="text-blue-600" />Audit</h3><p className="text-[10px] text-gray-500 mt-0.5">Sale #{sale.id} - {sale.customer?.name}</p></div>
-            <button onClick={onClose} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors"><X size={18} /></button>
+      <div className="bg-white dark:bg-gray-800 rounded-lg max-w-4xl w-full max-h-[90vh] overflow-y-auto shadow-2xl">
+        <div className="p-4 border-b dark:border-gray-700 sticky top-0 bg-white dark:bg-gray-800 rounded-t-lg z-10">
+          <div className="flex justify-between items-center mb-3">
+            <div>
+              <h3 className="text-lg font-bold text-black dark:text-white flex items-center gap-2">
+                <History size={20} className="text-blue-600" />
+                Audit History
+              </h3>
+              <p className="text-xs text-gray-500 mt-1">
+                Sale #{sale.id} - {sale.customer?.name} | 
+                Total: KES {formatCurrency(sale.amount)} | 
+                Status: {sale.status}
+              </p>
+            </div>
+            <button onClick={onClose} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors">
+              <X size={20} />
+            </button>
+          </div>
+          
+          {/* Filter Buttons */}
+          <div className="flex flex-wrap gap-1.5 mt-2">
+            {filterOptions.map((option) => {
+              const Icon = option.icon;
+              const isActive = filterType === option.value;
+              return (
+                <button
+                  key={option.value}
+                  onClick={() => setFilterType(option.value)}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all flex items-center gap-1.5 ${
+                    isActive
+                      ? "bg-blue-600 text-white shadow-sm"
+                      : "bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600"
+                  }`}
+                >
+                  <Icon size={12} />
+                  {option.label}
+                  {isActive && filteredLogs.length > 0 && (
+                    <span className="ml-1 px-1.5 py-0.5 bg-white/20 rounded-full text-[10px]">
+                      {filteredLogs.length}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
           </div>
         </div>
-        <div className="p-3">
-          {loading ? (<div className="text-center py-8"><div className="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-600 mx-auto"></div><p className="text-gray-500 mt-2 text-xs">Loading...</p></div>) : auditLogs.length === 0 ? (
-            <div className="text-center py-8 text-gray-500"><History size={32} className="mx-auto text-gray-300 mb-2" /><p className="text-xs">No audit records</p></div>
+        
+        <div className="p-4">
+          {loading ? (
+            <div className="text-center py-12">
+              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto"></div>
+              <p className="text-gray-500 mt-3 text-sm">Loading audit history...</p>
+            </div>
+          ) : filteredLogs.length === 0 ? (
+            <div className="text-center py-12 text-gray-500">
+              <History size={48} className="mx-auto text-gray-300 mb-3" />
+              <p className="text-sm">No audit records found</p>
+              <p className="text-xs mt-1">No changes have been recorded for this sale</p>
+            </div>
           ) : (
-            <div className="space-y-2">
-              {auditLogs.map((log, index) => (
-                <div key={log.id} className={`border dark:border-gray-700 rounded-lg p-2.5 transition-all hover:shadow-md ${index === 0 ? 'border-blue-300 bg-blue-50/30 dark:bg-blue-900/10' : 'dark:bg-gray-800/50'}`}>
-                  <div className="flex items-start gap-2">
-                    <div className="flex-shrink-0"><div className={`w-6 h-6 rounded-full flex items-center justify-center ${getActionColor(log.action)}`}>{getActionIcon(log.action)}</div></div>
-                    <div className="flex-1">
-                      <div className="flex flex-wrap justify-between items-start gap-1">
-                        <div><span className={`inline-block px-1.5 py-0.5 rounded-full text-[9px] font-semibold ${getActionColor(log.action)} border`}>{log.action}</span></div>
-                        <div className="text-right"><div className="font-medium text-[10px] text-gray-700 dark:text-gray-300">{getUserDisplayName(log.changedBy).name}</div><div className="text-[8px] text-gray-400">{formatDateTime(log.changedAt)}</div></div>
+            <div className="space-y-3">
+              {filteredLogs.map((log, index) => {
+                const isExpanded = expandedLogs.has(log.id);
+                const details = parseAuditDetails(log);
+                const isLatest = index === 0;
+                
+                return (
+                  <div 
+                    key={log.id} 
+                    className={`border rounded-lg transition-all hover:shadow-md ${
+                      isLatest 
+                        ? 'border-blue-300 bg-blue-50/30 dark:bg-blue-900/10' 
+                        : 'border-gray-200 dark:border-gray-700 dark:bg-gray-800/50'
+                    }`}
+                  >
+                    <div 
+                      className="p-3 cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700/30 transition-colors"
+                      onClick={() => toggleLogExpand(log.id)}
+                    >
+                      <div className="flex items-start gap-3">
+                        <div className="flex-shrink-0">
+                          <div className={`w-8 h-8 rounded-full flex items-center justify-center ${getActionColor(log.action)}`}>
+                            {getActionIcon(log.action)}
+                          </div>
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex flex-wrap justify-between items-start gap-2">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-semibold ${getActionColor(log.action)} border`}>
+                                {log.action}
+                              </span>
+                              {log.action === "UPDATE" && log.fieldName && (
+                                <span className="text-[10px] text-gray-500 bg-gray-100 dark:bg-gray-700 px-1.5 py-0.5 rounded">
+                                  {log.fieldName}
+                                </span>
+                              )}
+                              {isLatest && (
+                                <span className="text-[9px] bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 px-1.5 py-0.5 rounded-full">
+                                  Latest
+                                </span>
+                              )}
+                            </div>
+                            <div className="text-right">
+                              <div className="font-medium text-xs text-gray-700 dark:text-gray-300">
+                                {getUserDisplayName(log.changedBy).name}
+                              </div>
+                              <div className="text-[10px] text-gray-400">
+                                {formatDateTime(log.changedAt)}
+                              </div>
+                            </div>
+                          </div>
+                          
+                          {/* Summary line */}
+                          {log.changeSummary && (
+                            <div className="mt-1.5 text-xs text-gray-600 dark:text-gray-400">
+                              {log.changeSummary.length > 100 && !isExpanded 
+                                ? `${log.changeSummary.substring(0, 100)}...` 
+                                : log.changeSummary}
+                            </div>
+                          )}
+                          
+                          {/* Expand indicator */}
+                          <div className="flex items-center gap-1 mt-1 text-[10px] text-gray-400">
+                            <ChevronDown 
+                              size={12} 
+                              className={`transition-transform duration-200 ${isExpanded ? "rotate-180" : ""}`}
+                            />
+                            <span>{isExpanded ? "Show less" : "Show details"}</span>
+                          </div>
+                        </div>
                       </div>
-                      {log.changeSummary && <div className="mt-1.5 text-xs text-gray-700 dark:text-gray-300 bg-white/50 dark:bg-gray-900/50 p-1.5 rounded-md">{log.changeSummary}</div>}
                     </div>
+                    
+                    {/* Expanded Details */}
+                    {isExpanded && details.length > 0 && (
+                      <div className="border-t border-gray-100 dark:border-gray-700 p-3 bg-gray-50/50 dark:bg-gray-900/20">
+                        <div className="space-y-2">
+                          {details.map((detail, idx) => {
+                            let bgColor = "";
+                            let textColor = "";
+                            let icon = null;
+                            
+                            switch (detail.type) {
+                              case "success":
+                                bgColor = "bg-green-50 dark:bg-green-900/20";
+                                textColor = "text-green-700 dark:text-green-300";
+                                icon = <CheckCircle size={12} className="text-green-500" />;
+                                break;
+                              case "danger":
+                                bgColor = "bg-red-50 dark:bg-red-900/20";
+                                textColor = "text-red-700 dark:text-red-300";
+                                icon = <AlertTriangle size={12} className="text-red-500" />;
+                                break;
+                              case "warning":
+                                bgColor = "bg-yellow-50 dark:bg-yellow-900/20";
+                                textColor = "text-yellow-700 dark:text-yellow-300";
+                                icon = <AlertTriangle size={12} className="text-yellow-500" />;
+                                break;
+                              case "tradein":
+                                bgColor = "bg-indigo-50 dark:bg-indigo-900/20";
+                                textColor = "text-indigo-700 dark:text-indigo-300";
+                                icon = <RefreshCw size={12} className="text-indigo-500" />;
+                                break;
+                              case "payment":
+                                bgColor = "bg-purple-50 dark:bg-purple-900/20";
+                                textColor = "text-purple-700 dark:text-purple-300";
+                                icon = <CreditCard size={12} className="text-purple-500" />;
+                                break;
+                              case "amount":
+                                bgColor = "bg-emerald-50 dark:bg-emerald-900/20";
+                                textColor = "text-emerald-700 dark:text-emerald-300";
+                                icon = <DollarSign size={12} className="text-emerald-500" />;
+                                break;
+                              case "status":
+                                bgColor = "bg-cyan-50 dark:bg-cyan-900/20";
+                                textColor = "text-cyan-700 dark:text-cyan-300";
+                                icon = <TrendingUp size={12} className="text-cyan-500" />;
+                                break;
+                              default:
+                                bgColor = "bg-gray-50 dark:bg-gray-800";
+                                textColor = "text-gray-700 dark:text-gray-300";
+                                icon = <Info size={12} className="text-gray-400" />;
+                            }
+                            
+                            return (
+                              <div key={idx} className={`rounded-lg p-2 ${bgColor}`}>
+                                <div className="flex items-start gap-2">
+                                  <div className="flex-shrink-0 mt-0.5">{icon}</div>
+                                  <div className="flex-1">
+                                    <div className={`text-[11px] font-semibold ${textColor}`}>
+                                      {detail.label}
+                                    </div>
+                                    <div className="text-xs text-gray-700 dark:text-gray-300 mt-0.5 break-words">
+                                      {detail.value}
+                                    </div>
+                                  </div>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                        
+                        {/* Raw data for debugging (optional - can be removed in production) */}
+                        {process.env.NODE_ENV === "development" && log.snapshot && (
+                          <details className="mt-2">
+                            <summary className="text-[9px] text-gray-400 cursor-pointer">Raw Data</summary>
+                            <pre className="text-[8px] text-gray-500 mt-1 overflow-x-auto p-2 bg-gray-100 dark:bg-gray-800 rounded">
+                              {JSON.stringify(log.snapshot, null, 2)}
+                            </pre>
+                          </details>
+                        )}
+                      </div>
+                    )}
                   </div>
+                );
+              })}
+            </div>
+          )}
+          
+          {/* Summary Stats */}
+          {!loading && auditLogs.length > 0 && (
+            <div className="mt-4 pt-3 border-t border-gray-200 dark:border-gray-700">
+              <div className="grid grid-cols-4 gap-2 text-center text-[10px]">
+                <div className="bg-gray-50 dark:bg-gray-700/50 rounded-lg p-2">
+                  <div className="font-bold text-gray-700 dark:text-gray-300">{auditLogs.length}</div>
+                  <div className="text-gray-500">Total Changes</div>
                 </div>
-              ))}
+                <div className="bg-green-50 dark:bg-green-900/20 rounded-lg p-2">
+                  <div className="font-bold text-green-700 dark:text-green-300">
+                    {auditLogs.filter(l => l.action === "CREATE").length}
+                  </div>
+                  <div className="text-green-600 dark:text-green-400">Creations</div>
+                </div>
+                <div className="bg-blue-50 dark:bg-blue-900/20 rounded-lg p-2">
+                  <div className="font-bold text-blue-700 dark:text-blue-300">
+                    {auditLogs.filter(l => l.action === "UPDATE").length}
+                  </div>
+                  <div className="text-blue-600 dark:text-blue-400">Updates</div>
+                </div>
+                <div className="bg-purple-50 dark:bg-purple-900/20 rounded-lg p-2">
+                  <div className="font-bold text-purple-700 dark:text-purple-300">
+                    {auditLogs.filter(l => l.difference?.includes("Trade") || l.notes?.includes("TRADE")).length}
+                  </div>
+                  <div className="text-purple-600 dark:text-purple-400">Trade-ins</div>
+                </div>
+              </div>
             </div>
           )}
         </div>
@@ -871,8 +1642,8 @@ function EnhancedAuditLogModal({ isOpen, onClose, auditLogs, loading, sale, getU
 // ==================== PAYMENT BREAKDOWN COMPONENT ====================
 interface PaymentBreakdownProps {
   stats: {
-    cashAmount: number; mpesaAmount: number; bankAmount: number; checkAmount: number; cardAmount: number; creditAmount: number;
-    todayCash: number; todayMpesa: number; todayBank: number; todayCheck: number; todayCard: number; todayCredit: number;
+    cashAmount: number; mpesaAmount: number; bankAmount: number; checkAmount: number; cardAmount: number; creditAmount: number; tradeInAmount: number;
+    todayCash: number; todayMpesa: number; todayBank: number; todayCheck: number; todayCard: number; todayCredit: number; todayTradeIn: number;
   };
   dateFilter: string;
 }
@@ -889,12 +1660,13 @@ function PaymentBreakdown({ stats, dateFilter }: PaymentBreakdownProps) {
     { method: "Check", amount: dateFilter === "today" ? stats.todayCheck : stats.checkAmount, color: "orange", icon: DollarSign },
     { method: "Card", amount: dateFilter === "today" ? stats.todayCard : stats.cardAmount, color: "pink", icon: CardIcon },
     { method: "Credit", amount: dateFilter === "today" ? stats.todayCredit : stats.creditAmount, color: "yellow", icon: CreditCard },
+    { method: "Trade-in", amount: dateFilter === "today" ? stats.todayTradeIn : stats.tradeInAmount, color: "indigo", icon: RefreshCw },
   ];
 
   return (
     <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-3 mb-3">
       <h2 className="text-xs font-bold text-black dark:text-white mb-2">{dateFilter === "today" ? "Today's Payments" : "Payment Breakdown"}</h2>
-      <div className="grid grid-cols-3 gap-1.5">
+      <div className="grid grid-cols-4 gap-1.5">
         {paymentCategories.map((category) => (
           <div key={category.method} className={`bg-${category.color}-50 dark:bg-${category.color}-900/20 p-1.5 rounded-md border border-${category.color}-200 dark:border-${category.color}-800`}>
             <div className="flex items-center gap-0.5 mb-0.5"><category.icon className={`text-${category.color}-600 dark:text-${category.color}-400`} size={9} /><span className={`text-[9px] font-medium text-${category.color}-800 dark:text-${category.color}-300`}>{category.method}</span></div>
@@ -949,6 +1721,8 @@ export default function EnhancedSalesPage() {
 
   const [editPayments, setEditPayments] = useState<NewPayment[]>([]);
   const [currentPayment, setCurrentPayment] = useState<NewPayment>({ amount: "", method: "CASH", referenceId: "", checkDepositDate: "", dueDate: "", bankName: "" });
+  
+  const [showTradeInModal, setShowTradeInModal] = useState(false);
   
   const [editingSale, setEditingSale] = useState<Sale | null>(null);
   const [deletingPaymentId, setDeletingPaymentId] = useState<number | null>(null);
@@ -1229,6 +2003,160 @@ export default function EnhancedSalesPage() {
     }
   };
 
+  // Handle adding trade-in payment
+  const handleAddTradeInPayment = (tradeInPayment: NewPayment) => {
+    addEditPayment(tradeInPayment);
+    setShowTradeInModal(false);
+  };
+
+  // Updated addEditPayment to handle trade-in
+  const addEditPayment = (customPayment?: NewPayment) => {
+    const paymentToAdd = customPayment || currentPayment;
+    console.log("Adding payment:", paymentToAdd);
+    
+    // For TRADE_IN payments
+    if (paymentToAdd.method === "TRADE_IN") {
+      const amount = parseFloat(paymentToAdd.amount);
+      if (!amount || amount <= 0) {
+        setError("Please enter a valid trade-in value");
+        return;
+      }
+      
+      // Calculate remaining amount
+      const currentTotal = editSaleItems.reduce((sum, item) => sum + (item.quantity * item.price), 0);
+      const currentPayments = editPayments.reduce((sum, p) => sum + Number(p.amount), 0);
+      const remainingAmount = currentTotal - currentPayments;
+
+      if (amount > remainingAmount) {
+        setError(`Trade-in value cannot exceed remaining balance of Ksh ${remainingAmount.toFixed(2)}`);
+        return;
+      }
+      
+      const newPayment = {
+        amount: paymentToAdd.amount,
+        method: "TRADE_IN",
+        referenceId: paymentToAdd.referenceId || `TRADE-${Date.now()}`,
+        tradeItems: paymentToAdd.tradeItems || [],
+        status: "COMPLETED"
+      };
+      
+      setEditPayments([...editPayments, newPayment]);
+      
+      // Calculate new remaining amount
+      const newRemaining = currentTotal - (currentPayments + amount);
+      if (newRemaining <= 0.01) {
+        setSuccess(`Trade-in added! Sale is now fully paid. Remaining: KES 0.00`);
+      } else {
+        setSuccess(`Trade-in added: KES ${formatCurrency(amount)} credited. Remaining: KES ${formatCurrency(newRemaining)}`);
+      }
+      setTimeout(() => setSuccess(null), 3000);
+      return;
+    }
+    
+    // For CREDIT payments
+    if (paymentToAdd.method === "CREDIT") {
+      if (!paymentToAdd.dueDate) {
+        setError("Due date is required for credit/pay later");
+        return;
+      }
+      
+      const newPayment = {
+        amount: "0",
+        method: paymentToAdd.method,
+        referenceId: "",
+        checkDepositDate: "",
+        dueDate: paymentToAdd.dueDate,
+        bankName: ""
+      };
+      
+      setEditPayments([...editPayments, newPayment]);
+      setSuccess("Credit payment added");
+      setTimeout(() => setSuccess(null), 2000);
+      
+      // Reset form
+      setCurrentPayment({
+        amount: "",
+        method: "CASH",
+        referenceId: "",
+        checkDepositDate: "",
+        dueDate: "",
+        bankName: ""
+      });
+      setError(null);
+      return;
+    }
+    
+    // For regular payments
+    const amount = parseFloat(paymentToAdd.amount);
+    if (!amount || amount <= 0) {
+      setError("Please enter a valid payment amount");
+      return;
+    }
+
+    // Calculate remaining amount
+    const currentTotal = editSaleItems.reduce((sum, item) => sum + (item.quantity * item.price), 0);
+    const currentPayments = editPayments.reduce((sum, p) => sum + Number(p.amount), 0);
+    const remainingAmount = currentTotal - currentPayments;
+
+    if (amount > remainingAmount) {
+      setError(`Payment cannot exceed remaining balance of Ksh ${remainingAmount.toFixed(2)}`);
+      return;
+    }
+    
+    // Validate based on payment method
+    if (paymentToAdd.method === "MPESA" && !paymentToAdd.referenceId?.trim()) {
+      setError("Please enter M-Pesa transaction ID");
+      return;
+    }
+    
+    if (paymentToAdd.method === "BANK") {
+      if (!paymentToAdd.referenceId?.trim()) {
+        setError("Please enter bank transaction reference");
+        return;
+      }
+      if (!paymentToAdd.bankName?.trim()) {
+        setError("Please enter bank name");
+        return;
+      }
+    }
+    
+    if (paymentToAdd.method === "CHECK" && !paymentToAdd.checkDepositDate) {
+      setError("Please specify check deposit date");
+      return;
+    }
+    
+    const newPayment = {
+      amount: paymentToAdd.amount,
+      method: paymentToAdd.method,
+      referenceId: paymentToAdd.referenceId || "",
+      checkDepositDate: paymentToAdd.checkDepositDate || "",
+      dueDate: "",
+      bankName: paymentToAdd.bankName || "",
+      status: paymentToAdd.method === "CHECK" ? "PENDING" : "COMPLETED"
+    };
+    
+    setEditPayments([...editPayments, newPayment]);
+    
+    const newRemaining = remainingAmount - amount;
+    if (newRemaining <= 0.01) {
+      setSuccess(`Payment added! Sale is now fully paid.`);
+    } else {
+      setSuccess(`Payment added successfully. Remaining: KES ${formatCurrency(newRemaining)}`);
+    }
+    setTimeout(() => setSuccess(null), 2000);
+    
+    // Reset form
+    setCurrentPayment({
+      amount: "",
+      method: "CASH",
+      referenceId: "",
+      checkDepositDate: "",
+      dueDate: "",
+      bankName: ""
+    });
+    setError(null);
+  };
+    
   const handleUpdateSale = async () => {
     if (!editingSale) return;
     if (!currentUser) {
@@ -1250,6 +2178,17 @@ export default function EnhancedSalesPage() {
       
       const newTotalAmount = editSaleItems.reduce((total, item) => 
         total + (item.quantity * item.price), 0);
+      
+      // Prepare audit notes for trade-ins
+      const tradeInPayments = editPayments.filter(p => p.method === "TRADE_IN" && p.tradeItems);
+      let auditNotes = "";
+      if (tradeInPayments.length > 0) {
+        auditNotes = "TRADE_IN_ITEMS: " + tradeInPayments.map(p => 
+          p.tradeItems?.map((item: TradeInExchangeItem) => 
+            `${item.quantity}x ${item.itemName} (Agreed: ${item.agreedValue}, Cost: ${item.productionCost}, Net: ${item.netValue})`
+          ).join(", ")
+        ).join(" | ");
+      }
 
       const updateData = {
         saleItems: editSaleItems.map(item => ({
@@ -1265,6 +2204,7 @@ export default function EnhancedSalesPage() {
           referenceId: p.referenceId?.trim() || null,
           checkDepositDate: p.checkDepositDate || null,
           bankName: p.bankName || null,
+          tradeItems: p.tradeItems,
         })),
         newPayments: editPayments.filter(p => !p.id && p.amount && Number(p.amount) > 0).map(p => ({
           amount: Number(p.amount),
@@ -1275,6 +2215,7 @@ export default function EnhancedSalesPage() {
           bankName: p.bankName || null,
           date: new Date().toISOString(),
           status: p.method === "CHECK" ? "PENDING" : "COMPLETED",
+          tradeItems: p.tradeItems,
         })),
         amount: newTotalAmount,
         dueDate: editingSale.dueDate || null,
@@ -1282,6 +2223,7 @@ export default function EnhancedSalesPage() {
         updatedByEmail: currentUserEmail,
         ipAddress,
         userAgent,
+        notes: auditNotes,
       };
 
       const response = await fetch(`/api/sales/${editingSale.id}`, {
@@ -1316,7 +2258,12 @@ export default function EnhancedSalesPage() {
       setProductSearch("");
       setCurrentEditItem({ productId: 0, quantity: 0, price: 0, productName: "" });
       
-      setSuccess("Sale updated successfully!");
+      const tradeInTotal = editPayments.filter(p => p.method === "TRADE_IN").reduce((sum, p) => sum + Number(p.amount), 0);
+      if (tradeInTotal > 0) {
+        setSuccess(`Sale updated! Trade-in credit applied: KES ${formatCurrency(tradeInTotal)}`);
+      } else {
+        setSuccess("Sale updated successfully!");
+      }
       setTimeout(() => setSuccess(null), 3000);
 
       const salesRes = await fetch("/api/sales");
@@ -1433,7 +2380,8 @@ export default function EnhancedSalesPage() {
       referenceId: p.referenceId || "", 
       checkDepositDate: p.checkDepositDate || "",
       bankName: p.bankName || "",
-      dueDate: p.dueDate || ""
+      dueDate: p.dueDate || "",
+      tradeItems: p.tradeItems,
     })));
     setEditSaleItems(sale.saleitems.map(item => ({ 
       id: item.id,
@@ -1485,7 +2433,8 @@ export default function EnhancedSalesPage() {
             method: p.method,
             referenceId: p.referenceId || "",
             checkDepositDate: p.checkDepositDate || "",
-            bankName: p.bankName || ""
+            bankName: p.bankName || "",
+            tradeItems: p.tradeItems,
           }))
         );
       }
@@ -1499,107 +2448,6 @@ export default function EnhancedSalesPage() {
     } finally {
       setDeletingPaymentId(null);
     }
-  };
-
-  const addEditPayment = () => {
-    console.log("Adding payment:", currentPayment);
-    
-    // For CREDIT payments
-    if (currentPayment.method === "CREDIT") {
-      if (!currentPayment.dueDate) {
-        setError("Due date is required for credit/pay later");
-        return;
-      }
-      
-      const newPayment = {
-        amount: "0",
-        method: currentPayment.method,
-        referenceId: "",
-        checkDepositDate: "",
-        dueDate: currentPayment.dueDate,
-        bankName: ""
-      };
-      
-      setEditPayments([...editPayments, newPayment]);
-      setSuccess("Credit payment added");
-      setTimeout(() => setSuccess(null), 2000);
-      
-      // Reset form
-      setCurrentPayment({
-        amount: "",
-        method: "CASH",
-        referenceId: "",
-        checkDepositDate: "",
-        dueDate: "",
-        bankName: ""
-      });
-      setError(null);
-      return;
-    }
-    
-    // For regular payments
-    const amount = parseFloat(currentPayment.amount);
-    if (!amount || amount <= 0) {
-      setError("Please enter a valid payment amount");
-      return;
-    }
-
-    // Calculate remaining amount
-    const currentTotal = editSaleItems.reduce((sum, item) => sum + (item.quantity * item.price), 0);
-    const currentPayments = editPayments.reduce((sum, p) => sum + Number(p.amount), 0);
-    const remainingAmount = currentTotal - currentPayments;
-
-    if (amount > remainingAmount) {
-      setError(`Payment cannot exceed remaining balance of Ksh ${remainingAmount.toFixed(2)}`);
-      return;
-    }
-    
-    // Validate based on payment method
-    if (currentPayment.method === "MPESA" && !currentPayment.referenceId?.trim()) {
-      setError("Please enter M-Pesa transaction ID");
-      return;
-    }
-    
-    if (currentPayment.method === "BANK") {
-      if (!currentPayment.referenceId?.trim()) {
-        setError("Please enter bank transaction reference");
-        return;
-      }
-      if (!currentPayment.bankName?.trim()) {
-        setError("Please enter bank name");
-        return;
-      }
-    }
-    
-    if (currentPayment.method === "CHECK" && !currentPayment.checkDepositDate) {
-      setError("Please specify check deposit date");
-      return;
-    }
-    
-    const newPayment = {
-      amount: currentPayment.amount,
-      method: currentPayment.method,
-      referenceId: currentPayment.referenceId || "",
-      checkDepositDate: currentPayment.checkDepositDate || "",
-      dueDate: "",
-      bankName: currentPayment.bankName || "",
-      status: currentPayment.method === "CHECK" ? "PENDING" : "COMPLETED"
-    };
-    
-    setEditPayments([...editPayments, newPayment]);
-    setSuccess("Payment added successfully");
-    setTimeout(() => setSuccess(null), 2000);
-    
-    // Reset form
-    setCurrentPayment({
-      amount: "",
-      method: "CASH",
-      referenceId: "",
-      checkDepositDate: "",
-      dueDate: "",
-      bankName: ""
-    });
-    setError(null);
   };
     
   const clearMessages = () => { setError(null); setSuccess(null); setStockError(null); };
@@ -1738,7 +2586,8 @@ export default function EnhancedSalesPage() {
     { value: "BANK", label: "Bank", color: "bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-300", icon: Landmark },
     { value: "CHECK", label: "Check", color: "bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-300", icon: DollarSign },
     { value: "CARD", label: "Card", color: "bg-pink-100 text-pink-800 dark:bg-pink-900/30 dark:text-pink-300", icon: CardIcon },
-    { value: "CREDIT", label: "Credit", color: "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-300", icon: CreditCard }
+    { value: "CREDIT", label: "Credit", color: "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-300", icon: CreditCard },
+    { value: "TRADE_IN", label: "Trade-in", color: "bg-indigo-100 text-indigo-800 dark:bg-indigo-900/30 dark:text-indigo-300", icon: RefreshCw }
   ];
 
   const filteredProducts = useMemo(() => {
@@ -1759,7 +2608,7 @@ export default function EnhancedSalesPage() {
       return saleDate >= today && saleDate < tomorrow; 
     });
     
-    let cashAmount = 0, mpesaAmount = 0, bankAmount = 0, checkAmount = 0, cardAmount = 0, creditAmount = 0;
+    let cashAmount = 0, mpesaAmount = 0, bankAmount = 0, checkAmount = 0, cardAmount = 0, creditAmount = 0, tradeInAmount = 0;
     sales.forEach(sale => { 
       sale.payments?.forEach(payment => { 
         const amount = Number(payment.amount) || 0; 
@@ -1770,11 +2619,12 @@ export default function EnhancedSalesPage() {
           case "CHECK": checkAmount += amount; break; 
           case "CARD": cardAmount += amount; break; 
           case "CREDIT": creditAmount += amount; break; 
+          case "TRADE_IN": tradeInAmount += amount; break;
         } 
       }); 
     });
     
-    let todayCash = 0, todayMpesa = 0, todayBank = 0, todayCheck = 0, todayCard = 0, todayCredit = 0;
+    let todayCash = 0, todayMpesa = 0, todayBank = 0, todayCheck = 0, todayCard = 0, todayCredit = 0, todayTradeIn = 0;
     todaySales.forEach(sale => { 
       sale.payments?.forEach(payment => { 
         const amount = Number(payment.amount) || 0; 
@@ -1785,6 +2635,7 @@ export default function EnhancedSalesPage() {
           case "CHECK": todayCheck += amount; break; 
           case "CARD": todayCard += amount; break; 
           case "CREDIT": todayCredit += amount; break; 
+          case "TRADE_IN": todayTradeIn += amount; break;
         } 
       }); 
     });
@@ -1800,7 +2651,7 @@ export default function EnhancedSalesPage() {
       unpaidCount: sales.filter(s => s.status === "UNPAID").length, 
       recentlyUpdatedCount: recentlyUpdatedSales.length, 
       recentlyUpdatedAmount: recentlyUpdatedSales.reduce((acc, s) => acc + Number(s.amount), 0), 
-      cashAmount, mpesaAmount, bankAmount, checkAmount, cardAmount, creditAmount,
+      cashAmount, mpesaAmount, bankAmount, checkAmount, cardAmount, creditAmount, tradeInAmount,
       todaySales: todaySales.reduce((acc, s) => acc + Number(s.amount), 0), 
       todayPaid: todaySales.filter(s => s.status === "PAID").reduce((acc, s) => acc + Number(s.amount), 0),
       todayPartial: todaySales.filter(s => s.status === "PARTIAL").reduce((acc, s) => acc + Number(s.amount), 0),
@@ -1810,7 +2661,7 @@ export default function EnhancedSalesPage() {
       todayPaidCount: todaySales.filter(s => s.status === "PAID").length,
       todayPartialCount: todaySales.filter(s => s.status === "PARTIAL").length,
       todayUnpaidCount: todaySales.filter(s => s.status === "UNPAID").length,
-      todayCash, todayMpesa, todayBank, todayCheck, todayCard, todayCredit
+      todayCash, todayMpesa, todayBank, todayCheck, todayCard, todayCredit, todayTradeIn
     }; 
   }, [sales, isRecentlyUpdated, isSaleModified]);
 
@@ -1967,8 +2818,38 @@ export default function EnhancedSalesPage() {
             <div><h1 className="text-base sm:text-xl font-bold bg-gradient-to-r from-blue-600 to-indigo-600 bg-clip-text text-transparent">Sales Management</h1><p className="text-[10px] text-gray-500 mt-0.5">Track and manage all sales</p></div>
             <div className="flex gap-2 w-full sm:w-auto">
               <button onClick={() => setShowAccountingModal(true)} className="flex-1 sm:flex-none bg-purple-600 text-white px-3 py-2 rounded-lg hover:bg-purple-700 flex items-center justify-center gap-1.5 text-xs shadow-md transition-all"><FileSpreadsheet size={12} />Reports</button>
-              <button onClick={() => { const csvData = sales.map(sale => ({ 'Sale ID': sale.id, 'Date': new Date(sale.date).toLocaleDateString(), 'Customer': sale.customer?.name || '-', 'Phone': sale.customer?.phone || '-', 'Amount': sale.amount.toFixed(2), 'Status': sale.status, 'Remaining': sale.remainingAmount.toFixed(2), 'Created By': sale.createdBy || '-', 'Updated By': sale.updatedBy || '-', 'Assigned Staff': sale.assignedStaff?.name || '-' })); const headers = Object.keys(csvData[0] || {}); const csvContent = [headers.join(','), ...csvData.map(row => headers.map(header => `"${String(row[header as keyof typeof row]).replace(/"/g, '""')}"`).join(','))].join('\n'); const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' }); const link = document.createElement('a'); const url = URL.createObjectURL(blob); link.setAttribute('href', url); link.setAttribute('download', `sales_${new Date().toISOString().split('T')[0]}.csv`); link.click(); URL.revokeObjectURL(url); }} className="flex-1 sm:flex-none bg-gradient-to-r from-green-600 to-emerald-600 text-white px-3 py-2 rounded-lg hover:from-green-700 hover:to-emerald-700 flex items-center justify-center gap-1.5 text-xs shadow-md transition-all"><Download size={12} />Export</button>
-            </div>
+              <button 
+  onClick={() => { 
+    const csvData = sales.map(sale => ({ 
+      'Sale ID': sale.id, 
+      'Date': new Date(sale.date).toLocaleDateString(), 
+      'Customer': sale.customer?.name || '-', 
+      'Customer Phone': sale.customer?.phone || '-', 
+      'Products': sale.saleitems?.map(item => `${item.quantity}x ${item.product.name}`).join('; ') || '-',
+      'Total Amount': sale.amount.toFixed(2), 
+      'Status': sale.status, 
+      'Amount Paid': sale.payments?.reduce((sum, p) => sum + p.amount, 0).toFixed(2) || '0.00',
+      'Remaining Amount': sale.remainingAmount.toFixed(2),
+      'Payment Methods': [...new Set(sale.payments?.map(p => p.method) || [])].join(', ') || '-',
+      'Created By': sale.createdBy || '-', 
+      'Updated By': sale.updatedBy || '-', 
+      'Last Updated': sale.updatedAt ? new Date(sale.updatedAt).toLocaleString() : new Date(sale.date).toLocaleString()
+    })); 
+    const headers = Object.keys(csvData[0] || {}); 
+    const csvContent = [headers.join(','), ...csvData.map(row => headers.map(header => `"${String(row[header as keyof typeof row]).replace(/"/g, '""')}"`).join(','))].join('\n'); 
+    const blob = new Blob(["\uFEFF" + csvContent], { type: 'text/csv;charset=utf-8;' }); 
+    const link = document.createElement('a'); 
+    const url = URL.createObjectURL(blob); 
+    link.setAttribute('href', url); 
+    link.setAttribute('download', `sales_export_${new Date().toISOString().split('T')[0]}.csv`); 
+    link.click(); 
+    URL.revokeObjectURL(url); 
+  }} 
+  className="flex-1 sm:flex-none bg-gradient-to-r from-green-600 to-emerald-600 text-white px-3 py-2 rounded-lg hover:from-green-700 hover:to-emerald-700 flex items-center justify-center gap-1.5 text-xs shadow-md transition-all"
+>
+  <Download size={12} />
+  Export
+</button> </div>
           </div>
         </div>
 
@@ -2315,7 +3196,7 @@ export default function EnhancedSalesPage() {
           </div>
         </div>
 
-        {/* Edit Sale Modal with Enhanced Product Stock and Payment Methods */}
+        {/* Edit Sale Modal */}
         {editingSale && (
           <div className="fixed inset-0 bg-black bg-opacity-50 flex items-start justify-center p-2 z-50 overflow-y-auto">
             <div className="bg-white dark:bg-gray-800 rounded-lg w-full max-w-md max-h-[90vh] overflow-y-auto mt-4 shadow-2xl">
@@ -2358,7 +3239,6 @@ export default function EnhancedSalesPage() {
                   <div className="space-y-1.5 mb-3 p-2.5 bg-gray-50 dark:bg-gray-700/50 rounded-lg">
                     <h4 className="font-medium text-[10px] text-gray-700 dark:text-gray-300">Add New Product</h4>
                     
-                    {/* Product Search with Dropdown and Stock Info */}
                     <div className="relative product-dropdown-container">
                       <div className="relative">
                         <Search className="absolute left-2 top-1/2 transform -translate-y-1/2 text-gray-400" size={12} />
@@ -2378,11 +3258,9 @@ export default function EnhancedSalesPage() {
                         />
                       </div>
                       
-                      {/* Product Dropdown with Stock Display */}
                       {showProductDropdown && filteredProducts.length > 0 && (
                         <div className="absolute z-20 w-full mt-1 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded-lg shadow-lg max-h-48 overflow-y-auto">
                           {filteredProducts.map(product => {
-                            // Get correct stock quantity
                             let stockQty = 0;
                             if (Array.isArray(product.stock)) {
                               stockQty = product.stock.reduce((sum: number, s: any) => sum + (s.quantity || 0), 0);
@@ -2392,7 +3270,6 @@ export default function EnhancedSalesPage() {
                               stockQty = product.stock;
                             }
                             
-                            // Get existing quantity in edit
                             const existingItem = editSaleItems.find(item => item.productId === product.id);
                             const existingQty = existingItem ? existingItem.quantity : 0;
                             const availableStock = stockQty - existingQty;
@@ -2416,17 +3293,8 @@ export default function EnhancedSalesPage() {
                           })}
                         </div>
                       )}
-                      
-                      {/* No products message */}
-                      {showProductDropdown && productSearch.trim() !== "" && filteredProducts.length === 0 && (
-                        <div className="absolute z-20 w-full mt-1 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded-lg shadow-lg p-3 text-center">
-                          <p className="text-xs text-gray-500">No products found matching "{productSearch}"</p>
-                          <p className="text-[9px] text-gray-400 mt-1">Try a different search term</p>
-                        </div>
-                      )}
                     </div>
                     
-                    {/* Quantity and Price inputs */}
                     <div className="grid grid-cols-2 gap-1.5">
                       <div>
                         <label className="text-[9px] text-gray-500">Quantity</label>
@@ -2454,10 +3322,7 @@ export default function EnhancedSalesPage() {
                     </div>
                     
                     <button 
-                      onClick={() => {
-                        console.log("Add Item button clicked");
-                        handleAddItemToEditSale();
-                      }} 
+                      onClick={handleAddItemToEditSale} 
                       disabled={!currentEditItem.productId || currentEditItem.quantity <= 0 || currentEditItem.price <= 0} 
                       className="w-full bg-blue-600 text-white px-2 py-2 rounded-lg text-xs hover:bg-blue-700 disabled:opacity-50 transition-colors flex items-center justify-center gap-1"
                     >
@@ -2522,7 +3387,6 @@ export default function EnhancedSalesPage() {
                     )}
                   </div>
                   
-                  {/* Total Amount */}
                   <div className="bg-blue-50 dark:bg-blue-900/20 p-2 rounded-lg mt-3">
                     <div className="flex justify-between text-xs">
                       <span className="font-semibold text-black dark:text-white">Total Amount:</span>
@@ -2533,11 +3397,10 @@ export default function EnhancedSalesPage() {
                   </div>
                 </div>
                 
-                {/* Enhanced Payments Section */}
+                {/* Payments Section */}
                 <div>
                   <h3 className="text-xs font-semibold mb-1.5 text-black dark:text-white">Payments</h3>
                   
-                  {/* Existing Payments List */}
                   {editPayments.length > 0 && (
                     <div className="space-y-1.5 mb-3 max-h-32 overflow-y-auto">
                       {editPayments.map((payment, index) => {
@@ -2549,7 +3412,7 @@ export default function EnhancedSalesPage() {
                               <Icon size={14} className={paymentMethod?.color?.split(' ')[0]?.replace('bg-', 'text-') || 'text-gray-500'} />
                               <div>
                                 <span className={`px-1.5 py-0.5 rounded-full text-[9px] font-medium ${paymentMethod?.color || "bg-gray-100 text-gray-700"}`}>
-                                  {payment.method}
+                                  {payment.method === "TRADE_IN" ? "Trade-in" : payment.method}
                                 </span>
                                 {payment.id !== undefined && (
                                   <span className="text-[9px] text-gray-400 ml-1">ID: {payment.id}</span>
@@ -2558,6 +3421,11 @@ export default function EnhancedSalesPage() {
                               <span className="font-medium text-black dark:text-white">Ksh {formatCurrency(parseFloat(payment.amount))}</span>
                               {payment.referenceId && (
                                 <span className="text-[9px] text-gray-400">Ref: {payment.referenceId}</span>
+                              )}
+                              {payment.method === "TRADE_IN" && payment.tradeItems && payment.tradeItems.length > 0 && (
+                                <span className="text-[9px] text-indigo-600">
+                                  ({payment.tradeItems.length} items exchanged)
+                                </span>
                               )}
                               {payment.bankName && (
                                 <span className="text-[9px] text-gray-400">Bank: {payment.bankName}</span>
@@ -2581,13 +3449,39 @@ export default function EnhancedSalesPage() {
                     </div>
                   )}
                   
-                  {/* Add New Payment Form */}
                   <div className="space-y-2 p-3 bg-gray-50 dark:bg-gray-700/50 rounded-lg">
                     <h4 className="font-medium text-[10px] text-gray-700 dark:text-gray-300">Add Payment</h4>
                     
-                    {/* Payment Method Selection - Cash, M-Pesa, Bank */}
+                    <div className="grid grid-cols-4 gap-1.5">
+                      {["CASH", "MPESA", "BANK", "TRADE_IN"].map((method) => {
+                        const methodInfo = paymentMethods.find(m => m.value === method);
+                        const Icon = methodInfo?.icon;
+                        return (
+                          <button
+                            key={method}
+                            type="button"
+                            onClick={() => {
+                              if (method === "TRADE_IN") {
+                                setShowTradeInModal(true);
+                              } else {
+                                setCurrentPayment({ ...currentPayment, method: method as any, referenceId: "", checkDepositDate: "", dueDate: "", bankName: "" });
+                              }
+                            }}
+                            className={`flex flex-col items-center gap-1 p-2 rounded-lg border transition-all ${
+                              currentPayment.method === method && method !== "TRADE_IN"
+                                ? "border-blue-500 bg-blue-50 dark:bg-blue-900/20 text-blue-600"
+                                : "border-gray-200 dark:border-gray-600 hover:border-blue-300"
+                            }`}
+                          >
+                            {Icon && <Icon size={16} />}
+                            <span className="text-[10px] font-medium">{methodInfo?.label || method}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                    
                     <div className="grid grid-cols-3 gap-1.5">
-                      {["CASH", "MPESA", "BANK"].map((method) => {
+                      {["CHECK", "CARD", "CREDIT"].map((method) => {
                         const methodInfo = paymentMethods.find(m => m.value === method);
                         const Icon = methodInfo?.icon;
                         return (
@@ -2608,24 +3502,24 @@ export default function EnhancedSalesPage() {
                       })}
                     </div>
                     
-                    {/* Amount Input */}
-                    <div>
-                      <label className="text-[9px] text-gray-500">Amount (Ksh)</label>
-                      <div className="relative mt-0.5">
-                        <span className="absolute left-2 top-1/2 transform -translate-y-1/2 text-gray-400 text-xs">Ksh</span>
-                        <input 
-                          type="number" 
-                          min="0" 
-                          step="0.01" 
-                          value={currentPayment.amount} 
-                          onChange={(e) => setCurrentPayment({...currentPayment, amount: e.target.value})} 
-                          placeholder="0.00" 
-                          className="w-full pl-10 pr-2 py-2 border border-gray-200 dark:border-gray-600 rounded-lg text-xs bg-white dark:bg-gray-700 text-black dark:text-white" 
-                        />
+                    {currentPayment.method !== "TRADE_IN" && currentPayment.method !== "CREDIT" && (
+                      <div>
+                        <label className="text-[9px] text-gray-500">Amount (Ksh)</label>
+                        <div className="relative mt-0.5">
+                          <span className="absolute left-2 top-1/2 transform -translate-y-1/2 text-gray-400 text-xs">Ksh</span>
+                          <input 
+                            type="number" 
+                            min="0" 
+                            step="0.01" 
+                            value={currentPayment.amount} 
+                            onChange={(e) => setCurrentPayment({...currentPayment, amount: e.target.value})} 
+                            placeholder="0.00" 
+                            className="w-full pl-10 pr-2 py-2 border border-gray-200 dark:border-gray-600 rounded-lg text-xs bg-white dark:bg-gray-700 text-black dark:text-white" 
+                          />
+                        </div>
                       </div>
-                    </div>
+                    )}
                     
-                    {/* Conditional Fields based on Payment Method */}
                     {currentPayment.method === "MPESA" && (
                       <div>
                         <label className="text-[9px] text-gray-500">M-Pesa Transaction ID</label>
@@ -2636,7 +3530,6 @@ export default function EnhancedSalesPage() {
                           placeholder="e.g., QWERTY123456" 
                           className="w-full p-2 border border-gray-200 dark:border-gray-600 rounded-lg text-xs bg-white dark:bg-gray-700 text-black dark:text-white mt-0.5" 
                         />
-                        <p className="text-[8px] text-gray-400 mt-0.5">Enter the Till/ Paybill transaction reference</p>
                       </div>
                     )}
                     
@@ -2665,20 +3558,47 @@ export default function EnhancedSalesPage() {
                       </div>
                     )}
                     
-                    {/* Add Payment Button */}
+                    {currentPayment.method === "CHECK" && (
+                      <div>
+                        <label className="text-[9px] text-gray-500">Check Deposit Date</label>
+                        <input 
+                          type="date" 
+                          value={currentPayment.checkDepositDate} 
+                          onChange={(e) => setCurrentPayment({...currentPayment, checkDepositDate: e.target.value})} 
+                          className="w-full p-2 border border-gray-200 dark:border-gray-600 rounded-lg text-xs bg-white dark:bg-gray-700 text-black dark:text-white mt-0.5" 
+                        />
+                      </div>
+                    )}
+                    
+                    {currentPayment.method === "CREDIT" && (
+                      <div>
+                        <label className="text-[9px] text-gray-500">Due Date</label>
+                        <input 
+                          type="date" 
+                          value={currentPayment.dueDate} 
+                          onChange={(e) => setCurrentPayment({...currentPayment, dueDate: e.target.value})} 
+                          className="w-full p-2 border border-gray-200 dark:border-gray-600 rounded-lg text-xs bg-white dark:bg-gray-700 text-black dark:text-white mt-0.5" 
+                        />
+                      </div>
+                    )}
+                    
                     <button 
                       onClick={() => {
-                        console.log("Add Payment button clicked");
-                        addEditPayment();
+                        if (currentPayment.method === "TRADE_IN") {
+                          setShowTradeInModal(true);
+                        } else {
+                          addEditPayment();
+                        }
                       }} 
-                      disabled={currentPayment.method !== "CREDIT" && (!currentPayment.amount || parseFloat(currentPayment.amount) <= 0)} 
+                      disabled={currentPayment.method !== "CREDIT" && currentPayment.method !== "TRADE_IN" && (!currentPayment.amount || parseFloat(currentPayment.amount) <= 0)} 
                       className="w-full bg-green-600 text-white px-3 py-2 rounded-lg text-xs hover:bg-green-700 disabled:opacity-50 transition-colors flex items-center justify-center gap-1"
                     >
-                      <Plus size={12} /> Add Payment
+                      <Plus size={12} /> 
+                      {currentPayment.method === "TRADE_IN" ? "Add Trade-in" : 
+                       currentPayment.method === "CREDIT" ? "Add Credit" : "Add Payment"}
                     </button>
                   </div>
                   
-                  {/* Payment Summary */}
                   <div className="bg-blue-50 dark:bg-blue-900/20 p-2 rounded-lg mt-3">
                     <div className="flex justify-between text-xs mb-1">
                       <span className="text-black dark:text-white">Total Sale:</span>
@@ -2701,7 +3621,6 @@ export default function EnhancedSalesPage() {
                   </div>
                 </div>
                 
-                {/* Action Buttons */}
                 <div className="flex gap-2 pt-2 border-t border-gray-100 dark:border-gray-700 mt-2">
                   <button 
                     onClick={() => setEditingSale(null)} 
@@ -2759,7 +3678,30 @@ export default function EnhancedSalesPage() {
         <AccountingReportsModal isOpen={showAccountingModal} onClose={() => setShowAccountingModal(false)} customers={customers} getUserDisplayName={getUserDisplayName} />
 
         {/* Enhanced Audit Log Modal */}
-        <EnhancedAuditLogModal isOpen={showAuditModal} onClose={() => { setShowAuditModal(false); setSelectedSaleForAudit(null); setAuditLogs([]); }} auditLogs={auditLogs} loading={auditLogsLoading} sale={selectedSaleForAudit} getUserDisplayName={getUserDisplayName} formatDateTime={formatDateTime} />
+<EnhancedAuditLogModal 
+  isOpen={showAuditModal} 
+  onClose={() => { 
+    setShowAuditModal(false); 
+    setSelectedSaleForAudit(null); 
+    setAuditLogs([]); 
+  }} 
+  auditLogs={auditLogs} 
+  loading={auditLogsLoading} 
+  sale={selectedSaleForAudit} 
+  getUserDisplayName={getUserDisplayName} 
+  formatDateTime={formatDateTime}
+  formatCurrency={formatCurrency}
+/>
+
+        {/* Trade-in Exchange Modal */}
+        <TradeInExchangeModal
+          isOpen={showTradeInModal}
+          onClose={() => setShowTradeInModal(false)}
+          onAddTradeIn={handleAddTradeInPayment}
+          formatCurrency={formatCurrency}
+          editSaleItems={editSaleItems}
+          editPayments={editPayments}
+        />
       </div>
     </ThemeContext.Provider>
   );
