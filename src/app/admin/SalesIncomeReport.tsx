@@ -41,9 +41,6 @@ type Sale = {
     phone?: string;
     email?: string;
   };
-  isDeleted?: boolean;
-  createdBy?: string;
-  updatedBy?: string;
 };
 
 type GroupedSale = {
@@ -59,8 +56,6 @@ type GroupedSale = {
   dueDate: string | null;
   items: SalesIncomeReport[];
   payments: Payment[];
-  createdBy?: string;
-  updatedBy?: string;
 };
 
 type SalesIncomeReport = {
@@ -95,7 +90,6 @@ export default function SalesIncomeReport() {
   const [viewMode, setViewMode] = useState<ViewMode>("grouped");
   const [expandedSale, setExpandedSale] = useState<number | null>(null);
   const [showFilters, setShowFilters] = useState(false);
-  const [debugInfo, setDebugInfo] = useState<string>("");
   const [dateRange, setDateRange] = useState({
     startDate: "",
     endDate: "",
@@ -152,75 +146,41 @@ export default function SalesIncomeReport() {
     try {
       setLoading(true);
       setError(null);
-      setDebugInfo("Fetching sales data...");
       
-      // Fetch all sales - no filters to get everything
-      const response = await fetch("/api/sales");
+      const response = await fetch("/api/sales?includeDeleted=false");
       if (!response.ok) throw new Error("Failed to fetch sales");
       const salesData = await response.json();
       
-      // Ensure we're working with an array
-      const salesArray = Array.isArray(salesData) ? salesData : [];
-      
-      setDebugInfo(prev => prev + `\nReceived ${salesArray.length} sales from API`);
-      
-      // Log sales by status
-      const statusCount: Record<string, number> = {};
-      const deletedCount = salesArray.filter((s: any) => s.isDeleted === true).length;
-      const activeSales = salesArray.filter((s: any) => s.isDeleted !== true);
-      
-      salesArray.forEach((sale: any) => {
-        statusCount[sale.status] = (statusCount[sale.status] || 0) + 1;
-      });
-      
-      setDebugInfo(prev => prev + `\nActive sales: ${activeSales.length}, Deleted: ${deletedCount}`);
-      setDebugInfo(prev => prev + `\nSales by status: ${JSON.stringify(statusCount)}`);
-      
-      // Fetch products for production costs
       const productsResponse = await fetch("/api/products");
       const productsData = await productsResponse.ok ? await productsResponse.json() : [];
       
-      setDebugInfo(prev => prev + `\nProducts loaded: ${productsData.length}`);
-      
       const productCostMap = new Map<number, number>();
       productsData.forEach((product: any) => {
-        const prodCost = product.productionCost || product.costPrice || 0;
-        productCostMap.set(product.id, prodCost);
+        if (product.productionCost) {
+          productCostMap.set(product.id, product.productionCost);
+        }
       });
       
-      // Process ALL sales (including PAID ones) - don't filter by status
-      const enrichedSales = salesArray.map((sale: any) => {
-        const totalPaid = sale.payment?.reduce((sum: number, p: any) => 
-          (p.status === "CLEARED" || p.status === "COMPLETED") ? sum + p.amount : sum, 0) || 0;
-        const balance = sale.amount - totalPaid;
-        const enrichedItems = (sale.saleitem || []).map((item: any) => ({
+      const enrichedSales = salesData.map((sale: any) => ({
+        ...sale,
+        saleitem: sale.saleitem?.map((item: any) => ({
           ...item,
           product: {
             ...item.product,
             productionCost: productCostMap.get(item.productId) || item.product?.productionCost || 0
           }
-        }));
-        
-        return {
-          ...sale,
-          saleitem: enrichedItems,
-          payment: sale.payment || [],
-          totalPaid,
-          balance,
-        };
-      });
+        })) || [],
+        payment: sale.payment || [],
+        totalPaid: sale.payment?.reduce((sum: number, p: any) => 
+          p.status === "COMPLETED" || p.status === "CLEARED" ? sum + p.amount : sum, 0) || 0,
+        balance: sale.amount - (sale.payment?.reduce((sum: number, p: any) => 
+          p.status === "COMPLETED" || p.status === "CLEARED" ? sum + p.amount : sum, 0) || 0)
+      }));
       
       setSales(enrichedSales);
-      setDebugInfo(prev => prev + `\nEnriched sales: ${enrichedSales.length}`);
-      
-      const allGroupedSales = processSalesToGroupedReports(enrichedSales);
-      setAllSales(allGroupedSales);
-      setDebugInfo(prev => prev + `\nGrouped sales: ${allGroupedSales.length}`);
       
     } catch (err) {
-      const errorMsg = err instanceof Error ? err.message : "An error occurred";
-      setError(errorMsg);
-      setDebugInfo(prev => prev + `\nERROR: ${errorMsg}`);
+      setError(err instanceof Error ? err.message : "An error occurred");
       console.error("Error fetching sales:", err);
     } finally {
       setLoading(false);
@@ -231,13 +191,12 @@ export default function SalesIncomeReport() {
     const groupedMap = new Map<number, GroupedSale>();
     
     salesData.forEach(sale => {
-      // Include ALL sales regardless of status - show everything
       const reports: SalesIncomeReport[] = [];
       let saleTotalRevenue = 0;
       let saleTotalCost = 0;
       let saleGrossProfit = 0;
       
-      (sale.saleitem || []).forEach((item: SaleItem) => {
+      sale.saleitem.forEach((item: SaleItem) => {
         const unitProductionCost = item.product?.productionCost || 0;
         const totalProductionCost = unitProductionCost * item.quantity;
         const totalRevenue = item.quantity * item.price;
@@ -280,8 +239,6 @@ export default function SalesIncomeReport() {
         dueDate: sale.dueDate || null,
         items: reports,
         payments: sale.payment || [],
-        createdBy: sale.createdBy,
-        updatedBy: sale.updatedBy,
       });
     });
     
@@ -294,57 +251,51 @@ export default function SalesIncomeReport() {
   const applyFilters = () => {
     let filtered = [...sales];
     
-    if (!showAllData) {
-      if (dateRange.startDate && dateRange.endDate) {
-        const start = new Date(dateRange.startDate);
-        const end = new Date(dateRange.endDate);
-        end.setHours(23, 59, 59, 999);
-        
-        filtered = filtered.filter(sale => {
-          const saleDate = new Date(sale.date);
-          return saleDate >= start && saleDate <= end;
-        });
-      } else {
-        switch (periodFilter) {
-          case "daily":
-            const today = new Date();
-            filtered = filtered.filter(sale => {
-              const saleDate = new Date(sale.date);
-              return saleDate.toDateString() === today.toDateString();
-            });
-            break;
-            
-          case "weekly":
-            const oneWeekAgo = new Date();
-            oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
-            filtered = filtered.filter(sale => {
-              const saleDate = new Date(sale.date);
-              return saleDate >= oneWeekAgo;
-            });
-            break;
-            
-          case "monthly":
-            const oneMonthAgo = new Date();
-            oneMonthAgo.setMonth(oneMonthAgo.getMonth() - 1);
-            filtered = filtered.filter(sale => {
-              const saleDate = new Date(sale.date);
-              return saleDate >= oneMonthAgo;
-            });
-            break;
-            
-          case "yearly":
-            const oneYearAgo = new Date();
-            oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
-            filtered = filtered.filter(sale => {
-              const saleDate = new Date(sale.date);
-              return saleDate >= oneYearAgo;
-            });
-            break;
-            
-          case "all":
-          default:
-            break;
-        }
+    if (!showAllData && dateRange.startDate && dateRange.endDate) {
+      const start = new Date(dateRange.startDate);
+      const end = new Date(dateRange.endDate);
+      end.setHours(23, 59, 59, 999);
+      
+      filtered = filtered.filter(sale => {
+        const saleDate = new Date(sale.date);
+        return saleDate >= start && saleDate <= end;
+      });
+    } else if (!showAllData) {
+      switch (periodFilter) {
+        case "daily":
+          const today = new Date();
+          filtered = filtered.filter(sale => {
+            const saleDate = new Date(sale.date);
+            return saleDate.toDateString() === today.toDateString();
+          });
+          break;
+          
+        case "weekly":
+          const oneWeekAgo = new Date();
+          oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
+          filtered = filtered.filter(sale => {
+            const saleDate = new Date(sale.date);
+            return saleDate >= oneWeekAgo;
+          });
+          break;
+          
+        case "monthly":
+          const oneMonthAgo = new Date();
+          oneMonthAgo.setMonth(oneMonthAgo.getMonth() - 1);
+          filtered = filtered.filter(sale => {
+            const saleDate = new Date(sale.date);
+            return saleDate >= oneMonthAgo;
+          });
+          break;
+          
+        case "yearly":
+          const oneYearAgo = new Date();
+          oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
+          filtered = filtered.filter(sale => {
+            const saleDate = new Date(sale.date);
+            return saleDate >= oneYearAgo;
+          });
+          break;
       }
     }
     
@@ -409,9 +360,7 @@ export default function SalesIncomeReport() {
       "Sale Status",
       "Total Sale Amount",
       "Amount Paid",
-      "Balance",
-      "Created By",
-      "Updated By"
+      "Balance"
     ];
     
     const csvData: string[][] = [];
@@ -433,9 +382,7 @@ export default function SalesIncomeReport() {
           item.saleStatus,
           formatCurrency(sale.totalAmount, false),
           formatCurrency(sale.totalPaid, false),
-          formatCurrency(sale.balance, false),
-          sale.createdBy || "System",
-          sale.updatedBy || "System"
+          formatCurrency(sale.balance, false)
         ]);
       });
     });
@@ -551,16 +498,6 @@ export default function SalesIncomeReport() {
 
   return (
     <div className="bg-white rounded-xl shadow-lg p-3 sm:p-6 border-2 border-blue-200 print:shadow-none print:border-0">
-      {/* Debug Info - Remove in production */}
-      {debugInfo && (
-        <div className="mb-4 p-3 bg-yellow-50 border border-yellow-200 rounded-lg text-xs text-yellow-800 print:hidden">
-          <details>
-            <summary className="font-semibold cursor-pointer">Debug Info ({allSales.length} sales)</summary>
-            <pre className="mt-2 whitespace-pre-wrap">{debugInfo}</pre>
-          </details>
-        </div>
-      )}
-
       {/* Header */}
       <div className="flex flex-col gap-3 mb-6 print:mb-4">
         <div className="flex flex-col sm:flex-row items-start justify-between gap-3">
@@ -782,7 +719,7 @@ export default function SalesIncomeReport() {
                     : "bg-white text-gray-700 border border-gray-300"
                 }`}
               >
-                {period === "all" ? "All Time" : period.charAt(0).toUpperCase() + period.slice(1)}
+                {period.charAt(0).toUpperCase() + period.slice(1)}
               </button>
             ))}
           </div>
@@ -835,12 +772,9 @@ export default function SalesIncomeReport() {
         <div className="text-center py-8 text-gray-500">
           <PieChart className="w-12 h-12 mx-auto mb-3 text-gray-300" />
           <p>No sales data found.</p>
-          {debugInfo && (
-            <p className="text-xs text-gray-400 mt-2">Check debug info above for details</p>
-          )}
         </div>
       ) : viewMode === "grouped" ? (
-        // Grouped View
+        // Grouped View - Products under each sale
         <div className="space-y-4 print:space-y-2">
           {displayData.map((sale) => (
             <div key={sale.saleId} className="border border-gray-200 rounded-lg overflow-hidden print:border-2">
@@ -861,12 +795,6 @@ export default function SalesIncomeReport() {
                     {sale.dueDate && sale.status !== "PAID" && (
                       <p className="text-xs text-orange-600 mt-1">Due: {formatDate(sale.dueDate)}</p>
                     )}
-                    <div className="flex gap-3 mt-1 text-[10px] text-gray-400">
-                      {sale.createdBy && <span>Created: {sale.createdBy}</span>}
-                      {sale.updatedBy && sale.updatedBy !== sale.createdBy && (
-                        <span>Updated: {sale.updatedBy}</span>
-                      )}
-                    </div>
                   </div>
                   
                   <div className="grid grid-cols-3 gap-3 text-center sm:text-right">
@@ -892,7 +820,7 @@ export default function SalesIncomeReport() {
                 </div>
               </div>
               
-              {/* Sale Items */}
+              {/* Sale Items - Expandable */}
               {(expandedSale === sale.saleId || viewMode === "grouped") && (
                 <div className="p-3 sm:p-4 border-t border-gray-200 bg-white">
                   <h4 className="text-sm font-semibold text-gray-700 mb-3">Products Sold</h4>
@@ -940,7 +868,7 @@ export default function SalesIncomeReport() {
                     </table>
                   </div>
                   
-                  {/* Mobile Card View */}
+                  {/* Mobile Card View for Items */}
                   <div className="sm:hidden space-y-2">
                     {sale.items.map((item, idx) => (
                       <div key={idx} className="bg-gray-50 rounded-lg p-3">
@@ -1028,7 +956,7 @@ export default function SalesIncomeReport() {
                 </tr>
               ))}
             </tbody>
-          </table>
+           </table>
           {displayData.flatMap(s => s.items).length > 100 && (
             <div className="bg-gray-50 px-4 py-3 text-center text-sm text-gray-600">
               Showing 100 of {displayData.flatMap(s => s.items).length} items. Download CSV for complete data.
@@ -1079,15 +1007,10 @@ export default function SalesIncomeReport() {
               </div>
             </div>
           ))}
-          {displayData.length > 20 && (
-            <div className="text-center text-sm text-gray-500 py-2">
-              Showing 20 of {displayData.length} sales. Download CSV for complete data.
-            </div>
-          )}
         </div>
       )}
 
-      {/* Footer */}
+      {/* Footer with generation info */}
       <div className="mt-6 pt-4 border-t border-gray-200 text-center text-xs text-gray-400 print:block">
         Generated on {formatDateTime(new Date().toISOString())}
       </div>

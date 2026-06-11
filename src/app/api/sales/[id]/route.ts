@@ -68,21 +68,10 @@ async function createDeletedSaleRecord(
       `${item.product?.name || `Product ${item.productId}`} (${item.quantity} units @ Ksh ${item.price})`
     ).join(', ') || 'No items';
     
-    // Create summary of payments including trade-in items
-    const paymentsSummary = sale.payment?.map((p: any) => {
-      if (p.method === "TRADE_IN" && p.note) {
-        try {
-          const tradeItems = JSON.parse(p.note);
-          const tradeItemsSummary = tradeItems.map((item: any) => 
-            `${item.quantity}x ${item.itemName} (Net: ${item.netValue * item.quantity})`
-          ).join(', ');
-          return `${p.method}: Ksh ${p.amount} - Items: ${tradeItemsSummary}`;
-        } catch {
-          return `${p.method}: Ksh ${p.amount}`;
-        }
-      }
-      return `${p.method}: Ksh ${p.amount}${p.referenceId ? ` (Ref: ${p.referenceId})` : ''}`;
-    }).join(', ') || 'No payments';
+    // Create summary of payments
+    const paymentsSummary = sale.payment?.map((p: any) => 
+      `${p.method}: Ksh ${p.amount}${p.referenceId ? ` (Ref: ${p.referenceId})` : ''}`
+    ).join(', ') || 'No payments';
     
     // Calculate expiration date (7 days from now)
     const expiresAt = new Date();
@@ -217,21 +206,6 @@ function getObjectDifferences(oldObj: any, newObj: any): { fieldName: string; ol
   return differences;
 }
 
-// Helper to format trade-in items for storage (using `note` field)
-function serializeTradeItems(tradeItems: any[]): string | null {
-  if (!tradeItems || tradeItems.length === 0) return null;
-  return JSON.stringify(tradeItems);
-}
-
-function deserializeTradeItems(tradeItemsStr: string | null): any[] {
-  if (!tradeItemsStr) return [];
-  try {
-    return JSON.parse(tradeItemsStr);
-  } catch {
-    return [];
-  }
-}
-
 // ---------------- GET /api/sales/[id] ----------------
 export async function GET(
   req: NextRequest,
@@ -254,15 +228,6 @@ export async function GET(
       return NextResponse.json({ error: "Sale not found" }, { status: 404 });
     }
 
-    // Deserialize trade items for each payment (using `note` field)
-    const saleWithTradeItems = {
-      ...sale,
-      payment: sale.payment.map(p => ({
-        ...p,
-        tradeItems: p.method === "TRADE_IN" && p.note ? deserializeTradeItems(p.note) : undefined
-      }))
-    };
-
     // Fetch audit logs separately if requested
     let auditLogs = null;
     if (includeAudit) {
@@ -274,7 +239,7 @@ export async function GET(
     }
 
     return NextResponse.json({
-      ...saleWithTradeItems,
+      ...sale,
       auditLogs: auditLogs || undefined
     });
   } catch (error: any) {
@@ -332,8 +297,7 @@ export async function PUT(
         amount: p.amount,
         method: p.method,
         referenceId: p.referenceId,
-        status: p.status,
-        tradeItems: p.method === "TRADE_IN" && p.note ? deserializeTradeItems(p.note) : undefined
+        status: p.status
       }))
     };
 
@@ -400,7 +364,7 @@ export async function PUT(
       }
     }
 
-    // ------------------ Update existing payments (including trade-ins) ------------------
+    // ------------------ Update existing payments ------------------
     const paymentChanges: any[] = [];
     
     if (body.payments && Array.isArray(body.payments)) {
@@ -409,47 +373,31 @@ export async function PUT(
         
         const originalPayment = originalSale.payment.find(op => op.id === p.id);
         
-        // For trade-in payments, store trade items in `note` field
-        let updateData: any = {
-          amount: Number(p.amount),
-          method: p.method,
-          referenceId: p.referenceId || null,
-          checkDate: p.checkDepositDate ? new Date(p.checkDepositDate) : null,
-          status: p.method === "CHECK" && !p.checkDepositDate ? "PENDING" : "CLEARED",
-        };
-        
-        if (p.method === "TRADE_IN" && p.tradeItems) {
-          updateData.note = serializeTradeItems(p.tradeItems);
-        }
-        
         await prisma.payment.update({
           where: { id: p.id },
-          data: updateData,
+          data: {
+            amount: Number(p.amount),
+            method: p.method,
+            referenceId: p.referenceId || null,
+            checkDate: p.checkDepositDate ? new Date(p.checkDepositDate) : null,
+            status: p.method === "CHECK" && !p.checkDepositDate ? "PENDING" : "CLEARED",
+          },
         });
         
         // Track payment changes for audit
         if (originalPayment && originalPayment.amount !== Number(p.amount)) {
-          let diffMessage = `Payment amount changed from ${originalPayment.amount} to ${p.amount}`;
-          if (p.method === "TRADE_IN" && p.tradeItems) {
-            const tradeSummary = p.tradeItems.map((item: any) => 
-              `${item.quantity}x ${item.itemName} (Net: ${item.netValue * item.quantity})`
-            ).join(', ');
-            diffMessage += ` - Trade items: ${tradeSummary}`;
-          }
           paymentChanges.push({
             fieldName: `payment_${p.id}_amount`,
             oldValue: String(originalPayment.amount),
             newValue: String(p.amount),
-            difference: diffMessage
+            difference: `Payment amount changed from ${originalPayment.amount} to ${p.amount}`
           });
         }
       }
     }
 
-    // ------------------ Add new payments (including trade-ins) ------------------
+    // ------------------ Add new payments ------------------
     let newPaymentsCount = 0;
-    let tradeInTotal = 0;
-    
     if (body.newPayments && Array.isArray(body.newPayments)) {
       for (const np of body.newPayments) {
         if (!np.amount || !np.method) {
@@ -457,23 +405,16 @@ export async function PUT(
           continue;
         }
 
-        let paymentData: any = {
-          saleId: Number(id),
-          amount: Number(np.amount),
-          method: np.method,
-          referenceId: np.referenceId || null,
-          checkDate: np.checkDepositDate ? new Date(np.checkDepositDate) : null,
-          status: np.method === "CHECK" && !np.checkDepositDate ? "PENDING" : "CLEARED",
-          paidAt: new Date(),
-        };
-        
-        if (np.method === "TRADE_IN" && np.tradeItems) {
-          paymentData.note = serializeTradeItems(np.tradeItems);
-          tradeInTotal += Number(np.amount);
-        }
-        
         await prisma.payment.create({
-          data: paymentData,
+          data: {
+            saleId: Number(id),
+            amount: Number(np.amount),
+            method: np.method,
+            referenceId: np.referenceId || null,
+            checkDate: np.checkDepositDate ? new Date(np.checkDepositDate) : null,
+            status: np.method === "CHECK" && !np.checkDepositDate ? "PENDING" : "CLEARED",
+            paidAt: new Date(),
+          },
         });
         newPaymentsCount++;
       }
@@ -502,7 +443,7 @@ export async function PUT(
     const balance = recalculatedAmount - totalPaid;
 
     let status: "UNPAID" | "PARTIAL" | "PAID" = "UNPAID";
-    if (balance <= 0.01 && pendingPayments.length === 0) status = "PAID";
+    if (balance <= 0 && pendingPayments.length === 0) status = "PAID";
     else if (totalPaid > 0 || pendingPayments.length > 0) status = "PARTIAL";
 
     // ------------------ Update sale with recalculated amount ------------------
@@ -523,7 +464,7 @@ export async function PUT(
       },
     });
 
-    // Create snapshot of the new state with trade items
+    // Create snapshot of the new state
     const newSnapshot = {
       amount: updatedSale.amount,
       status: updatedSale.status,
@@ -541,8 +482,7 @@ export async function PUT(
         amount: p.amount,
         method: p.method,
         referenceId: p.referenceId,
-        status: p.status,
-        tradeItems: p.method === "TRADE_IN" && p.note ? deserializeTradeItems(p.note) : undefined
+        status: p.status
       }))
     };
 
@@ -553,15 +493,11 @@ export async function PUT(
     differences.push(...paymentChanges);
     
     if (newPaymentsCount > 0) {
-      let diffMessage = `Added ${newPaymentsCount} new payment(s)`;
-      if (tradeInTotal > 0) {
-        diffMessage += ` including trade-in total of Ksh ${tradeInTotal.toFixed(2)}`;
-      }
       differences.push({
         fieldName: 'new_payments',
         oldValue: '0',
         newValue: String(newPaymentsCount),
-        difference: diffMessage
+        difference: `Added ${newPaymentsCount} new payment(s)`
       });
     }
     
@@ -601,18 +537,11 @@ export async function PUT(
       );
     }
 
-    // Prepare response with trade items (using `note` field)
-    const responseData = {
-      ...updatedSale,
+    return NextResponse.json({ 
+      ...updatedSale, 
       remainingAmount: Math.max(0, balance),
-      totalPaid,
-      payment: updatedSale.payment.map(p => ({
-        ...p,
-        tradeItems: p.method === "TRADE_IN" && p.note ? deserializeTradeItems(p.note) : undefined
-      }))
-    };
-
-    return NextResponse.json(responseData);
+      totalPaid 
+    });
   } catch (error: any) {
     console.error("❌ Update Sale Error:", error);
     return NextResponse.json(
