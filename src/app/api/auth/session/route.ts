@@ -1,37 +1,72 @@
-import { NextResponse } from "next/server";
-import { admin } from "@/lib/firebaseAdmin";
+import { NextRequest, NextResponse } from "next/server";
+import { admin, isFirebaseAdminReady, getFirebaseAuth } from "../../../../lib/firebaseAdmin";
 
-export async function GET(request: Request) {
-  // CRITICAL: Skip during Next.js build time
-  if (process.env.NEXT_PHASE === 'phase-production-build') {
-    return NextResponse.json({ authenticated: false, building: true });
-  }
-  
+// List of admin emails from environment variable
+const ADMIN_EMAILS = process.env.NEXT_PUBLIC_ADMIN_EMAILS?.split(',')?.map(email => email.trim().toLowerCase()) || [];
+
+export async function GET(request: NextRequest) {
   try {
-    const authHeader = request.headers.get("Authorization");
+    // Get session cookie
+    const sessionCookie = request.cookies.get("session")?.value;
 
-    if (!authHeader?.startsWith("Bearer ")) {
-      return NextResponse.json({ error: "Missing token" }, { status: 401 });
+    if (!sessionCookie) {
+      return NextResponse.json(
+        { authenticated: false, error: "No session found" },
+        { status: 401 }
+      );
     }
 
-    const token = authHeader.split("Bearer ")[1];
-    
-    // Ensure admin is initialized before using
-    if (!admin || !admin.auth) {
-      console.error("Firebase Admin not properly initialized");
-      return NextResponse.json({ error: "Auth service unavailable" }, { status: 503 });
+    // Check if Firebase Admin is ready
+    if (!isFirebaseAdminReady()) {
+      console.error('❌ Firebase Admin not ready');
+      return NextResponse.json(
+        { authenticated: false, error: "Service unavailable" },
+        { status: 503 }
+      );
     }
-    
-    const decoded = await admin.auth().verifyIdToken(token);
 
+    // Verify session cookie
+    let decodedToken;
+    try {
+      const auth = getFirebaseAuth();
+      decodedToken = await auth.verifySessionCookie(sessionCookie, true);
+      console.log('✅ Session verified for user:', decodedToken.email);
+    } catch (verifyError: any) {
+      console.error('❌ Session verification failed:', verifyError.message);
+      return NextResponse.json(
+        { authenticated: false, error: "Invalid session" },
+        { status: 401 }
+      );
+    }
+
+    // Check if user is admin
+    const userEmail = decodedToken.email?.toLowerCase();
+    const isAdmin = ADMIN_EMAILS.includes(userEmail || '');
+
+    if (!isAdmin) {
+      console.error('❌ Session user is not an admin:', userEmail);
+      return NextResponse.json(
+        { authenticated: false, error: "Admin access required" },
+        { status: 403 }
+      );
+    }
+
+    // Return user info
     return NextResponse.json({
-      uid: decoded.uid,
-      email: decoded.email,
-      role: decoded.role ?? "staff",
       authenticated: true,
+      isAdmin: true,
+      user: {
+        uid: decodedToken.uid,
+        email: decodedToken.email,
+        name: decodedToken.name || decodedToken.email?.split('@')[0],
+        role: 'admin'
+      },
     });
-  } catch (error) {
-    console.error("Session verification error:", error);
-    return NextResponse.json({ error: "Invalid token" }, { status: 401 });
+  } catch (error: any) {
+    console.error("❌ SESSION CHECK ERROR:", error);
+    return NextResponse.json(
+      { authenticated: false, error: error.message },
+      { status: 500 }
+    );
   }
 }
