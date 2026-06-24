@@ -110,7 +110,7 @@ export async function GET(
     const receiptUrl = `${baseUrl}/api/receipt/${sale.id}`;
     
     let whatsappMessage = `Hello ${sale.customer?.name || 'Customer'}! 👋\n\n`;
-    whatsappMessage += `Thank you for your payment at SwiftMetals!\n\n`;
+    whatsappMessage += `Thank you for your purchase at SwiftMetals!\n\n`;
     whatsappMessage += `📋 *PAYMENT RECEIVED*\n`;
     whatsappMessage += `Amount: Ksh ${formatCurrency(currentSaleTotalPaid)}\n`;
     whatsappMessage += `Method: ${sale.payment[0]?.method || 'CASH'}\n\n`;
