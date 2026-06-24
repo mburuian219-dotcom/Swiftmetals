@@ -29,12 +29,44 @@ export default function AuthenticationPage() {
   const [resetEmail, setResetEmail] = useState("");
   const router = useRouter();
 
+  // Helper to redirect users based on role
+  const redirectUser = (email: string) => {
+    console.log('🔄 ===== REDIRECT USER CALLED =====');
+    console.log('🔄 Email parameter:', email);
+    console.log('🔄 Current URL:', window.location.href);
+    console.log('🔄 Current path:', window.location.pathname);
+    
+    // Get admin emails from environment
+    const adminEmailsString = process.env.NEXT_PUBLIC_ADMIN_EMAILS || '';
+    console.log('🔄 Raw admin emails from env:', adminEmailsString);
+    
+    const adminEmails = adminEmailsString.split(',').map(e => e.trim().toLowerCase());
+    console.log('🔄 Parsed admin emails:', adminEmails);
+    
+    const userEmailLower = email.toLowerCase();
+    console.log('🔄 User email (lowercase):', userEmailLower);
+    
+    const isAdmin = adminEmails.some(adminEmail => 
+      adminEmail === userEmailLower
+    );
+    
+    console.log('🔄 Final result - Is admin?', isAdmin);
+    
+    if (isAdmin) {
+      console.log('🔄 ✅ ADMIN USER - Redirecting to /admin');
+      // Force page reload to ensure session is loaded
+      window.location.href = '/admin';
+    } else {
+      console.log('🔄 ❌ REGULAR USER - Redirecting to /dashboard/user');
+      window.location.href = '/dashboard/user';
+    }
+  };
+
   // Check if user is already logged in
   useEffect(() => {
     const checkAuth = async () => {
       const user = auth.currentUser;
       if (user) {
-        // Check session
         try {
           const response = await fetch("/api/auth/session");
           const data = await response.json();
@@ -49,39 +81,15 @@ export default function AuthenticationPage() {
     checkAuth();
   }, []);
 
-  // Helper to redirect users based on role - FIXED VERSION
-  const redirectUser = (email: string) => {
-    console.log('🔄 Redirecting user:', email);
-    
-    // Get admin emails from environment
-    const adminEmailsString = process.env.NEXT_PUBLIC_ADMIN_EMAILS || '';
-    const adminEmails = adminEmailsString.split(',').map(e => e.trim().toLowerCase());
-    
-    console.log('📋 Admin emails:', adminEmails);
-    console.log('📧 User email:', email.toLowerCase());
-    
-    const isAdmin = adminEmails.some(adminEmail => 
-      adminEmail === email.toLowerCase()
-    );
-    
-    console.log('✅ Is admin:', isAdmin);
-    
-    if (isAdmin) {
-      console.log('👉 Redirecting to /admin');
-      // Force a full page navigation to ensure the session is loaded
-      window.location.href = '/admin';
-    } else {
-      console.log('👉 Redirecting to /dashboard/user');
-      window.location.href = '/dashboard/user';
-    }
-  };
-
-  // Login Handler - FIXED VERSION
+  // Login Handler
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
     setSuccess("");
     setLoading(true);
+
+    console.log('🔑 ===== LOGIN ATTEMPT =====');
+    console.log('🔑 Email:', email);
 
     if (!email || !password) {
       setError("Please enter both email and password");
@@ -90,21 +98,13 @@ export default function AuthenticationPage() {
     }
 
     try {
-      // Sign in with Firebase Auth
-      const userCredential = await signInWithEmailAndPassword(
-        auth,
-        email,
-        password
-      );
-
+      const userCredential = await signInWithEmailAndPassword(auth, email, password);
       const user = userCredential.user;
       
-      // Force token refresh for latest claims
       const idToken = await user.getIdToken(true);
 
       console.log("✅ User authenticated:", user.email);
 
-      // Create session on backend
       const res = await fetch("/api/auth/create-session", {
         method: "POST",
         headers: {
@@ -127,25 +127,35 @@ export default function AuthenticationPage() {
       }
 
       console.log("✅ Session created successfully", data);
-
-      // Store user info in localStorage
-      if (rememberMe) {
-        localStorage.setItem("userEmail", user.email || "");
-        localStorage.setItem("userName", user.displayName || "");
-      }
-
-      setSuccess("Login successful! Redirecting...");
       
-      // IMPORTANT: Wait a moment for the session cookie to be set, then redirect
+      // ===== DEBUG LOGGING =====
+      console.log('🔍 ===== DEBUG - BEFORE REDIRECT =====');
+      console.log('🔍 Current URL:', window.location.href);
+      console.log('🔍 User email:', email);
+      console.log('🔍 Session cookie exists:', document.cookie.includes('session'));
+      console.log('🔍 All cookies:', document.cookie);
+      
+      // Check admin status
+      const adminEmailsTest = process.env.NEXT_PUBLIC_ADMIN_EMAILS?.split(',').map(e => e.trim().toLowerCase()) || [];
+      console.log('🔍 Admin emails from env:', process.env.NEXT_PUBLIC_ADMIN_EMAILS);
+      console.log('🔍 Parsed admin emails:', adminEmailsTest);
+      console.log('🔍 Is email in admin list?', adminEmailsTest.includes(email.toLowerCase()));
+      
+      // Try to call redirect immediately and also after timeout
+      console.log('🔍 Calling redirectUser immediately...');
+      redirectUser(email);
+      
+      // Also call after timeout as backup
       setTimeout(() => {
-        // Use the redirect function which uses window.location for reliable navigation
+        console.log('🔍 Calling redirectUser from timeout...');
         redirectUser(email);
-      }, 1500); // Increased delay to ensure cookie is set
+      }, 500);
+      
+      setSuccess("Login successful! Redirecting...");
       
     } catch (err: any) {
       console.error("Login error:", err);
       
-      // Handle specific Firebase auth errors
       switch (err.code) {
         case "auth/user-not-found":
           setError("No account found with this email. Please sign up first.");
@@ -167,7 +177,7 @@ export default function AuthenticationPage() {
     }
   };
 
-  // Signup Handler
+  // Signup Handler (unchanged)
   const handleSignup = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
@@ -241,7 +251,7 @@ export default function AuthenticationPage() {
     }
   };
 
-  // Password Reset Handler
+  // Password Reset Handler (unchanged)
   const handlePasswordReset = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
@@ -279,7 +289,7 @@ export default function AuthenticationPage() {
     }
   };
 
-  // Google Sign In - FIXED VERSION
+  // Google Sign In (unchanged but with debug)
   const handleGoogleSignIn = async () => {
     setError("");
     setLoading(true);
@@ -399,10 +409,10 @@ export default function AuthenticationPage() {
     );
   }
 
+  // Main Login/Signup UI (unchanged)
   return (
     <div className="flex items-center justify-center min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 px-4">
       <div className="w-full max-w-md">
-        {/* Logo/Brand */}
         <div className="text-center mb-8">
           <h1 className="text-3xl font-bold bg-gradient-to-r from-emerald-600 to-blue-600 bg-clip-text text-transparent">
             Swift Metals
