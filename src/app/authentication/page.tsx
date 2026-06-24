@@ -38,7 +38,7 @@ export default function AuthenticationPage() {
         try {
           const response = await fetch("/api/auth/session");
           const data = await response.json();
-          if (data.authenticated) {
+          if (data.isAuthenticated) {
             redirectUser(user.email || "");
           }
         } catch (error) {
@@ -49,28 +49,40 @@ export default function AuthenticationPage() {
     checkAuth();
   }, []);
 
-  // Helper to redirect users based on role
+  // Helper to redirect users based on role - FIXED VERSION
   const redirectUser = (email: string) => {
-    const adminEmails = process.env.NEXT_PUBLIC_ADMIN_EMAILS?.split(',') || [];
+    console.log('🔄 Redirecting user:', email);
+    
+    // Get admin emails from environment
+    const adminEmailsString = process.env.NEXT_PUBLIC_ADMIN_EMAILS || '';
+    const adminEmails = adminEmailsString.split(',').map(e => e.trim().toLowerCase());
+    
+    console.log('📋 Admin emails:', adminEmails);
+    console.log('📧 User email:', email.toLowerCase());
+    
     const isAdmin = adminEmails.some(adminEmail => 
-      adminEmail.trim().toLowerCase() === email.toLowerCase()
+      adminEmail === email.toLowerCase()
     );
     
+    console.log('✅ Is admin:', isAdmin);
+    
     if (isAdmin) {
-      router.push("/admin");
+      console.log('👉 Redirecting to /admin');
+      // Force a full page navigation to ensure the session is loaded
+      window.location.href = '/admin';
     } else {
-      router.push("/dashboard/user");
+      console.log('👉 Redirecting to /dashboard/user');
+      window.location.href = '/dashboard/user';
     }
   };
 
-  // Login Handler
+  // Login Handler - FIXED VERSION
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
     setSuccess("");
     setLoading(true);
 
-    // Basic validation
     if (!email || !password) {
       setError("Please enter both email and password");
       setLoading(false);
@@ -86,15 +98,7 @@ export default function AuthenticationPage() {
       );
 
       const user = userCredential.user;
-
-      // Check if email is verified (optional - can be removed if not needed)
-      // if (!user.emailVerified) {
-      //   setError("Please verify your email before logging in. Check your inbox.");
-      //   await auth.signOut();
-      //   setLoading(false);
-      //   return;
-      // }
-
+      
       // Force token refresh for latest claims
       const idToken = await user.getIdToken(true);
 
@@ -116,15 +120,15 @@ export default function AuthenticationPage() {
           setError("Access denied. You don't have admin privileges.");
           await auth.signOut();
         } else {
-          throw new Error(data.error || "Session creation failed");
+          throw new Error(data.error || data.details || "Session creation failed");
         }
         setLoading(false);
         return;
       }
 
-      console.log("✅ Session created successfully");
+      console.log("✅ Session created successfully", data);
 
-      // Store user info in localStorage (for UI, not security)
+      // Store user info in localStorage
       if (rememberMe) {
         localStorage.setItem("userEmail", user.email || "");
         localStorage.setItem("userName", user.displayName || "");
@@ -132,10 +136,11 @@ export default function AuthenticationPage() {
 
       setSuccess("Login successful! Redirecting...");
       
-      // Small delay to show success message
+      // IMPORTANT: Wait a moment for the session cookie to be set, then redirect
       setTimeout(() => {
+        // Use the redirect function which uses window.location for reliable navigation
         redirectUser(email);
-      }, 1000);
+      }, 1500); // Increased delay to ensure cookie is set
       
     } catch (err: any) {
       console.error("Login error:", err);
@@ -169,7 +174,6 @@ export default function AuthenticationPage() {
     setSuccess("");
     setLoading(true);
 
-    // Validation
     if (!name.trim()) {
       setError("Please enter your full name");
       setLoading(false);
@@ -189,17 +193,12 @@ export default function AuthenticationPage() {
     }
 
     try {
-      // Create user with Firebase Auth
       const userCredential = await createUserWithEmailAndPassword(auth, email, password);
       const user = userCredential.user;
 
-      // Update user profile with name
       await updateProfile(user, { displayName: name });
-
-      // Send email verification
       await sendEmailVerification(user);
       
-      // Store user data in Firestore
       await setDoc(doc(db, "users", user.uid), {
         email: email,
         name: name,
@@ -211,12 +210,10 @@ export default function AuthenticationPage() {
 
       setSuccess("Account created successfully! Please check your email for verification.");
       
-      // Clear form
       setName("");
       setEmail("");
       setPassword("");
       
-      // Switch to login after 2 seconds
       setTimeout(() => {
         setIsLogin(true);
         setSuccess("");
@@ -225,7 +222,6 @@ export default function AuthenticationPage() {
     } catch (err: any) {
       console.error("Signup error:", err);
       
-      // Handle specific Firebase auth errors
       switch (err.code) {
         case "auth/email-already-in-use":
           setError("This email is already registered. Please log in instead.");
@@ -283,7 +279,7 @@ export default function AuthenticationPage() {
     }
   };
 
-  // Google Sign In
+  // Google Sign In - FIXED VERSION
   const handleGoogleSignIn = async () => {
     setError("");
     setLoading(true);
@@ -293,7 +289,6 @@ export default function AuthenticationPage() {
       const userCredential = await signInWithPopup(auth, provider);
       const user = userCredential.user;
       
-      // Check if user exists in Firestore, if not create
       const userDoc = await getDoc(doc(db, "users", user.uid));
       if (!userDoc.exists()) {
         await setDoc(doc(db, "users", user.uid), {
@@ -316,13 +311,14 @@ export default function AuthenticationPage() {
       });
       
       if (!res.ok) {
-        throw new Error("Session creation failed");
+        const data = await res.json();
+        throw new Error(data.error || data.details || "Session creation failed");
       }
       
       setSuccess("Login successful! Redirecting...");
       setTimeout(() => {
         redirectUser(user.email || "");
-      }, 1000);
+      }, 1500);
       
     } catch (err: any) {
       console.error("Google sign in error:", err);
@@ -332,7 +328,7 @@ export default function AuthenticationPage() {
     }
   };
 
-  // Forgot Password Modal
+  // Forgot Password Modal (unchanged)
   if (forgotPassword) {
     return (
       <div className="flex items-center justify-center min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 px-4">
@@ -419,7 +415,6 @@ export default function AuthenticationPage() {
             {isLogin ? "Welcome Back" : "Create Account"}
           </h2>
 
-          {/* Error/Success Messages */}
           {error && (
             <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg flex items-start gap-2">
               <AlertCircle className="w-4 h-4 text-red-500 mt-0.5 flex-shrink-0" />
@@ -438,7 +433,6 @@ export default function AuthenticationPage() {
           )}
 
           <form onSubmit={isLogin ? handleLogin : handleSignup} className="space-y-4">
-            {/* Name field - only for signup */}
             {!isLogin && (
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Full Name</label>
@@ -454,7 +448,6 @@ export default function AuthenticationPage() {
               </div>
             )}
 
-            {/* Email Field */}
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Email Address</label>
               <div className="relative">
@@ -471,7 +464,6 @@ export default function AuthenticationPage() {
               </div>
             </div>
 
-            {/* Password Field */}
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Password</label>
               <div className="relative">
@@ -506,7 +498,6 @@ export default function AuthenticationPage() {
               )}
             </div>
 
-            {/* Remember Me - Login only */}
             {isLogin && (
               <div className="flex items-center justify-between">
                 <label className="flex items-center gap-2">
@@ -521,7 +512,6 @@ export default function AuthenticationPage() {
               </div>
             )}
 
-            {/* Submit Button */}
             <button
               type="submit"
               disabled={loading}
@@ -537,7 +527,6 @@ export default function AuthenticationPage() {
               )}
             </button>
 
-            {/* Google Sign In - Login only */}
             {isLogin && (
               <div className="relative">
                 <div className="absolute inset-0 flex items-center">
@@ -562,7 +551,6 @@ export default function AuthenticationPage() {
             )}
           </form>
 
-          {/* Toggle between Login and Signup */}
           <div className="mt-6 text-center">
             <p className="text-sm text-gray-600">
               {isLogin ? "Don't have an account?" : "Already have an account?"}{" "}
