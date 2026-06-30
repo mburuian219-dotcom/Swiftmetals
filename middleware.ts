@@ -1,40 +1,45 @@
 import { NextRequest, NextResponse } from "next/server";
 
 export function middleware(request: NextRequest) {
-  // Check for session cookie (not token)
+  // Check BOTH session and token cookies for compatibility
   const session = request.cookies.get("session")?.value;
+  const token = request.cookies.get("token")?.value;
   const { pathname } = request.nextUrl;
+
+  // Use session first, fallback to token
+  const authToken = session || token;
 
   console.log('🔍 Middleware check:', {
     path: pathname,
     hasSession: !!session,
-    sessionValue: session?.substring(0, 20) + '...',
+    hasToken: !!token,
+    isAuthenticated: !!authToken,
   });
 
-  // Allow access to authentication page without session
+  // Allow access to authentication page without auth
   if (pathname.startsWith("/auth") || pathname.startsWith("/authentication")) {
-    // If user has session and tries to go to auth page, redirect to admin
-    if (session) {
-      console.log('✅ Has session on auth page, redirecting to /admin');
+    // If user has auth and tries to go to auth page, redirect to admin
+    if (authToken) {
+      console.log('✅ Has auth on auth page, redirecting to /admin');
       return NextResponse.redirect(new URL("/admin", request.url));
     }
     return NextResponse.next();
   }
 
-  // Protect admin routes - require session
+  // Protect admin routes
   if (pathname.startsWith("/admin")) {
-    if (!session) {
-      console.log('🔒 No session, redirecting to /auth');
+    if (!authToken) {
+      console.log('🔒 No auth, redirecting to /auth');
       return NextResponse.redirect(new URL("/auth", request.url));
     }
-    console.log('✅ Session found, allowing access to admin');
+    console.log('✅ Auth found, allowing access to admin');
     return NextResponse.next();
   }
 
   // Protect dashboard routes
   if (pathname.startsWith("/dashboard")) {
-    if (!session) {
-      console.log('🔒 No session, redirecting to /auth');
+    if (!authToken) {
+      console.log('🔒 No auth, redirecting to /auth');
       return NextResponse.redirect(new URL("/auth", request.url));
     }
     return NextResponse.next();
@@ -45,13 +50,6 @@ export function middleware(request: NextRequest) {
 
 export const config = {
   matcher: [
-    /*
-     * Match all request paths except for the ones starting with:
-     * - api (API routes)
-     * - _next/static (static files)
-     * - _next/image (image optimization files)
-     * - favicon.ico (favicon file)
-     */
     '/((?!api|_next/static|_next/image|favicon.ico).*)',
   ],
 };
