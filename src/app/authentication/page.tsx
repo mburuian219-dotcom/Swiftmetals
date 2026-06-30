@@ -27,46 +27,69 @@ export default function AuthenticationPage() {
   const [rememberMe, setRememberMe] = useState(false);
   const [forgotPassword, setForgotPassword] = useState(false);
   const [resetEmail, setResetEmail] = useState("");
-  const [isRedirecting, setIsRedirecting] = useState(false);
   const router = useRouter();
 
-  // Helper to check if user is admin
-  const isUserAdmin = (email: string): boolean => {
+  // Helper to redirect users based on role with session verification
+  const redirectUser = async (email: string) => {
+    console.log('🔄 ===== REDIRECT USER CALLED =====');
+    console.log('🔄 Email:', email);
+    
+    // Verify session exists before redirecting
+    let sessionVerified = false;
+    let attempts = 0;
+    
+    while (attempts < 5 && !sessionVerified) {
+      attempts++;
+      try {
+        console.log(`🔄 Session verification attempt ${attempts}...`);
+        const response = await fetch("/api/auth/session", {
+          credentials: 'include',
+          cache: 'no-store',
+          headers: {
+            'Cache-Control': 'no-cache',
+          },
+        });
+        const data = await response.json();
+        console.log(`🔄 Attempt ${attempts} response:`, data);
+        
+        if (data.isAuthenticated) {
+          sessionVerified = true;
+          console.log('✅ Session verified successfully');
+          break;
+        }
+        
+        if (attempts < 5) {
+          await new Promise(resolve => setTimeout(resolve, 1000));
+        }
+      } catch (error) {
+        console.error(`🔄 Attempt ${attempts} failed:`, error);
+        if (attempts < 5) {
+          await new Promise(resolve => setTimeout(resolve, 1000));
+        }
+      }
+    }
+    
+    // Check admin status
     const adminEmailsString = process.env.NEXT_PUBLIC_ADMIN_EMAILS || '';
     const adminEmails = adminEmailsString.split(',').map(e => e.trim().toLowerCase());
     const userEmailLower = email.toLowerCase();
-    return adminEmails.some(adminEmail => adminEmail === userEmailLower);
-  };
-
-  // Helper to redirect users based on role
-  const redirectUser = (email: string) => {
-    console.log('🔄 ===== REDIRECTING USER =====');
-    console.log('🔄 Email:', email);
+    const isAdmin = adminEmails.some(adminEmail => adminEmail === userEmailLower);
     
-    // Prevent multiple redirects
-    if (isRedirecting) {
-      console.log('🔄 Already redirecting, skipping...');
-      return;
-    }
+    console.log(`🔄 User ${email} is ${isAdmin ? 'ADMIN' : 'REGULAR USER'}`);
+    console.log(`🔄 Session verified: ${sessionVerified}`);
     
-    setIsRedirecting(true);
-    
-    const isAdmin = isUserAdmin(email);
+    // Force redirect with page reload
     const targetUrl = isAdmin ? '/admin' : '/dashboard/user';
-    
-    console.log(`🔄 User is ${isAdmin ? 'ADMIN' : 'REGULAR USER'}`);
     console.log(`🔄 Redirecting to: ${targetUrl}`);
     
-    // Use router.push for client-side navigation
-    // This will work better with Next.js App Router
-    router.push(targetUrl);
+    // Use window.location.href for full page reload
+    window.location.href = targetUrl;
   };
 
   // Check if user is already logged in
   useEffect(() => {
     const checkAuth = async () => {
       try {
-        console.log('🔍 Checking initial auth state...');
         const response = await fetch("/api/auth/session", {
           credentials: 'include',
           cache: 'no-store',
@@ -74,12 +97,9 @@ export default function AuthenticationPage() {
         const data = await response.json();
         console.log('🔍 Initial auth check:', data);
         
-        if (data.authenticated && data.user?.email && !isRedirecting) {
+        if (data.isAuthenticated && data.user?.email) {
           console.log('✅ User already authenticated, redirecting...');
-          // Use router.push for client-side navigation
-          const isAdmin = isUserAdmin(data.user.email);
-          const targetUrl = isAdmin ? '/admin' : '/dashboard/user';
-          router.push(targetUrl);
+          await redirectUser(data.user.email);
         }
       } catch (error) {
         console.error("Session check failed:", error);
@@ -139,14 +159,11 @@ export default function AuthenticationPage() {
       console.log("✅ Session created successfully");
       setSuccess("Login successful! Redirecting...");
       
-      // Use router.push for immediate navigation
-      const isAdmin = isUserAdmin(email);
-      const targetUrl = isAdmin ? '/admin' : '/dashboard/user';
+      // Wait for cookie to be set
+      await new Promise(resolve => setTimeout(resolve, 1500));
       
-      // Small delay to ensure cookie is set
-      setTimeout(() => {
-        router.push(targetUrl);
-      }, 100);
+      // Redirect
+      await redirectUser(email);
       
     } catch (err: any) {
       console.error("Login error:", err);
@@ -324,13 +341,9 @@ export default function AuthenticationPage() {
       
       setSuccess("Login successful! Redirecting...");
       
-      // Redirect using router
-      const isAdmin = isUserAdmin(user.email || "");
-      const targetUrl = isAdmin ? '/admin' : '/dashboard/user';
-      
-      setTimeout(() => {
-        router.push(targetUrl);
-      }, 100);
+      // Wait for cookie and redirect
+      await new Promise(resolve => setTimeout(resolve, 1500));
+      await redirectUser(user.email || "");
       
     } catch (err: any) {
       console.error("Google sign in error:", err);
@@ -339,18 +352,6 @@ export default function AuthenticationPage() {
       setLoading(false);
     }
   };
-
-  // Show loading state while redirecting
-  if (isRedirecting) {
-    return (
-      <div className="flex items-center justify-center min-h-screen bg-gradient-to-br from-gray-50 to-gray-100">
-        <div className="text-center">
-          <Loader2 className="w-12 h-12 animate-spin text-emerald-600 mx-auto" />
-          <p className="mt-4 text-gray-600">Redirecting to dashboard...</p>
-        </div>
-      </div>
-    );
-  }
 
   // Forgot Password Modal
   if (forgotPassword) {
