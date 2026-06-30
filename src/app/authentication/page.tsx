@@ -29,53 +29,80 @@ export default function AuthenticationPage() {
   const [resetEmail, setResetEmail] = useState("");
   const router = useRouter();
 
-  // Helper to redirect users based on role
-  const redirectUser = (email: string) => {
+  // Helper to redirect users based on role with session verification
+  const redirectUser = async (email: string) => {
     console.log('🔄 ===== REDIRECT USER CALLED =====');
-    console.log('🔄 Email parameter:', email);
-    console.log('🔄 Current URL:', window.location.href);
-    console.log('🔄 Current path:', window.location.pathname);
+    console.log('🔄 Email:', email);
     
-    // Get admin emails from environment
-    const adminEmailsString = process.env.NEXT_PUBLIC_ADMIN_EMAILS || '';
-    console.log('🔄 Raw admin emails from env:', adminEmailsString);
+    // Verify session exists before redirecting
+    let sessionVerified = false;
+    let attempts = 0;
     
-    const adminEmails = adminEmailsString.split(',').map(e => e.trim().toLowerCase());
-    console.log('🔄 Parsed admin emails:', adminEmails);
-    
-    const userEmailLower = email.toLowerCase();
-    console.log('🔄 User email (lowercase):', userEmailLower);
-    
-    const isAdmin = adminEmails.some(adminEmail => 
-      adminEmail === userEmailLower
-    );
-    
-    console.log('🔄 Final result - Is admin?', isAdmin);
-    
-    if (isAdmin) {
-      console.log('🔄 ✅ ADMIN USER - Redirecting to /admin');
-      // Force page reload to ensure session is loaded
-      window.location.href = '/admin';
-    } else {
-      console.log('🔄 ❌ REGULAR USER - Redirecting to /dashboard/user');
-      window.location.href = '/dashboard/user';
+    while (attempts < 5 && !sessionVerified) {
+      attempts++;
+      try {
+        console.log(`🔄 Session verification attempt ${attempts}...`);
+        const response = await fetch("/api/auth/session", {
+          credentials: 'include',
+          cache: 'no-store',
+          headers: {
+            'Cache-Control': 'no-cache',
+          },
+        });
+        const data = await response.json();
+        console.log(`🔄 Attempt ${attempts} response:`, data);
+        
+        if (data.isAuthenticated) {
+          sessionVerified = true;
+          console.log('✅ Session verified successfully');
+          break;
+        }
+        
+        if (attempts < 5) {
+          await new Promise(resolve => setTimeout(resolve, 1000));
+        }
+      } catch (error) {
+        console.error(`🔄 Attempt ${attempts} failed:`, error);
+        if (attempts < 5) {
+          await new Promise(resolve => setTimeout(resolve, 1000));
+        }
+      }
     }
+    
+    // Check admin status
+    const adminEmailsString = process.env.NEXT_PUBLIC_ADMIN_EMAILS || '';
+    const adminEmails = adminEmailsString.split(',').map(e => e.trim().toLowerCase());
+    const userEmailLower = email.toLowerCase();
+    const isAdmin = adminEmails.some(adminEmail => adminEmail === userEmailLower);
+    
+    console.log(`🔄 User ${email} is ${isAdmin ? 'ADMIN' : 'REGULAR USER'}`);
+    console.log(`🔄 Session verified: ${sessionVerified}`);
+    
+    // Force redirect with page reload
+    const targetUrl = isAdmin ? '/admin' : '/dashboard/user';
+    console.log(`🔄 Redirecting to: ${targetUrl}`);
+    
+    // Use window.location.href for full page reload
+    window.location.href = targetUrl;
   };
 
   // Check if user is already logged in
   useEffect(() => {
     const checkAuth = async () => {
-      const user = auth.currentUser;
-      if (user) {
-        try {
-          const response = await fetch("/api/auth/session");
-          const data = await response.json();
-          if (data.isAuthenticated) {
-            redirectUser(user.email || "");
-          }
-        } catch (error) {
-          console.error("Session check failed:", error);
+      try {
+        const response = await fetch("/api/auth/session", {
+          credentials: 'include',
+          cache: 'no-store',
+        });
+        const data = await response.json();
+        console.log('🔍 Initial auth check:', data);
+        
+        if (data.isAuthenticated && data.user?.email) {
+          console.log('✅ User already authenticated, redirecting...');
+          await redirectUser(data.user.email);
         }
+      } catch (error) {
+        console.error("Session check failed:", error);
       }
     };
     checkAuth();
@@ -88,9 +115,6 @@ export default function AuthenticationPage() {
     setSuccess("");
     setLoading(true);
 
-    console.log('🔑 ===== LOGIN ATTEMPT =====');
-    console.log('🔑 Email:', email);
-
     if (!email || !password) {
       setError("Please enter both email and password");
       setLoading(false);
@@ -98,22 +122,28 @@ export default function AuthenticationPage() {
     }
 
     try {
+      console.log('🔑 Login attempt for:', email);
+      
+      // Sign in with Firebase
       const userCredential = await signInWithEmailAndPassword(auth, email, password);
       const user = userCredential.user;
       
+      // Get fresh ID token
       const idToken = await user.getIdToken(true);
+      console.log('✅ Firebase authentication successful');
 
-      console.log("✅ User authenticated:", user.email);
-
+      // Create session with cookie
       const res = await fetch("/api/auth/create-session", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${idToken}`,
         },
+        credentials: 'include',
       });
 
       const data = await res.json();
+      console.log('📡 Session creation response:', { status: res.status, data });
 
       if (!res.ok) {
         if (res.status === 403) {
@@ -126,32 +156,14 @@ export default function AuthenticationPage() {
         return;
       }
 
-      console.log("✅ Session created successfully", data);
-      
-      // ===== DEBUG LOGGING =====
-      console.log('🔍 ===== DEBUG - BEFORE REDIRECT =====');
-      console.log('🔍 Current URL:', window.location.href);
-      console.log('🔍 User email:', email);
-      console.log('🔍 Session cookie exists:', document.cookie.includes('session'));
-      console.log('🔍 All cookies:', document.cookie);
-      
-      // Check admin status
-      const adminEmailsTest = process.env.NEXT_PUBLIC_ADMIN_EMAILS?.split(',').map(e => e.trim().toLowerCase()) || [];
-      console.log('🔍 Admin emails from env:', process.env.NEXT_PUBLIC_ADMIN_EMAILS);
-      console.log('🔍 Parsed admin emails:', adminEmailsTest);
-      console.log('🔍 Is email in admin list?', adminEmailsTest.includes(email.toLowerCase()));
-      
-      // Try to call redirect immediately and also after timeout
-      console.log('🔍 Calling redirectUser immediately...');
-      redirectUser(email);
-      
-      // Also call after timeout as backup
-      setTimeout(() => {
-        console.log('🔍 Calling redirectUser from timeout...');
-        redirectUser(email);
-      }, 500);
-      
+      console.log("✅ Session created successfully");
       setSuccess("Login successful! Redirecting...");
+      
+      // Wait for cookie to be set
+      await new Promise(resolve => setTimeout(resolve, 1500));
+      
+      // Redirect
+      await redirectUser(email);
       
     } catch (err: any) {
       console.error("Login error:", err);
@@ -177,7 +189,7 @@ export default function AuthenticationPage() {
     }
   };
 
-  // Signup Handler (unchanged)
+  // Signup Handler
   const handleSignup = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
@@ -251,7 +263,7 @@ export default function AuthenticationPage() {
     }
   };
 
-  // Password Reset Handler (unchanged)
+  // Password Reset Handler
   const handlePasswordReset = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
@@ -289,7 +301,7 @@ export default function AuthenticationPage() {
     }
   };
 
-  // Google Sign In (unchanged but with debug)
+  // Google Sign In
   const handleGoogleSignIn = async () => {
     setError("");
     setLoading(true);
@@ -299,6 +311,7 @@ export default function AuthenticationPage() {
       const userCredential = await signInWithPopup(auth, provider);
       const user = userCredential.user;
       
+      // Check if user exists in Firestore
       const userDoc = await getDoc(doc(db, "users", user.uid));
       if (!userDoc.exists()) {
         await setDoc(doc(db, "users", user.uid), {
@@ -318,6 +331,7 @@ export default function AuthenticationPage() {
           "Content-Type": "application/json",
           Authorization: `Bearer ${idToken}`,
         },
+        credentials: 'include',
       });
       
       if (!res.ok) {
@@ -326,9 +340,10 @@ export default function AuthenticationPage() {
       }
       
       setSuccess("Login successful! Redirecting...");
-      setTimeout(() => {
-        redirectUser(user.email || "");
-      }, 1500);
+      
+      // Wait for cookie and redirect
+      await new Promise(resolve => setTimeout(resolve, 1500));
+      await redirectUser(user.email || "");
       
     } catch (err: any) {
       console.error("Google sign in error:", err);
@@ -338,7 +353,7 @@ export default function AuthenticationPage() {
     }
   };
 
-  // Forgot Password Modal (unchanged)
+  // Forgot Password Modal
   if (forgotPassword) {
     return (
       <div className="flex items-center justify-center min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 px-4">
@@ -409,7 +424,7 @@ export default function AuthenticationPage() {
     );
   }
 
-  // Main Login/Signup UI (unchanged)
+  // Main Login/Signup UI
   return (
     <div className="flex items-center justify-center min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 px-4">
       <div className="w-full max-w-md">
