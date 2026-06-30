@@ -57,9 +57,9 @@ export default function AuthenticationPage() {
     console.log(`🔄 User is ${isAdmin ? 'ADMIN' : 'REGULAR USER'}`);
     console.log(`🔄 Redirecting to: ${targetUrl}`);
     
-    // Use window.location.href for full page navigation
-    // This ensures the session cookie is properly recognized by the server
-    window.location.href = targetUrl;
+    // Use router.push for client-side navigation
+    // This will work better with Next.js App Router
+    router.push(targetUrl);
   };
 
   // Check if user is already logged in
@@ -74,9 +74,12 @@ export default function AuthenticationPage() {
         const data = await response.json();
         console.log('🔍 Initial auth check:', data);
         
-        if (data.isAuthenticated && data.user?.email && !isRedirecting) {
+        if (data.authenticated && data.user?.email && !isRedirecting) {
           console.log('✅ User already authenticated, redirecting...');
-          redirectUser(data.user.email);
+          // Use router.push for client-side navigation
+          const isAdmin = isUserAdmin(data.user.email);
+          const targetUrl = isAdmin ? '/admin' : '/dashboard/user';
+          router.push(targetUrl);
         }
       } catch (error) {
         console.error("Session check failed:", error);
@@ -136,11 +139,14 @@ export default function AuthenticationPage() {
       console.log("✅ Session created successfully");
       setSuccess("Login successful! Redirecting...");
       
-      // Small delay to ensure cookie is fully set
-      await new Promise(resolve => setTimeout(resolve, 500));
+      // Use router.push for immediate navigation
+      const isAdmin = isUserAdmin(email);
+      const targetUrl = isAdmin ? '/admin' : '/dashboard/user';
       
-      // Redirect immediately
-      redirectUser(email);
+      // Small delay to ensure cookie is set
+      setTimeout(() => {
+        router.push(targetUrl);
+      }, 100);
       
     } catch (err: any) {
       console.error("Login error:", err);
@@ -318,9 +324,13 @@ export default function AuthenticationPage() {
       
       setSuccess("Login successful! Redirecting...");
       
-      // Small delay for cookie
-      await new Promise(resolve => setTimeout(resolve, 500));
-      redirectUser(user.email || "");
+      // Redirect using router
+      const isAdmin = isUserAdmin(user.email || "");
+      const targetUrl = isAdmin ? '/admin' : '/dashboard/user';
+      
+      setTimeout(() => {
+        router.push(targetUrl);
+      }, 100);
       
     } catch (err: any) {
       console.error("Google sign in error:", err);
@@ -336,7 +346,7 @@ export default function AuthenticationPage() {
       <div className="flex items-center justify-center min-h-screen bg-gradient-to-br from-gray-50 to-gray-100">
         <div className="text-center">
           <Loader2 className="w-12 h-12 animate-spin text-emerald-600 mx-auto" />
-          <p className="mt-4 text-gray-600">Redirecting...</p>
+          <p className="mt-4 text-gray-600">Redirecting to dashboard...</p>
         </div>
       </div>
     );
