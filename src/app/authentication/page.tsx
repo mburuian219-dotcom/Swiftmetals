@@ -27,62 +27,38 @@ export default function AuthenticationPage() {
   const [rememberMe, setRememberMe] = useState(false);
   const [forgotPassword, setForgotPassword] = useState(false);
   const [resetEmail, setResetEmail] = useState("");
+  const [isRedirecting, setIsRedirecting] = useState(false);
   const router = useRouter();
 
-  // Helper to redirect users based on role with session verification
-  const redirectUser = async (email: string) => {
-    console.log('🔄 ===== REDIRECT USER CALLED =====');
-    console.log('🔄 Email:', email);
-    
-    // Verify session exists before redirecting
-    let sessionVerified = false;
-    let attempts = 0;
-    
-    while (attempts < 5 && !sessionVerified) {
-      attempts++;
-      try {
-        console.log(`🔄 Session verification attempt ${attempts}...`);
-        const response = await fetch("/api/auth/session", {
-          credentials: 'include',
-          cache: 'no-store',
-          headers: {
-            'Cache-Control': 'no-cache',
-          },
-        });
-        const data = await response.json();
-        console.log(`🔄 Attempt ${attempts} response:`, data);
-        
-        if (data.isAuthenticated) {
-          sessionVerified = true;
-          console.log('✅ Session verified successfully');
-          break;
-        }
-        
-        if (attempts < 5) {
-          await new Promise(resolve => setTimeout(resolve, 1000));
-        }
-      } catch (error) {
-        console.error(`🔄 Attempt ${attempts} failed:`, error);
-        if (attempts < 5) {
-          await new Promise(resolve => setTimeout(resolve, 1000));
-        }
-      }
-    }
-    
-    // Check admin status
+  // Helper to check if user is admin
+  const isUserAdmin = (email: string): boolean => {
     const adminEmailsString = process.env.NEXT_PUBLIC_ADMIN_EMAILS || '';
     const adminEmails = adminEmailsString.split(',').map(e => e.trim().toLowerCase());
     const userEmailLower = email.toLowerCase();
-    const isAdmin = adminEmails.some(adminEmail => adminEmail === userEmailLower);
+    return adminEmails.some(adminEmail => adminEmail === userEmailLower);
+  };
+
+  // Helper to redirect users based on role
+  const redirectUser = (email: string) => {
+    console.log('🔄 ===== REDIRECTING USER =====');
+    console.log('🔄 Email:', email);
     
-    console.log(`🔄 User ${email} is ${isAdmin ? 'ADMIN' : 'REGULAR USER'}`);
-    console.log(`🔄 Session verified: ${sessionVerified}`);
+    // Prevent multiple redirects
+    if (isRedirecting) {
+      console.log('🔄 Already redirecting, skipping...');
+      return;
+    }
     
-    // Force redirect with page reload
+    setIsRedirecting(true);
+    
+    const isAdmin = isUserAdmin(email);
     const targetUrl = isAdmin ? '/admin' : '/dashboard/user';
+    
+    console.log(`🔄 User is ${isAdmin ? 'ADMIN' : 'REGULAR USER'}`);
     console.log(`🔄 Redirecting to: ${targetUrl}`);
     
-    // Use window.location.href for full page reload
+    // Use window.location.href for full page navigation
+    // This ensures the session cookie is properly recognized by the server
     window.location.href = targetUrl;
   };
 
@@ -90,6 +66,7 @@ export default function AuthenticationPage() {
   useEffect(() => {
     const checkAuth = async () => {
       try {
+        console.log('🔍 Checking initial auth state...');
         const response = await fetch("/api/auth/session", {
           credentials: 'include',
           cache: 'no-store',
@@ -97,9 +74,9 @@ export default function AuthenticationPage() {
         const data = await response.json();
         console.log('🔍 Initial auth check:', data);
         
-        if (data.isAuthenticated && data.user?.email) {
+        if (data.isAuthenticated && data.user?.email && !isRedirecting) {
           console.log('✅ User already authenticated, redirecting...');
-          await redirectUser(data.user.email);
+          redirectUser(data.user.email);
         }
       } catch (error) {
         console.error("Session check failed:", error);
@@ -159,11 +136,11 @@ export default function AuthenticationPage() {
       console.log("✅ Session created successfully");
       setSuccess("Login successful! Redirecting...");
       
-      // Wait for cookie to be set
-      await new Promise(resolve => setTimeout(resolve, 1500));
+      // Small delay to ensure cookie is fully set
+      await new Promise(resolve => setTimeout(resolve, 500));
       
-      // Redirect
-      await redirectUser(email);
+      // Redirect immediately
+      redirectUser(email);
       
     } catch (err: any) {
       console.error("Login error:", err);
@@ -341,9 +318,9 @@ export default function AuthenticationPage() {
       
       setSuccess("Login successful! Redirecting...");
       
-      // Wait for cookie and redirect
-      await new Promise(resolve => setTimeout(resolve, 1500));
-      await redirectUser(user.email || "");
+      // Small delay for cookie
+      await new Promise(resolve => setTimeout(resolve, 500));
+      redirectUser(user.email || "");
       
     } catch (err: any) {
       console.error("Google sign in error:", err);
@@ -352,6 +329,18 @@ export default function AuthenticationPage() {
       setLoading(false);
     }
   };
+
+  // Show loading state while redirecting
+  if (isRedirecting) {
+    return (
+      <div className="flex items-center justify-center min-h-screen bg-gradient-to-br from-gray-50 to-gray-100">
+        <div className="text-center">
+          <Loader2 className="w-12 h-12 animate-spin text-emerald-600 mx-auto" />
+          <p className="mt-4 text-gray-600">Redirecting...</p>
+        </div>
+      </div>
+    );
+  }
 
   // Forgot Password Modal
   if (forgotPassword) {
