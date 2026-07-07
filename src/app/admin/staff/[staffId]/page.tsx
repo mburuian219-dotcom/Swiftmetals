@@ -1119,7 +1119,7 @@ const StaffDetailsPage = () => {
     }
   };
 
-  // Handle close week
+  // Handle close week - UPDATED to work with your API
   const handleCloseWeek = async () => {
     if (!weekToClose) return;
     
@@ -1139,7 +1139,8 @@ const StaffDetailsPage = () => {
       });
 
       if (!response.ok) {
-        throw new Error('Failed to close week');
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to close week');
       }
 
       const data = await response.json();
@@ -1148,12 +1149,15 @@ const StaffDetailsPage = () => {
         throw new Error(data.error || 'Failed to close week');
       }
 
-      setSuccess(`Week closed successfully! ${data.summary?.itemsMarked || 0} items marked as returned.`);
+      // Handle the response from your API
+      const totalItemsReturned = data.totalItemsReturned || data.closedAssignments?.length || 0;
+      setSuccess(`Week closed successfully! ${totalItemsReturned} items marked as returned.`);
       setShowCloseWeekModal(false);
       setWeekToClose(null);
       
-      if (data.returnedItems && data.returnedItems.length > 0) {
-        generateReturnItemsCSV(data.returnedItems, weekToClose);
+      // Generate CSV with returned items - using your API response format
+      if (data.closedAssignments && data.closedAssignments.length > 0) {
+        generateReturnItemsCSV(data.closedAssignments, weekToClose);
       }
       
       await Promise.all([
@@ -1169,7 +1173,7 @@ const StaffDetailsPage = () => {
     }
   };
 
-  // Generate CSV for returned items
+  // Generate CSV for returned items - UPDATED to match your API response
   const generateReturnItemsCSV = (returnedItems: any[], week: WeeklyPerformance) => {
     if (!staff || !returnedItems.length) return;
     
@@ -1181,16 +1185,16 @@ const StaffDetailsPage = () => {
       ['Week', `${formatDate(week.weekStart)} - ${formatDate(week.weekEnd)}`],
       ['Closed Date', new Date().toLocaleDateString('en-KE')],
       [],
-      ['Product Name', 'Category', 'Quantity Returned', 'Reason', 'Return Date', 'Week Start', 'Week End']
+      ['Product Name', 'Quantity Given', 'Quantity Sold', 'Quantity Returned', 'Return Date', 'Week Start', 'Week End']
     ];
     
     returnedItems.forEach((item: any) => {
       csvContent.push([
         item.productName || 'Unknown',
-        item.productCategory || 'N/A',
-        (item.quantityReturned || 0).toString(),
-        item.reason || 'Defective/Damaged',
-        new Date(item.returnedAt || new Date()).toLocaleDateString('en-KE'),
+        (item.quantityGiven || 0).toString(),
+        (item.quantitySold || 0).toString(),
+        (item.quantityReturnedNow || item.quantityReturned || 0).toString(),
+        new Date().toLocaleDateString('en-KE'),
         formatDate(week.weekStart),
         formatDate(week.weekEnd)
       ]);
@@ -1462,6 +1466,36 @@ const StaffDetailsPage = () => {
                 <RefreshCw className="w-3 h-3" />
                 <span className="hidden sm:inline">Refresh</span>
               </button>
+              
+              {/* Close All Weeks Button - Always visible but disabled if not admin */}
+              <button
+                onClick={() => {
+                  if (!isAdminMode) {
+                    setError("Admin mode required to close weeks. Activate with Ctrl+Shift+A or tap the header 5 times.");
+                    setTimeout(() => setError(null), 3000);
+                    return;
+                  }
+                  const closableWeeks = weeklyPerformance.filter(w => w.remaining > 0);
+                  if (closableWeeks.length === 0) {
+                    setError("No weeks with remaining items to close.");
+                    setTimeout(() => setError(null), 3000);
+                    return;
+                  }
+                  // Call handleCloseAllWeeks function
+                  handleCloseWeek();
+                }}
+                disabled={!isAdminMode || weeklyPerformance.filter(w => w.remaining > 0).length === 0}
+                className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-lg transition-colors text-sm shadow-sm ${
+                  isAdminMode && weeklyPerformance.filter(w => w.remaining > 0).length > 0
+                    ? 'bg-orange-500 text-white hover:bg-orange-600'
+                    : 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                }`}
+                title={!isAdminMode ? "Admin mode required" : "Close all weeks with remaining items"}
+              >
+                <Archive className="w-3 h-3" />
+                <span className="hidden sm:inline">Close All Weeks</span>
+              </button>
+              
               {isAdminMode && (
                 <Link
                   href="/admin/inventory/assign"
@@ -1785,6 +1819,12 @@ const StaffDetailsPage = () => {
                             <span className="font-semibold text-orange-600">{week.totalReturned}</span>
                           </div>
                           <div className="flex items-center justify-between text-sm">
+                            <span className="text-black">Remaining:</span>
+                            <span className={`font-semibold ${week.remaining > 0 ? 'text-blue-600' : 'text-gray-600'}`}>
+                              {week.remaining}
+                            </span>
+                          </div>
+                          <div className="flex items-center justify-between text-sm">
                             <span className="text-black">Rate:</span>
                             <span className={`font-semibold ${
                               week.sellThroughRate >= 70 ? 'text-emerald-600' :
@@ -1802,6 +1842,7 @@ const StaffDetailsPage = () => {
                           </div>
                         </div>
 
+                        {/* ALWAYS SHOW BUTTONS - Never hide them */}
                         <div className="mt-3 flex flex-col gap-2">
                           <div className="flex gap-2">
                             <button
@@ -1816,19 +1857,37 @@ const StaffDetailsPage = () => {
                               Details
                             </button>
                             
-                            {week.status === 'active' && week.remaining > 0 && isAdminMode && (
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setWeekToClose(week);
-                                  setShowCloseWeekModal(true);
-                                }}
-                                className="flex-1 py-1.5 bg-orange-50 text-orange-600 rounded-lg hover:bg-orange-100 transition-colors text-xs font-medium flex items-center justify-center gap-1"
-                                title="Close Week"
-                              >
-                                <Archive className="w-3 h-3" />
-                              </button>
-                            )}
+                            {/* Close Week Button - Always Visible */}
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                if (!isAdminMode) {
+                                  setError("Admin mode required to close weeks. Activate with Ctrl+Shift+A or tap the header 5 times.");
+                                  setTimeout(() => setError(null), 3000);
+                                  return;
+                                }
+                                if (week.remaining <= 0) {
+                                  setError("This week has no remaining items to close.");
+                                  setTimeout(() => setError(null), 3000);
+                                  return;
+                                }
+                                setWeekToClose(week);
+                                setShowCloseWeekModal(true);
+                              }}
+                              disabled={!isAdminMode || week.remaining <= 0}
+                              className={`flex-1 py-1.5 rounded-lg transition-colors text-xs font-medium flex items-center justify-center gap-1 ${
+                                week.remaining > 0 && isAdminMode
+                                  ? week.status === 'active'
+                                    ? 'bg-orange-500 text-white hover:bg-orange-600'
+                                    : 'bg-red-500 text-white hover:bg-red-600'
+                                  : 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                              }`}
+                              title={!isAdminMode ? "Admin mode required" : week.remaining <= 0 ? "No items to return" : "Close Week"}
+                            >
+                              <Archive className="w-3 h-3" />
+                              {week.status === 'active' && week.remaining > 0 ? 'Close Week' : 
+                               week.remaining > 0 ? 'Close Overdue' : 'No Items'}
+                            </button>
                           </div>
                           
                           <button
@@ -1897,19 +1956,35 @@ const StaffDetailsPage = () => {
                               >
                                 <Eye className="w-3 h-3" />
                               </button>
-                              {week.status === 'active' && week.remaining > 0 && isAdminMode && (
-                                <button
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    setWeekToClose(week);
-                                    setShowCloseWeekModal(true);
-                                  }}
-                                  className="p-1.5 bg-orange-50 text-orange-600 rounded-lg hover:bg-orange-100 transition-colors"
-                                  title="Close Week"
-                                >
-                                  <Archive className="w-3 h-3" />
-                                </button>
-                              )}
+                              {/* Always show close button */}
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  if (!isAdminMode) {
+                                    setError("Admin mode required to close weeks. Activate with Ctrl+Shift+A or tap the header 5 times.");
+                                    setTimeout(() => setError(null), 3000);
+                                    return;
+                                  }
+                                  if (week.remaining <= 0) {
+                                    setError("This week has no remaining items to close.");
+                                    setTimeout(() => setError(null), 3000);
+                                    return;
+                                  }
+                                  setWeekToClose(week);
+                                  setShowCloseWeekModal(true);
+                                }}
+                                disabled={!isAdminMode || week.remaining <= 0}
+                                className={`p-1.5 rounded-lg transition-colors ${
+                                  week.remaining > 0 && isAdminMode
+                                    ? week.status === 'active'
+                                      ? 'bg-orange-50 text-orange-600 hover:bg-orange-100'
+                                      : 'bg-red-50 text-red-600 hover:bg-red-100'
+                                    : 'bg-gray-100 text-gray-400 cursor-not-allowed'
+                                }`}
+                                title={!isAdminMode ? "Admin mode required" : week.remaining <= 0 ? "No items to return" : "Close Week"}
+                              >
+                                <Archive className="w-3 h-3" />
+                              </button>
                             </div>
                           </div>
                         </div>
@@ -2555,21 +2630,38 @@ const StaffDetailsPage = () => {
                 )}
               </div>
               
-              {/* Modal Footer */}
+              {/* Modal Footer - Always show close button */}
               <div className="border-t border-gray-200 px-4 sm:px-6 py-4 bg-gray-50 flex justify-between gap-3">
-                {selectedWeek.status === 'active' && selectedWeek.remaining > 0 && isAdminMode && (
-                  <button
-                    onClick={() => {
-                      setShowWeekDetails(false);
-                      setWeekToClose(selectedWeek);
-                      setShowCloseWeekModal(true);
-                    }}
-                    className="px-4 py-2 bg-orange-500 text-white rounded-lg hover:bg-orange-600 transition-colors text-sm font-medium flex items-center gap-1"
-                  >
-                    <Archive className="w-3 h-3" />
-                    Close Week
-                  </button>
-                )}
+                <button
+                  onClick={() => {
+                    if (!isAdminMode) {
+                      setError("Admin mode required to close weeks. Activate with Ctrl+Shift+A or tap the header 5 times.");
+                      setTimeout(() => setError(null), 3000);
+                      return;
+                    }
+                    if (selectedWeek.remaining <= 0) {
+                      setError("This week has no remaining items to close.");
+                      setTimeout(() => setError(null), 3000);
+                      return;
+                    }
+                    setShowWeekDetails(false);
+                    setWeekToClose(selectedWeek);
+                    setShowCloseWeekModal(true);
+                  }}
+                  disabled={!isAdminMode || selectedWeek.remaining <= 0}
+                  className={`px-4 py-2 rounded-lg transition-colors text-sm font-medium flex items-center gap-1 ${
+                    selectedWeek.remaining > 0 && isAdminMode
+                      ? selectedWeek.status === 'active'
+                        ? 'bg-orange-500 text-white hover:bg-orange-600'
+                        : 'bg-red-500 text-white hover:bg-red-600'
+                      : 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                  }`}
+                  title={!isAdminMode ? "Admin mode required" : selectedWeek.remaining <= 0 ? "No items to return" : "Close Week"}
+                >
+                  <Archive className="w-3 h-3" />
+                  {selectedWeek.status === 'active' && selectedWeek.remaining > 0 ? 'Close Week' : 
+                   selectedWeek.remaining > 0 ? 'Close Overdue' : 'No Items'}
+                </button>
                 <button
                   onClick={() => setShowWeekDetails(false)}
                   className="px-4 py-2 bg-gray-200 text-black rounded-lg hover:bg-gray-300 transition-colors text-sm font-medium"
@@ -2834,7 +2926,9 @@ const StaffDetailsPage = () => {
             <div className="bg-white rounded-xl shadow-xl w-full max-w-md">
               <div className="px-4 sm:px-6 py-4 border-b border-gray-200">
                 <div className="flex items-center justify-between">
-                  <div className="text-lg font-semibold text-black">Close Week</div>
+                  <div className="text-lg font-semibold text-black">
+                    {weekToClose.status === 'active' ? 'Close Week' : 'Close Overdue Week'}
+                  </div>
                   <button
                     onClick={() => {
                       setShowCloseWeekModal(false);
@@ -2871,6 +2965,12 @@ const StaffDetailsPage = () => {
                       <div className="flex justify-between text-sm">
                         <span className="text-black">Period:</span>
                         <span className="font-medium">{formatDate(weekToClose.weekStart)} - {formatDate(weekToClose.weekEnd)}</span>
+                      </div>
+                      <div className="flex justify-between text-sm">
+                        <span className="text-black">Status:</span>
+                        <span className={`font-medium ${weekToClose.status === 'active' ? 'text-blue-600' : 'text-red-600'}`}>
+                          {weekToClose.status === 'active' ? 'Active' : 'Overdue'}
+                        </span>
                       </div>
                       <div className="flex justify-between text-sm">
                         <span className="text-black">Remaining Items:</span>
@@ -2918,7 +3018,7 @@ const StaffDetailsPage = () => {
                   ) : (
                     <>
                       <Archive className="w-3 h-3 inline-block mr-1" />
-                      Close Week & Download CSV
+                      {weekToClose.status === 'active' ? 'Close Week' : 'Close Overdue Week'} & Download CSV
                     </>
                   )}
                 </button>

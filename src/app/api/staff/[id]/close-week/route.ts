@@ -30,6 +30,7 @@ function getCurrentWeekDates() {
 export async function POST(req: NextRequest, { params }: Params) {
   try {
     const { id } = await params;
+    const body = await req.json();
     
     if (!id || isNaN(parseInt(id))) {
       return NextResponse.json(
@@ -53,22 +54,68 @@ export async function POST(req: NextRequest, { params }: Params) {
       );
     }
 
-    // Get current week dates
-    const { weekStartDate, weekEndDate } = getCurrentWeekDates();
+    // Get dates from request body, or use current week if not provided
+    let weekStartDate: Date;
+    let weekEndDate: Date;
+    let closeAllWeeks = body.closeAllWeeks || false;
+    
+    if (body.weekStart && body.weekEnd && !closeAllWeeks) {
+      weekStartDate = new Date(body.weekStart);
+      weekEndDate = new Date(body.weekEnd);
+      // Set to start/end of day
+      weekStartDate.setHours(0, 0, 0, 0);
+      weekEndDate.setHours(23, 59, 59, 999);
+    } else {
+      // Use current week as fallback
+      const currentWeek = getCurrentWeekDates();
+      weekStartDate = currentWeek.weekStartDate;
+      weekEndDate = currentWeek.weekEndDate;
+    }
     
     console.log(`📅 Closing week for staff ${staff.name} (ID: ${staffId})`, {
       weekStartDate,
       weekEndDate,
-      weekRange: `${weekStartDate.toISOString().split('T')[0]} to ${weekEndDate.toISOString().split('T')[0]}`
+      weekRange: `${weekStartDate.toISOString().split('T')[0]} to ${weekEndDate.toISOString().split('T')[0]}`,
+      closeAllWeeks
     });
 
-    // Find all inventory assignments for current week
-    const currentWeekInventory = await prisma.staffInventory.findMany({
-      where: {
-        staffId,
-        weekStartDate: { lte: weekEndDate },
-        weekEndDate: { gte: weekStartDate }
-      },
+    // Build the where clause
+    let whereClause: any = {
+      staffId,
+    };
+
+    if (!closeAllWeeks) {
+      // Find inventory for specific week - using overlapping date range
+      whereClause = {
+        ...whereClause,
+        OR: [
+          // Exact match
+          {
+            weekStartDate: {
+              gte: weekStartDate,
+              lte: weekEndDate
+            },
+            weekEndDate: {
+              gte: weekStartDate,
+              lte: weekEndDate
+            }
+          },
+          // Overlapping
+          {
+            weekStartDate: {
+              lte: weekEndDate
+            },
+            weekEndDate: {
+              gte: weekStartDate
+            }
+          }
+        ]
+      };
+    }
+
+    // Find all inventory assignments
+    const inventoryAssignments = await prisma.staffInventory.findMany({
+      where: whereClause,
       include: {
         product: {
           select: {
@@ -81,31 +128,107 @@ export async function POST(req: NextRequest, { params }: Params) {
       }
     });
 
-    console.log(`📊 Found ${currentWeekInventory.length} inventory assignments for current week`);
+    console.log(`📊 Found ${inventoryAssignments.length} inventory assignments`);
 
-    if (currentWeekInventory.length === 0) {
+    if (inventoryAssignments.length === 0) {
+      // If closing all weeks, check if there's any inventory at all
+      if (closeAllWeeks) {
+        const anyInventory = await prisma.staffInventory.findMany({
+          where: { staffId },
+          include: {
+            product: {
+              select: {
+                name: true
+              }
+            }
+          }
+        });
+
+        if (anyInventory.length === 0) {
+          return NextResponse.json({
+            success: true,
+            message: "No inventory found for this staff member",
+            staff: {
+              id: staff.id,
+              name: staff.name
+            },
+            closedAssignments: 0,
+            totalItemsReturned: 0
+          });
+        }
+
+        // Process all inventory with remaining items
+        const closedAssignments = [];
+        let totalItemsReturned = 0;
+
+        for (const inventory of anyInventory) {
+          const remaining = inventory.quantityGiven - inventory.quantitySold - inventory.quantityReturned;
+          
+          if (remaining > 0) {
+            const updatedInventory = await prisma.staffInventory.update({
+              where: { id: inventory.id },
+              data: {
+                quantityReturned: inventory.quantityReturned + remaining,
+                updatedAt: new Date()
+              }
+            });
+
+            totalItemsReturned += remaining;
+            
+            closedAssignments.push({
+              inventoryId: inventory.id,
+              productId: inventory.productId,
+              productName: inventory.product.name,
+              quantityGiven: inventory.quantityGiven,
+              quantitySold: inventory.quantitySold,
+              quantityReturnedBefore: inventory.quantityReturned,
+              quantityReturnedNow: remaining,
+              newTotalReturned: updatedInventory.quantityReturned,
+              remainingBefore: remaining,
+              weekStart: inventory.weekStartDate,
+              weekEnd: inventory.weekEndDate
+            });
+
+            console.log(`✅ Closed inventory ${inventory.id}: Returned ${remaining} ${inventory.product.name}`);
+          }
+        }
+
+        return NextResponse.json({
+          success: true,
+          message: `Closed all weeks for ${staff.name}. ${closedAssignments.length} assignments updated, ${totalItemsReturned} items returned.`,
+          staff: {
+            id: staff.id,
+            name: staff.name,
+            email: staff.email
+          },
+          closedAssignments,
+          totalItemsReturned,
+          timestamp: new Date().toISOString()
+        });
+      }
+
       return NextResponse.json({
         success: true,
-        message: "No current week inventory found to close",
+        message: "No inventory found for the specified week",
         staff: {
           id: staff.id,
           name: staff.name
         },
         weekInfo: {
           weekStartDate,
-          weekEndDate
+          weekEndDate,
+          weekRange: `${weekStartDate.toLocaleDateString()} - ${weekEndDate.toLocaleDateString()}`
         },
         closedAssignments: 0,
         totalItemsReturned: 0
       });
     }
 
-    const updates = [];
     const closedAssignments = [];
     let totalItemsReturned = 0;
 
     // Process each inventory assignment
-    for (const inventory of currentWeekInventory) {
+    for (const inventory of inventoryAssignments) {
       const remaining = inventory.quantityGiven - inventory.quantitySold - inventory.quantityReturned;
       
       if (remaining > 0) {
@@ -129,19 +252,41 @@ export async function POST(req: NextRequest, { params }: Params) {
           quantityReturnedBefore: inventory.quantityReturned,
           quantityReturnedNow: remaining,
           newTotalReturned: updatedInventory.quantityReturned,
-          remainingBefore: remaining
+          remainingBefore: remaining,
+          weekStart: inventory.weekStartDate,
+          weekEnd: inventory.weekEndDate
         });
 
         console.log(`✅ Closed inventory ${inventory.id}: Returned ${remaining} ${inventory.product.name}`);
       }
     }
 
-    // Get updated summary for the closed week
-    const updatedWeekInventory = await prisma.staffInventory.findMany({
+    // Get updated summary
+    const updatedInventory = await prisma.staffInventory.findMany({
       where: {
         staffId,
-        weekStartDate: { lte: weekEndDate },
-        weekEndDate: { gte: weekStartDate }
+        ...(closeAllWeeks ? {} : {
+          OR: [
+            {
+              weekStartDate: {
+                gte: weekStartDate,
+                lte: weekEndDate
+              },
+              weekEndDate: {
+                gte: weekStartDate,
+                lte: weekEndDate
+              }
+            },
+            {
+              weekStartDate: {
+                lte: weekEndDate
+              },
+              weekEndDate: {
+                gte: weekStartDate
+              }
+            }
+          ]
+        })
       },
       include: {
         product: {
@@ -155,22 +300,21 @@ export async function POST(req: NextRequest, { params }: Params) {
     });
 
     const weekSummary = {
-      totalAssignments: updatedWeekInventory.length,
-      totalGiven: updatedWeekInventory.reduce((sum, a) => sum + a.quantityGiven, 0),
-      totalSold: updatedWeekInventory.reduce((sum, a) => sum + a.quantitySold, 0),
-      totalReturned: updatedWeekInventory.reduce((sum, a) => sum + a.quantityReturned, 0),
-      totalRemaining: updatedWeekInventory.reduce((sum, a) => sum + (a.quantityGiven - a.quantitySold - a.quantityReturned), 0),
-      // Calculate values
-      inventoryCost: updatedWeekInventory.reduce((sum, a) => {
+      totalAssignments: updatedInventory.length,
+      totalGiven: updatedInventory.reduce((sum, a) => sum + a.quantityGiven, 0),
+      totalSold: updatedInventory.reduce((sum, a) => sum + a.quantitySold, 0),
+      totalReturned: updatedInventory.reduce((sum, a) => sum + a.quantityReturned, 0),
+      totalRemaining: updatedInventory.reduce((sum, a) => sum + (a.quantityGiven - a.quantitySold - a.quantityReturned), 0),
+      inventoryCost: updatedInventory.reduce((sum, a) => {
         const cost = a.product?.productionCost || a.product?.price * 0.7 || 0;
         return sum + (cost * a.quantityGiven);
       }, 0),
-      salesValue: updatedWeekInventory.reduce((sum, a) => {
+      salesValue: updatedInventory.reduce((sum, a) => {
         return sum + (a.product?.price || 0) * a.quantitySold;
       }, 0),
-      sellThroughRate: updatedWeekInventory.reduce((sum, a) => sum + a.quantityGiven, 0) > 0
-        ? (updatedWeekInventory.reduce((sum, a) => sum + a.quantitySold, 0) / 
-           updatedWeekInventory.reduce((sum, a) => sum + a.quantityGiven, 0)) * 100
+      sellThroughRate: updatedInventory.reduce((sum, a) => sum + a.quantityGiven, 0) > 0
+        ? (updatedInventory.reduce((sum, a) => sum + a.quantitySold, 0) / 
+           updatedInventory.reduce((sum, a) => sum + a.quantityGiven, 0)) * 100
         : 0
     };
 
@@ -182,7 +326,7 @@ export async function POST(req: NextRequest, { params }: Params) {
 
     return NextResponse.json({
       success: true,
-      message: `Successfully closed current week for ${staff.name}. ${closedAssignments.length} assignments updated, ${totalItemsReturned} items returned.`,
+      message: `Successfully closed week(s) for ${staff.name}. ${closedAssignments.length} assignments updated, ${totalItemsReturned} items returned.`,
       staff: {
         id: staff.id,
         name: staff.name,
@@ -243,15 +387,10 @@ export async function GET(req: NextRequest, { params }: Params) {
       );
     }
 
-    // Get current week dates
-    const { weekStartDate, weekEndDate } = getCurrentWeekDates();
-    
-    // Find all inventory assignments for current week
-    const currentWeekInventory = await prisma.staffInventory.findMany({
+    // Get all inventory for this staff
+    const allInventory = await prisma.staffInventory.findMany({
       where: {
         staffId,
-        weekStartDate: { lte: weekEndDate },
-        weekEndDate: { gte: weekStartDate }
       },
       include: {
         product: {
@@ -264,26 +403,63 @@ export async function GET(req: NextRequest, { params }: Params) {
       }
     });
 
-    // Calculate week summary
-    const totalGiven = currentWeekInventory.reduce((sum, a) => sum + a.quantityGiven, 0);
-    const totalSold = currentWeekInventory.reduce((sum, a) => sum + a.quantitySold, 0);
-    const totalReturned = currentWeekInventory.reduce((sum, a) => sum + a.quantityReturned, 0);
+    // Calculate totals
+    const totalGiven = allInventory.reduce((sum, a) => sum + a.quantityGiven, 0);
+    const totalSold = allInventory.reduce((sum, a) => sum + a.quantitySold, 0);
+    const totalReturned = allInventory.reduce((sum, a) => sum + a.quantityReturned, 0);
     const totalRemaining = totalGiven - totalSold - totalReturned;
-    
-    // Calculate values
-    const inventoryCost = currentWeekInventory.reduce((sum, a) => {
-      const cost = a.product?.productionCost || a.product?.price * 0.7 || 0;
-      return sum + (cost * a.quantityGiven);
-    }, 0);
-    
-    const salesValue = currentWeekInventory.reduce((sum, a) => {
-      return sum + (a.product?.price || 0) * a.quantitySold;
-    }, 0);
-    
-    const sellThroughRate = totalGiven > 0 ? (totalSold / totalGiven) * 100 : 0;
 
-    // Check if week can be closed (has remaining inventory)
-    const canCloseWeek = totalRemaining > 0 && currentWeekInventory.length > 0;
+    // Get current week dates
+    const { weekStartDate, weekEndDate } = getCurrentWeekDates();
+    
+    // Find current week inventory
+    const currentWeekInventory = allInventory.filter(inv => {
+      if (!inv.weekStartDate || !inv.weekEndDate) return false;
+      const start = new Date(inv.weekStartDate);
+      const end = new Date(inv.weekEndDate);
+      return start <= weekEndDate && end >= weekStartDate;
+    });
+
+    const currentWeekGiven = currentWeekInventory.reduce((sum, a) => sum + a.quantityGiven, 0);
+    const currentWeekSold = currentWeekInventory.reduce((sum, a) => sum + a.quantitySold, 0);
+    const currentWeekReturned = currentWeekInventory.reduce((sum, a) => sum + a.quantityReturned, 0);
+    const currentWeekRemaining = currentWeekGiven - currentWeekSold - currentWeekReturned;
+
+    // Get all weeks with remaining items
+    const weeksWithRemaining = [];
+    const weekMap = new Map();
+
+    allInventory.forEach(inv => {
+      if (!inv.weekStartDate || !inv.weekEndDate) return;
+      const key = `${inv.weekStartDate.toISOString().split('T')[0]}_${inv.weekEndDate.toISOString().split('T')[0]}`;
+      if (!weekMap.has(key)) {
+        weekMap.set(key, {
+          weekStart: inv.weekStartDate,
+          weekEnd: inv.weekEndDate,
+          given: 0,
+          sold: 0,
+          returned: 0
+        });
+      }
+      const week = weekMap.get(key);
+      week.given += inv.quantityGiven;
+      week.sold += inv.quantitySold;
+      week.returned += inv.quantityReturned;
+    });
+
+    weekMap.forEach((week, key) => {
+      const remaining = week.given - week.sold - week.returned;
+      if (remaining > 0) {
+        weeksWithRemaining.push({
+          weekStart: week.weekStart,
+          weekEnd: week.weekEnd,
+          given: week.given,
+          sold: week.sold,
+          returned: week.returned,
+          remaining: remaining
+        });
+      }
+    });
 
     return NextResponse.json({
       staff: {
@@ -291,34 +467,26 @@ export async function GET(req: NextRequest, { params }: Params) {
         name: staff.name,
         email: staff.email
       },
-      weekInfo: {
-        weekStartDate,
-        weekEndDate,
-        weekRange: `${weekStartDate.toLocaleDateString()} - ${weekEndDate.toLocaleDateString()}`,
-        isCurrentWeek: true
-      },
-      inventory: {
-        assignments: currentWeekInventory.length,
+      summary: {
+        totalAssignments: allInventory.length,
         totalGiven,
         totalSold,
         totalReturned,
         totalRemaining,
-        inventoryCost,
-        salesValue,
-        sellThroughRate: sellThroughRate.toFixed(2) + '%',
-        canCloseWeek
+        weeksWithRemaining: weeksWithRemaining.length
       },
-      assignments: currentWeekInventory.map(inv => ({
-        id: inv.id,
-        productId: inv.productId,
-        productName: inv.product?.name,
-        quantityGiven: inv.quantityGiven,
-        quantitySold: inv.quantitySold,
-        quantityReturned: inv.quantityReturned,
-        remaining: inv.quantityGiven - inv.quantitySold - inv.quantityReturned,
-        weekStartDate: inv.weekStartDate,
-        weekEndDate: inv.weekEndDate
-      })),
+      currentWeek: {
+        weekStartDate,
+        weekEndDate,
+        weekRange: `${weekStartDate.toLocaleDateString()} - ${weekEndDate.toLocaleDateString()}`,
+        assignments: currentWeekInventory.length,
+        given: currentWeekGiven,
+        sold: currentWeekSold,
+        returned: currentWeekReturned,
+        remaining: currentWeekRemaining,
+        canClose: currentWeekRemaining > 0 && currentWeekInventory.length > 0
+      },
+      weeksWithRemaining: weeksWithRemaining,
       timestamp: new Date().toISOString()
     });
 
