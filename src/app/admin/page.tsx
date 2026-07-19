@@ -33,7 +33,9 @@ import {
   CreditCard,
   Wallet,
   Coins,
-  User
+  User,
+  FileText,
+  Smartphone
 } from "lucide-react";
 
 // ============================================================================
@@ -122,11 +124,12 @@ interface PartialPayment {
   cash: string;
   bank_transfer: string;
   till: string;
+  mpesa: string;
   [key: string]: string;
 }
 
 /** Available payment options */
-type PaymentOption = 'cash' | 'bank_transfer' | 'till' | 'partial' | 'credit';
+type PaymentOption = 'cash' | 'bank_transfer' | 'till' | 'mpesa' | 'partial' | 'credit';
 
 // ============================================================================
 // HELPER FUNCTIONS
@@ -188,6 +191,7 @@ export default function AdminDashboard() {
   const [stockError, setStockError] = useState<string | null>(null);
   const [bankBalance, setBankBalance] = useState<number | null>(null);
   const [currentUser, setCurrentUser] = useState<{ uid: string; email: string } | null>(null);
+  const [createdSaleId, setCreatedSaleId] = useState<number | null>(null);
   
   // --- Staff Inventory State ---
   const [staffInventories, setStaffInventories] = useState<StaffInventory[]>([]);
@@ -225,7 +229,8 @@ export default function AdminDashboard() {
   const [partialPayment, setPartialPayment] = useState<PartialPayment>({
     cash: "",
     bank_transfer: "",
-    till: ""
+    till: "",
+    mpesa: ""
   });
   
   // --- Optimistic UI Update State ---
@@ -278,6 +283,7 @@ export default function AdminDashboard() {
   const productDropdownRef = useRef<HTMLDivElement>(null);
   const createSaleButtonRef = useRef<HTMLButtonElement>(null);
   const createSaleTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const closeModalTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   
   // ==========================================================================
   // STATIC DATA - Admin Navigation Sections
@@ -673,7 +679,7 @@ export default function AdminDashboard() {
 
   useEffect(() => {
     const total = calculateTotalAmount();
-    if (paymentOption === 'cash' || paymentOption === 'bank_transfer' || paymentOption === 'till') {
+    if (paymentOption === 'cash' || paymentOption === 'bank_transfer' || paymentOption === 'till' || paymentOption === 'mpesa') {
       setAmountPaid(total.toFixed(2));
     } else if (paymentOption === 'credit') {
       setAmountPaid("0");
@@ -1379,12 +1385,12 @@ export default function AdminDashboard() {
       userName: user.displayName || user.email || "Unknown User",
     };
 
-    // NEW: Add assigned staff (responsible staff) if selected
+    // Add assigned staff (responsible staff) if selected
     if (responsibleStaffId) {
       saleData.assignedStaffId = responsibleStaffId;
     }
 
-    if (paymentOption === 'cash' || paymentOption === 'bank_transfer' || paymentOption === 'till') {
+    if (paymentOption === 'cash' || paymentOption === 'bank_transfer' || paymentOption === 'till' || paymentOption === 'mpesa') {
       saleData.payments.push({
         amount: totalAmount,
         method: paymentOption.toUpperCase().replace('_', ' '),
@@ -1427,6 +1433,16 @@ export default function AdminDashboard() {
         });
       }
       
+      const mpesaAmount = parseFloat(partialPayment.mpesa) || 0;
+      if (mpesaAmount > 0) {
+        saleData.payments.push({
+          amount: mpesaAmount,
+          method: "MPESA",
+          status: "CLEARED",
+          paidAt: new Date().toISOString(),
+        });
+      }
+      
       saleData.status = "PARTIAL";
       saleData.partialPayments = partialPayment;
     } else if (paymentOption === 'credit') {
@@ -1452,14 +1468,21 @@ export default function AdminDashboard() {
     setSaleError(null);
 
     if (createSaleTimeoutRef.current) clearTimeout(createSaleTimeoutRef.current);
+    if (closeModalTimeoutRef.current) clearTimeout(closeModalTimeoutRef.current);
 
     const createSalePromise = new Promise<void>(resolve => {
       createSaleTimeoutRef.current = setTimeout(async () => {
         try {
           const result = await createSaleMutation(saleData, idToken);
+          
+          // Store the created sale ID for receipt generation
+          const createdSaleId = result.id || result.saleId || saleData.id;
+          setCreatedSaleId(createdSaleId);
 
-          setSaleSuccess("Sale created successfully! 🎉");
+          // Set success message with receipt button
+          setSaleSuccess(`Sale created successfully! 🎉`);
 
+          // Clear form state but keep modal open
           setSelectedCustomer(null);
           setCustomerSearch("");
           setSaleItems([]);
@@ -1469,24 +1492,33 @@ export default function AdminDashboard() {
           setCurrentPrice("");
           setPaymentOption("cash");
           setAmountPaid("");
-          setPartialPayment({ cash: "", bank_transfer: "", till: "" });
+          setPartialPayment({ cash: "", bank_transfer: "", till: "", mpesa: "" });
           setResponsibleStaffId(null);
           setSelectedAssignedStaff(null);
           setStaffSearch("");
 
+          // Refresh data after 1 second
           setTimeout(() => {
             fetchDashboardData().catch(console.error);
             fetchStaffInventory().catch(console.error);
           }, 1000);
 
-          setTimeout(() => {
+          // Open receipt in new tab immediately
+          if (createdSaleId) {
+            window.open(`/api/receipt/${createdSaleId}`, '_blank');
+          }
+
+          // Keep modal open for 4 seconds to show success message and receipt button
+          closeModalTimeoutRef.current = setTimeout(() => {
             setSaleSuccess(null);
             setShowQuickSale(false);
             setOptimisticSale(null);
             setOptimisticProducts([]);
             setIsCreating(false);
+            setCreatedSaleId(null);
             resolve();
-          }, 1500);
+          }, 4000); // 4 seconds delay
+          
         } catch (error: any) {
           setOptimisticSale(null);
           setOptimisticProducts([]);
@@ -1795,8 +1827,10 @@ export default function AdminDashboard() {
                     setStockError(null);
                     setOptimisticSale(null);
                     setOptimisticProducts([]);
-                    setPartialPayment({ cash: "", bank_transfer: "", till: "" });
+                    setPartialPayment({ cash: "", bank_transfer: "", till: "", mpesa: "" });
                     setResponsibleStaffId(null);
+                    setCreatedSaleId(null);
+                    if (closeModalTimeoutRef.current) clearTimeout(closeModalTimeoutRef.current);
                   }}
                   type="button"
                   className="text-white hover:bg-white/20 p-1.5 rounded-lg transition-colors"
@@ -1828,9 +1862,33 @@ export default function AdminDashboard() {
               )}
 
               {saleSuccess && (
-                <div className="bg-emerald-50 border border-emerald-200 text-emerald-700 px-3 py-2 rounded-lg flex items-start gap-2 text-sm">
+                <div className="bg-emerald-50 border border-emerald-200 text-emerald-700 px-3 py-2 rounded-lg flex items-start gap-2 text-sm animate-pulse">
                   <CheckCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
-                  <span>{saleSuccess}</span>
+                  <div className="flex-1 flex flex-wrap items-center gap-2">
+                    <span>{saleSuccess}</span>
+                    {createdSaleId && (
+                      <button
+                        onClick={() => {
+                          window.open(`/api/receipt/${createdSaleId}`, '_blank');
+                        }}
+                        className="inline-flex items-center gap-1 px-3 py-1 bg-emerald-600 text-white text-xs font-medium rounded-lg hover:bg-emerald-700 transition-colors"
+                      >
+                        <FileText className="w-3 h-3" />
+                        View Receipt
+                      </button>
+                    )}
+                  </div>
+                  <button 
+                    onClick={() => {
+                      setSaleSuccess(null);
+                      setCreatedSaleId(null);
+                      if (closeModalTimeoutRef.current) clearTimeout(closeModalTimeoutRef.current);
+                    }} 
+                    type="button" 
+                    className="text-emerald-700 hover:text-emerald-900 flex-shrink-0"
+                  >
+                    <X size={14} />
+                  </button>
                 </div>
               )}
 
@@ -1893,7 +1951,7 @@ export default function AdminDashboard() {
                 )}
               </div>
 
-              {/* SECTION 1.5: RESPONSIBLE STAFF SELECTION (NEW) */}
+              {/* SECTION 1.5: RESPONSIBLE STAFF SELECTION */}
               <div className="relative">
                 <div className="flex items-center justify-between mb-2">
                   <label className="block text-sm font-semibold text-black">
@@ -2278,7 +2336,7 @@ export default function AdminDashboard() {
                   </h3>
                   
                   <div className="grid grid-cols-3 gap-2">
-                    <button type="button" onClick={() => { setPaymentOption('cash'); setAmountPaid(calculateTotalAmount().toFixed(2)); setPartialPayment({ cash: "", bank_transfer: "", till: "" }); }} className={`p-3 rounded-lg border-2 flex flex-col items-center justify-center gap-1 transition-all text-xs ${paymentOption === 'cash' ? 'border-blue-500 bg-blue-50' : 'border-gray-200 hover:border-blue-300 hover:bg-blue-25'}`}>
+                    <button type="button" onClick={() => { setPaymentOption('cash'); setAmountPaid(calculateTotalAmount().toFixed(2)); setPartialPayment({ cash: "", bank_transfer: "", till: "", mpesa: "" }); }} className={`p-3 rounded-lg border-2 flex flex-col items-center justify-center gap-1 transition-all text-xs ${paymentOption === 'cash' ? 'border-blue-500 bg-blue-50' : 'border-gray-200 hover:border-blue-300 hover:bg-blue-25'}`}>
                       <div className={`p-2 rounded-full ${paymentOption === 'cash' ? 'bg-blue-100' : 'bg-gray-100'}`}>
                         <Coins className={`w-5 h-5 ${paymentOption === 'cash' ? 'text-blue-600' : 'text-gray-400'}`} />
                       </div>
@@ -2286,7 +2344,7 @@ export default function AdminDashboard() {
                       <span className="text-xs text-gray-500">Full</span>
                     </button>
 
-                    <button type="button" onClick={() => { setPaymentOption('bank_transfer'); setAmountPaid(calculateTotalAmount().toFixed(2)); setPartialPayment({ cash: "", bank_transfer: "", till: "" }); }} className={`p-3 rounded-lg border-2 flex flex-col items-center justify-center gap-1 transition-all text-xs ${paymentOption === 'bank_transfer' ? 'border-green-500 bg-green-50' : 'border-gray-200 hover:border-green-300 hover:bg-green-25'}`}>
+                    <button type="button" onClick={() => { setPaymentOption('bank_transfer'); setAmountPaid(calculateTotalAmount().toFixed(2)); setPartialPayment({ cash: "", bank_transfer: "", till: "", mpesa: "" }); }} className={`p-3 rounded-lg border-2 flex flex-col items-center justify-center gap-1 transition-all text-xs ${paymentOption === 'bank_transfer' ? 'border-green-500 bg-green-50' : 'border-gray-200 hover:border-green-300 hover:bg-green-25'}`}>
                       <div className={`p-2 rounded-full ${paymentOption === 'bank_transfer' ? 'bg-green-100' : 'bg-gray-100'}`}>
                         <CreditCard className={`w-5 h-5 ${paymentOption === 'bank_transfer' ? 'text-green-600' : 'text-gray-400'}`} />
                       </div>
@@ -2294,7 +2352,7 @@ export default function AdminDashboard() {
                       <span className="text-xs text-gray-500">Full</span>
                     </button>
 
-                    <button type="button" onClick={() => { setPaymentOption('till'); setAmountPaid(calculateTotalAmount().toFixed(2)); setPartialPayment({ cash: "", bank_transfer: "", till: "" }); }} className={`p-3 rounded-lg border-2 flex flex-col items-center justify-center gap-1 transition-all text-xs ${paymentOption === 'till' ? 'border-purple-500 bg-purple-50' : 'border-gray-200 hover:border-purple-300 hover:bg-purple-25'}`}>
+                    <button type="button" onClick={() => { setPaymentOption('till'); setAmountPaid(calculateTotalAmount().toFixed(2)); setPartialPayment({ cash: "", bank_transfer: "", till: "", mpesa: "" }); }} className={`p-3 rounded-lg border-2 flex flex-col items-center justify-center gap-1 transition-all text-xs ${paymentOption === 'till' ? 'border-purple-500 bg-purple-50' : 'border-gray-200 hover:border-purple-300 hover:bg-purple-25'}`}>
                       <div className={`p-2 rounded-full ${paymentOption === 'till' ? 'bg-purple-100' : 'bg-gray-100'}`}>
                         <CreditCard className={`w-5 h-5 ${paymentOption === 'till' ? 'text-purple-600' : 'text-gray-400'}`} />
                       </div>
@@ -2302,7 +2360,15 @@ export default function AdminDashboard() {
                       <span className="text-xs text-gray-500">Full</span>
                     </button>
 
-                    <button type="button" onClick={() => { setPaymentOption('partial'); setAmountPaid(""); setPartialPayment({ cash: "", bank_transfer: "", till: "" }); }} className={`p-3 rounded-lg border-2 flex flex-col items-center justify-center gap-1 transition-all text-xs ${paymentOption === 'partial' ? 'border-yellow-500 bg-yellow-50' : 'border-gray-200 hover:border-yellow-300 hover:bg-yellow-25'}`}>
+                    <button type="button" onClick={() => { setPaymentOption('mpesa'); setAmountPaid(calculateTotalAmount().toFixed(2)); setPartialPayment({ cash: "", bank_transfer: "", till: "", mpesa: "" }); }} className={`p-3 rounded-lg border-2 flex flex-col items-center justify-center gap-1 transition-all text-xs ${paymentOption === 'mpesa' ? 'border-green-500 bg-green-50' : 'border-gray-200 hover:border-green-300 hover:bg-green-25'}`}>
+                      <div className={`p-2 rounded-full ${paymentOption === 'mpesa' ? 'bg-green-100' : 'bg-gray-100'}`}>
+                        <Smartphone className={`w-5 h-5 ${paymentOption === 'mpesa' ? 'text-green-600' : 'text-gray-400'}`} />
+                      </div>
+                      <span className={`font-medium ${paymentOption === 'mpesa' ? 'text-green-700' : 'text-gray-700'}`}>M-PESA</span>
+                      <span className="text-xs text-gray-500">Full</span>
+                    </button>
+
+                    <button type="button" onClick={() => { setPaymentOption('partial'); setAmountPaid(""); setPartialPayment({ cash: "", bank_transfer: "", till: "", mpesa: "" }); }} className={`p-3 rounded-lg border-2 flex flex-col items-center justify-center gap-1 transition-all text-xs ${paymentOption === 'partial' ? 'border-yellow-500 bg-yellow-50' : 'border-gray-200 hover:border-yellow-300 hover:bg-yellow-25'}`}>
                       <div className={`p-2 rounded-full ${paymentOption === 'partial' ? 'bg-yellow-100' : 'bg-gray-100'}`}>
                         <Wallet className={`w-5 h-5 ${paymentOption === 'partial' ? 'text-yellow-600' : 'text-gray-400'}`} />
                       </div>
@@ -2310,7 +2376,7 @@ export default function AdminDashboard() {
                       <span className="text-xs text-gray-500">Pay some</span>
                     </button>
 
-                    <button type="button" onClick={() => { setPaymentOption('credit'); setAmountPaid("0"); setPartialPayment({ cash: "", bank_transfer: "", till: "" }); }} className={`p-3 rounded-lg border-2 flex flex-col items-center justify-center gap-1 transition-all text-xs ${paymentOption === 'credit' ? 'border-red-500 bg-red-50' : 'border-gray-200 hover:border-red-300 hover:bg-red-25'}`}>
+                    <button type="button" onClick={() => { setPaymentOption('credit'); setAmountPaid("0"); setPartialPayment({ cash: "", bank_transfer: "", till: "", mpesa: "" }); }} className={`p-3 rounded-lg border-2 flex flex-col items-center justify-center gap-1 transition-all text-xs ${paymentOption === 'credit' ? 'border-red-500 bg-red-50' : 'border-gray-200 hover:border-red-300 hover:bg-red-25'}`}>
                       <div className={`p-2 rounded-full ${paymentOption === 'credit' ? 'bg-red-100' : 'bg-gray-100'}`}>
                         <CreditCard className={`w-5 h-5 ${paymentOption === 'credit' ? 'text-red-600' : 'text-gray-400'}`} />
                       </div>
@@ -2347,6 +2413,14 @@ export default function AdminDashboard() {
                           </div>
                         </div>
 
+                        <div>
+                          <label className="block text-xs font-medium text-black mb-1">M-PESA Amount (KSh)</label>
+                          <div className="relative">
+                            <span className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-500 text-sm">KSh</span>
+                            <input type="number" min="0" step="0.01" value={partialPayment.mpesa} onChange={(e) => { const newValue = e.target.value; setPartialPayment({...partialPayment, mpesa: newValue}); const total = Object.values({...partialPayment, mpesa: newValue}).reduce((sum, val) => sum + (parseFloat(val) || 0), 0); setAmountPaid(total.toFixed(2)); }} placeholder="0.00" className="w-full pl-10 pr-3 py-2 border border-yellow-300 rounded-lg focus:border-yellow-500 focus:ring-2 focus:ring-yellow-200 text-black placeholder-gray-400 text-sm" />
+                          </div>
+                        </div>
+
                         <div className="pt-2 border-t border-yellow-300">
                           <div className="grid grid-cols-2 gap-2 text-xs">
                             <div className="text-black">Total Partial Payment:</div>
@@ -2362,7 +2436,7 @@ export default function AdminDashboard() {
                             {Object.entries(partialPayment).map(([method, amount]) => {
                               const numAmount = parseFloat(amount || "0");
                               if (numAmount > 0) {
-                                const methodName = method === 'bank_transfer' ? 'Bank Transfer' : method === 'cash' ? 'Cash' : 'Till';
+                                const methodName = method === 'bank_transfer' ? 'Bank Transfer' : method === 'cash' ? 'Cash' : method === 'mpesa' ? 'M-PESA' : 'Till';
                                 return (
                                   <div key={method} className="flex justify-between text-xs">
                                     <span className="text-gray-700">{methodName}:</span>
@@ -2398,15 +2472,15 @@ export default function AdminDashboard() {
                     
                     <div className="flex justify-between items-center">
                       <span className="text-black">Payment Method:</span>
-                      <span className={`font-bold ${paymentOption === 'cash' ? 'text-blue-600' : paymentOption === 'bank_transfer' ? 'text-green-600' : paymentOption === 'till' ? 'text-purple-600' : paymentOption === 'partial' ? 'text-yellow-600' : 'text-red-600'}`}>
-                        {paymentOption === 'cash' ? 'Cash' : paymentOption === 'bank_transfer' ? 'Bank Transfer' : paymentOption === 'till' ? 'Till' : paymentOption === 'partial' ? 'Partial Payment' : 'Credit'}
+                      <span className={`font-bold ${paymentOption === 'cash' ? 'text-blue-600' : paymentOption === 'bank_transfer' ? 'text-green-600' : paymentOption === 'till' ? 'text-purple-600' : paymentOption === 'mpesa' ? 'text-green-600' : paymentOption === 'partial' ? 'text-yellow-600' : 'text-red-600'}`}>
+                        {paymentOption === 'cash' ? 'Cash' : paymentOption === 'bank_transfer' ? 'Bank Transfer' : paymentOption === 'till' ? 'Till' : paymentOption === 'mpesa' ? 'M-PESA' : paymentOption === 'partial' ? 'Partial Payment' : 'Credit'}
                       </span>
                     </div>
                     
                     <div className="flex justify-between items-center">
                       <span className="text-black">Amount Paid:</span>
                       <span className={`font-bold ${paymentOption === 'partial' || paymentOption === 'credit' ? 'text-gray-600' : 'text-green-600'}`}>
-                        {paymentOption === 'cash' || paymentOption === 'bank_transfer' || paymentOption === 'till' ? `KSh ${calculateTotalAmount().toLocaleString()}` : paymentOption === 'partial' ? `KSh ${(parseFloat(amountPaid) || 0).toLocaleString()}` : 'KSh 0'}
+                        {paymentOption === 'cash' || paymentOption === 'bank_transfer' || paymentOption === 'till' || paymentOption === 'mpesa' ? `KSh ${calculateTotalAmount().toLocaleString()}` : paymentOption === 'partial' ? `KSh ${(parseFloat(amountPaid) || 0).toLocaleString()}` : 'KSh 0'}
                       </span>
                     </div>
                     
@@ -2423,7 +2497,7 @@ export default function AdminDashboard() {
                         {Object.entries(partialPayment).map(([method, amount]) => {
                           const numAmount = parseFloat(amount || "0");
                           if (numAmount > 0) {
-                            const methodName = method === 'bank_transfer' ? 'Bank Transfer' : method === 'cash' ? 'Cash' : 'Till';
+                            const methodName = method === 'bank_transfer' ? 'Bank Transfer' : method === 'cash' ? 'Cash' : method === 'mpesa' ? 'M-PESA' : 'Till';
                             return (
                               <div key={method} className="flex justify-between text-xs pl-2">
                                 <span className="text-gray-600">{methodName}:</span>
@@ -2459,8 +2533,10 @@ export default function AdminDashboard() {
                     setStockError(null);
                     setOptimisticSale(null);
                     setOptimisticProducts([]);
-                    setPartialPayment({ cash: "", bank_transfer: "", till: "" });
+                    setPartialPayment({ cash: "", bank_transfer: "", till: "", mpesa: "" });
                     setResponsibleStaffId(null);
+                    setCreatedSaleId(null);
+                    if (closeModalTimeoutRef.current) clearTimeout(closeModalTimeoutRef.current);
                   }}
                   type="button"
                   disabled={isCreating}
@@ -2468,6 +2544,18 @@ export default function AdminDashboard() {
                 >
                   Cancel
                 </button>
+                {createdSaleId && (
+                  <button
+                    onClick={() => {
+                      window.open(`/api/receipt/${createdSaleId}`, '_blank');
+                    }}
+                    type="button"
+                    className="px-3 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 font-medium transition-all flex items-center justify-center gap-1.5 shadow text-sm"
+                  >
+                    <FileText className="w-4 h-4" />
+                    Receipt
+                  </button>
+                )}
                 <button
                   ref={createSaleButtonRef}
                   onClick={handleCreateSaleOptimistic}

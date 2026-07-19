@@ -4,10 +4,13 @@ import React, { useEffect, useState, useCallback } from "react";
 import { 
   Download, Filter, X, User, Package, 
   TrendingUp, TrendingDown, Users, Clock, ChevronDown, ChevronUp, AlertCircle,
-  Moon, Sun, RefreshCw, Search
+  Moon, Sun, RefreshCw, Search, Home, ShoppingCart, Receipt, BarChart3,
+  Settings, LogOut, Menu, LayoutDashboard
 } from "lucide-react";
 import { auth } from "@/lib/firebase";
 import { onAuthStateChanged } from "firebase/auth";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
 
 // ==================== INTERFACES ====================
 
@@ -82,6 +85,19 @@ interface StaffPerformance {
   topProduct: string;
 }
 
+interface ProductSaleDetail {
+  saleId: number;
+  saleDate: string;
+  customerName: string;
+  customerId: number;
+  quantity: number;
+  price: number;
+  total: number;
+  staffName: string;
+  staffId: number;
+  status: string;
+}
+
 // ==================== THEME CONTEXT ====================
 const ThemeContext = React.createContext({ theme: 'light', toggleTheme: () => {} });
 
@@ -89,8 +105,64 @@ function useTheme() {
   return React.useContext(ThemeContext);
 }
 
+// ==================== NAVIGATION COMPONENT ====================
+function NavigationBar({ activePage }: { activePage: string }) {
+  const router = useRouter();
+  
+  const navItems = [
+    { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, path: '/admin' },
+    { id: 'products-sold', label: 'Products Sold', icon: Package, path: '/admin/productssoldreport' },
+    { id: 'restock', label: 'Restock', icon: ShoppingCart, path: '/admin/restock' },
+    { id: 'reconcilliation', label: 'Sales', icon: Receipt, path: '/admin/reconciliation' },
+    { id: 'reports', label: 'Reports', icon: BarChart3, path: '/admin/reports' },
+  ];
+
+  return (
+    <nav className="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 shadow-sm sticky top-0 z-50">
+      <div className="px-4 max-w-7xl mx-auto">
+        <div className="flex items-center justify-between h-14">
+          <div className="flex items-center space-x-1 overflow-x-auto">
+            {navItems.map((item) => {
+              const Icon = item.icon;
+              const isActive = activePage === item.id;
+              return (
+                <button
+                  key={item.id}
+                  onClick={() => router.push(item.path)}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors whitespace-nowrap ${
+                    isActive 
+                      ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300' 
+                      : 'text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700'
+                  }`}
+                >
+                  <Icon size={16} />
+                  {item.label}
+                </button>
+              );
+            })}
+          </div>
+          
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => {
+                auth.signOut();
+                router.push('/login');
+              }}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
+            >
+              <LogOut size={16} />
+              <span className="hidden sm:inline">Logout</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </nav>
+  );
+}
+
 export default function ProductsSoldReportPage() {
   const [theme, setTheme] = useState<'light' | 'dark'>('light');
+  const router = useRouter();
   
   // Data states
   const [sales, setSales] = useState<SaleWithItems[]>([]);
@@ -114,6 +186,9 @@ export default function ProductsSoldReportPage() {
   // UI states
   const [expandedProduct, setExpandedProduct] = useState<number | null>(null);
   const [showFilters, setShowFilters] = useState(false);
+  const [selectedProductDetails, setSelectedProductDetails] = useState<ProductSaleDetail[]>([]);
+  const [showProductDetailModal, setShowProductDetailModal] = useState(false);
+  const [selectedProductName, setSelectedProductName] = useState("");
   
   // Available categories
   const [categories, setCategories] = useState<string[]>([]);
@@ -177,11 +252,8 @@ export default function ProductsSoldReportPage() {
 
   // Helper to check if a sale is associated with a staff member
   const isSaleAssociatedWithStaff = (sale: SaleWithItems, staffId: number): boolean => {
-    // Check assigned staff
     if (sale.assignedStaff?.id === staffId) return true;
-    // Check created by (if createdById matches staff ID)
     if (sale.createdById === staffId) return true;
-    // Check if any sale item has staff inventory matching this staff
     for (const item of sale.saleitems) {
       if (item.staffInventory?.staff?.id === staffId) return true;
       if (item.staffInventory?.staffId === staffId) return true;
@@ -189,7 +261,7 @@ export default function ProductsSoldReportPage() {
     return false;
   };
 
-  // Get all staff associated with a sale (for display)
+  // Get all staff associated with a sale
   const getSaleStaffNames = (sale: SaleWithItems, staffMap: Map<number, Staff>): string[] => {
     const staffIds = new Set<number>();
     const names: string[] = [];
@@ -294,6 +366,44 @@ export default function ProductsSoldReportPage() {
     return { start, end };
   }, [dateRange, customStartDate, customEndDate]);
 
+  // Get detailed sales for a specific product
+  const getProductSaleDetails = (productId: number): ProductSaleDetail[] => {
+    const { start, end } = getDateRange();
+    const staffMap = new Map<number, Staff>();
+    for (const staff of staffList) {
+      staffMap.set(staff.id, staff);
+    }
+    
+    const details: ProductSaleDetail[] = [];
+    
+    const filteredSales = sales.filter(sale => {
+      const saleDate = new Date(sale.date);
+      return saleDate >= start && saleDate <= end;
+    });
+    
+    for (const sale of filteredSales) {
+      for (const item of sale.saleitems) {
+        if (item.product?.id === productId) {
+          const staffNames = getSaleStaffNames(sale, staffMap);
+          details.push({
+            saleId: sale.id,
+            saleDate: sale.date,
+            customerName: sale.customer?.name || 'Unknown Customer',
+            customerId: sale.customer?.id || 0,
+            quantity: item.quantity,
+            price: item.price,
+            total: item.total,
+            staffName: staffNames.length > 0 ? staffNames.join(', ') : 'Unassigned',
+            staffId: staffNames.length > 0 ? sale.assignedStaff?.id || 0 : 0,
+            status: sale.status
+          });
+        }
+      }
+    }
+    
+    return details.sort((a, b) => new Date(b.saleDate).getTime() - new Date(a.saleDate).getTime());
+  };
+
   // Process sales data into product report
   const processReportData = useCallback(() => {
     const { start, end } = getDateRange();
@@ -310,7 +420,7 @@ export default function ProductsSoldReportPage() {
       return saleDate >= start && saleDate <= end;
     });
     
-    // Further filter by staff (using comprehensive staff association check)
+    // Further filter by staff
     let finalSales = filteredSales;
     if (selectedStaffId) {
       const staffIdNum = Number(selectedStaffId);
@@ -322,8 +432,7 @@ export default function ProductsSoldReportPage() {
       finalSales = finalSales.filter(sale => sale.customer?.id === Number(selectedCustomerId));
     }
     
-    // Debug info
-    setDebugInfo(`Total sales in date range: ${filteredSales.length}, After staff filter: ${finalSales.length}, Staff ID filter: ${selectedStaffId || "none"}`);
+    setDebugInfo(`Total sales in date range: ${filteredSales.length}, After staff filter: ${finalSales.length}`);
     
     // Process products sold
     const productMap = new Map<number, ProductSoldReport>();
@@ -334,7 +443,7 @@ export default function ProductsSoldReportPage() {
       
       for (const item of sale.saleitems) {
         const product = item.product;
-        if (!product) continue; // Skip if product is missing
+        if (!product) continue;
         
         const existing = productMap.get(product.id);
         
@@ -342,7 +451,6 @@ export default function ProductsSoldReportPage() {
           existing.totalQuantitySold += item.quantity;
           existing.totalRevenue += item.total;
           existing.saleCount++;
-          // Add unique staff names
           for (const staffName of staffNamesForSale) {
             if (!existing.staffNames.includes(staffName)) {
               existing.staffNames.push(staffName);
@@ -353,7 +461,6 @@ export default function ProductsSoldReportPage() {
               existing.staffIds.push(staffId);
             }
           }
-          // Update last sold date if newer
           const saleDate = new Date(sale.date);
           if (saleDate > new Date(existing.lastSoldDate)) {
             existing.lastSoldDate = sale.date;
@@ -395,12 +502,10 @@ export default function ProductsSoldReportPage() {
     // Convert to array and apply filters
     let reportArray = Array.from(productMap.values());
     
-    // Filter by category
     if (selectedCategory) {
       reportArray = reportArray.filter(p => p.productCategory === selectedCategory);
     }
     
-    // Filter by search term
     if (searchProduct) {
       const searchLower = searchProduct.toLowerCase();
       reportArray = reportArray.filter(p => 
@@ -437,7 +542,6 @@ export default function ProductsSoldReportPage() {
     const uniqueProducts = reportArray.length;
     const totalTransactions = finalSales.length;
     
-    // Find top product
     let topProduct = "";
     let topProductRevenue = 0;
     for (const p of reportArray) {
@@ -494,7 +598,6 @@ export default function ProductsSoldReportPage() {
       }
     }
     
-    // Find top product for each staff
     for (const [staffId, perf] of staffPerfMap) {
       let maxRevenue = 0;
       let topProductName = "";
@@ -534,12 +637,10 @@ export default function ProductsSoldReportPage() {
         return;
       }
       
-      // Fetch sales with items and staff - include ALL sales
       const salesRes = await fetch("/api/sales?includeDeleted=false&limit=1000");
       if (!salesRes.ok) throw new Error("Failed to fetch sales");
       const salesData = await salesRes.json();
       
-      // Fetch staff
       const staffRes = await fetch("/api/staff");
       let staffData: Staff[] = [];
       if (staffRes.ok) {
@@ -548,7 +649,6 @@ export default function ProductsSoldReportPage() {
         setStaffList(staffData);
       }
       
-      // Fetch customers
       const customersRes = await fetch("/api/customers");
       let customersData: Customer[] = [];
       if (customersRes.ok) {
@@ -557,13 +657,11 @@ export default function ProductsSoldReportPage() {
         setCustomers(customersData);
       }
       
-      // Create staff map for lookup
       const staffMap = new Map<number, Staff>();
       for (const staff of staffData) {
         staffMap.set(staff.id, staff);
       }
       
-      // Process sales to ensure proper structure
       const processedSales: SaleWithItems[] = (Array.isArray(salesData) ? salesData : (salesData.sales || salesData.data || []))
         .filter((s: any) => !s.isDeleted)
         .map((sale: any) => ({
@@ -587,7 +685,6 @@ export default function ProductsSoldReportPage() {
       
       setSales(processedSales);
       
-      // Extract unique categories
       const uniqueCategories = new Set<string>();
       for (const sale of processedSales) {
         for (const item of sale.saleitems) {
@@ -597,9 +694,6 @@ export default function ProductsSoldReportPage() {
         }
       }
       setCategories(Array.from(uniqueCategories).sort());
-      
-      console.log("Total sales loaded:", processedSales.length);
-      console.log("Staff available:", staffData.length);
       
     } catch (err: any) {
       console.error("Error fetching data:", err);
@@ -627,6 +721,14 @@ export default function ProductsSoldReportPage() {
       processReportData();
     }
   }, [sales, processReportData, staffList]);
+  
+  // Handle product click to show details
+  const handleProductClick = (productId: number, productName: string) => {
+    const details = getProductSaleDetails(productId);
+    setSelectedProductDetails(details);
+    setSelectedProductName(productName);
+    setShowProductDetailModal(true);
+  };
   
   // ==================== EXPORT TO CSV ====================
   const exportToCSV = () => {
@@ -680,15 +782,18 @@ export default function ProductsSoldReportPage() {
     <ThemeContext.Provider value={{ theme, toggleTheme }}>
       <div className={`min-h-screen transition-colors duration-200 ${theme === 'dark' ? 'dark bg-gray-900' : 'bg-gray-50'}`}>
         
-        {/* Theme Toggle */}
+        {/* Navigation Bar - Fixed position with high z-index */}
+        <NavigationBar activePage="products-sold" />
+        
+        {/* Theme Toggle - Moved to a better position with higher z-index */}
         <button
           onClick={toggleTheme}
-          className="fixed bottom-4 right-4 z-50 p-2.5 rounded-full bg-white dark:bg-gray-800 shadow-lg border border-gray-200 dark:border-gray-700 hover:shadow-xl transition-all"
+          className="fixed bottom-6 right-6 z-50 p-3 rounded-full bg-white dark:bg-gray-800 shadow-lg border border-gray-200 dark:border-gray-700 hover:shadow-xl transition-all"
         >
-          {theme === 'light' ? <Moon size={18} className="text-gray-700" /> : <Sun size={18} className="text-yellow-500" />}
+          {theme === 'light' ? <Moon size={20} className="text-gray-700" /> : <Sun size={20} className="text-yellow-500" />}
         </button>
         
-        <div className="p-3 sm:p-6 max-w-7xl mx-auto">
+        <div className="p-3 sm:p-6 max-w-7xl mx-auto pt-4">
           
           {/* Header */}
           <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-4 mb-4">
@@ -926,15 +1031,20 @@ export default function ProductsSoldReportPage() {
                         <th className="text-right p-3 font-semibold">Revenue</th>
                         <th className="text-center p-3 font-semibold">Avg Price</th>
                         <th className="text-center p-3 font-semibold">Sales</th>
-                        <th className="text-center p-3 font-semibold">Staff</th>
+                        <th className="text-center p-3 font-semibold">Customers</th>
                         <th className="text-center p-3 font-semibold"></th>
                       </tr>
                     </thead>
                     <tbody className="divide-y dark:divide-gray-700">
                       {reportData.map((product) => (
                         <React.Fragment key={product.productId}>
-                          <tr className="hover:bg-gray-50 dark:hover:bg-gray-700/50 cursor-pointer" onClick={() => setExpandedProduct(expandedProduct === product.productId ? null : product.productId)}>
-                            <td className="p-3 font-medium text-gray-900 dark:text-white">{product.productName}</td>
+                          <tr 
+                            className="hover:bg-gray-50 dark:hover:bg-gray-700/50 cursor-pointer" 
+                            onClick={() => handleProductClick(product.productId, product.productName)}
+                          >
+                            <td className="p-3 font-medium text-blue-600 dark:text-blue-400 hover:underline">
+                              {product.productName}
+                            </td>
                             <td className="p-3 text-center">
                               <span className="text-xs px-2 py-0.5 rounded-full bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400">
                                 {product.productCategory}
@@ -949,46 +1059,14 @@ export default function ProductsSoldReportPage() {
                               </span>
                             </td>
                             <td className="p-3 text-center">
-                              <div className="flex flex-wrap gap-1 justify-center">
-                                {product.staffNames.slice(0, 2).map((name, idx) => (
-                                  <span key={idx} className="text-xs px-1.5 py-0.5 rounded-full bg-indigo-100 text-indigo-700">
-                                    {name.split(' ')[0]}
-                                  </span>
-                                ))}
-                                {product.staffNames.length > 2 && (
-                                  <span className="text-xs text-gray-500">+{product.staffNames.length - 2}</span>
-                                )}
-                              </div>
+                              <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700">
+                                {product.uniqueCustomers} customers
+                              </span>
                             </td>
                             <td className="p-3 text-center">
-                              {expandedProduct === product.productId ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+                              <span className="text-xs text-blue-600 hover:underline">View Details</span>
                             </td>
                           </tr>
-                          {expandedProduct === product.productId && (
-                            <tr className="bg-gray-50 dark:bg-gray-800/50">
-                              <td colSpan={8} className="p-4">
-                                <div className="space-y-2">
-                                  <div className="text-xs font-medium text-gray-700 mb-2">Product Details</div>
-                                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                                    <div><span className="text-gray-500">Total Quantity:</span> <span className="font-semibold">{product.totalQuantitySold} units</span></div>
-                                    <div><span className="text-gray-500">Total Revenue:</span> <span className="font-semibold text-green-600">KSh {formatCurrency(product.totalRevenue)}</span></div>
-                                    <div><span className="text-gray-500">Unique Customers:</span> <span className="font-semibold">{product.uniqueCustomers}</span></div>
-                                    <div><span className="text-gray-500">Last Sold:</span> <span className="font-semibold">{formatDate(product.lastSoldDate)}</span></div>
-                                  </div>
-                                  <div className="mt-2">
-                                    <div className="text-xs text-gray-500 mb-1">Staff who sold this product:</div>
-                                    <div className="flex flex-wrap gap-1">
-                                      {product.staffNames.map((name, idx) => (
-                                        <span key={idx} className="text-xs px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-700">
-                                          {name}
-                                        </span>
-                                      ))}
-                                    </div>
-                                  </div>
-                                </div>
-                              </td>
-                            </tr>
-                          )}
                         </React.Fragment>
                       ))}
                     </tbody>
@@ -1049,6 +1127,113 @@ export default function ProductsSoldReportPage() {
           
         </div>
       </div>
+
+      {/* Product Detail Modal */}
+      {showProductDetailModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white dark:bg-gray-800 rounded-xl max-w-4xl w-full max-h-[90vh] overflow-y-auto shadow-2xl">
+            <div className="sticky top-0 bg-gradient-to-r from-blue-600 to-indigo-600 text-white p-4 rounded-t-xl flex justify-between items-center">
+              <div>
+                <h2 className="text-xl font-bold">{selectedProductName}</h2>
+                <p className="text-blue-100 text-sm">Product Sale Details</p>
+              </div>
+              <button 
+                onClick={() => setShowProductDetailModal(false)}
+                className="text-white hover:bg-white/20 p-1.5 rounded-lg transition-colors"
+              >
+                <X size={24} />
+              </button>
+            </div>
+            
+            <div className="p-6">
+              {/* Summary stats for this product */}
+              {selectedProductDetails.length > 0 && (
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
+                  <div className="bg-blue-50 dark:bg-blue-900/20 rounded-lg p-3 text-center">
+                    <div className="text-xs text-gray-500">Total Sold</div>
+                    <div className="text-xl font-bold text-blue-600">
+                      {selectedProductDetails.reduce((sum, d) => sum + d.quantity, 0)}
+                    </div>
+                  </div>
+                  <div className="bg-green-50 dark:bg-green-900/20 rounded-lg p-3 text-center">
+                    <div className="text-xs text-gray-500">Total Revenue</div>
+                    <div className="text-xl font-bold text-green-600">
+                      KSh {formatCurrency(selectedProductDetails.reduce((sum, d) => sum + d.total, 0))}
+                    </div>
+                  </div>
+                  <div className="bg-purple-50 dark:bg-purple-900/20 rounded-lg p-3 text-center">
+                    <div className="text-xs text-gray-500">Unique Customers</div>
+                    <div className="text-xl font-bold text-purple-600">
+                      {new Set(selectedProductDetails.map(d => d.customerId)).size}
+                    </div>
+                  </div>
+                  <div className="bg-yellow-50 dark:bg-yellow-900/20 rounded-lg p-3 text-center">
+                    <div className="text-xs text-gray-500">Transactions</div>
+                    <div className="text-xl font-bold text-yellow-600">
+                      {selectedProductDetails.length}
+                    </div>
+                  </div>
+                </div>
+              )}
+              
+              {/* Detailed sales table */}
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead className="bg-gray-50 dark:bg-gray-700/50 border-b dark:border-gray-700">
+                    <tr>
+                      <th className="text-left p-2 font-semibold">Sale ID</th>
+                      <th className="text-left p-2 font-semibold">Date</th>
+                      <th className="text-left p-2 font-semibold">Customer</th>
+                      <th className="text-center p-2 font-semibold">Qty</th>
+                      <th className="text-right p-2 font-semibold">Price</th>
+                      <th className="text-right p-2 font-semibold">Total</th>
+                      <th className="text-left p-2 font-semibold">Sold By</th>
+                      <th className="text-center p-2 font-semibold">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y dark:divide-gray-700">
+                    {selectedProductDetails.map((detail, index) => (
+                      <tr key={index} className="hover:bg-gray-50 dark:hover:bg-gray-700/50">
+                        <td className="p-2 font-medium text-blue-600">#{detail.saleId}</td>
+                        <td className="p-2 text-gray-600">{formatDate(detail.saleDate)}</td>
+                        <td className="p-2 font-medium">{detail.customerName}</td>
+                        <td className="p-2 text-center font-semibold">{detail.quantity}</td>
+                        <td className="p-2 text-right">KSh {formatCurrency(detail.price)}</td>
+                        <td className="p-2 text-right font-semibold text-green-600">KSh {formatCurrency(detail.total)}</td>
+                        <td className="p-2 text-sm text-gray-600">{detail.staffName}</td>
+                        <td className="p-2 text-center">
+                          <span className={`text-xs px-2 py-0.5 rounded-full ${
+                            detail.status === 'PAID' ? 'bg-green-100 text-green-700' :
+                            detail.status === 'PARTIAL' ? 'bg-yellow-100 text-yellow-700' :
+                            'bg-red-100 text-red-700'
+                          }`}>
+                            {detail.status}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              
+              {selectedProductDetails.length === 0 && (
+                <div className="text-center py-8 text-gray-500">
+                  No sales found for this product in the selected period
+                </div>
+              )}
+              
+              <div className="mt-4 flex justify-end">
+                <button
+                  onClick={() => setShowProductDetailModal(false)}
+                  className="px-4 py-2 bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </ThemeContext.Provider>
   );
 }
