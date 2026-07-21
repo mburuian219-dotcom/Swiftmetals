@@ -5,26 +5,30 @@ import prisma from "@/lib/prisma";
 // ==================== HELPER FUNCTIONS ====================
 
 const calculateCreditorBalance = async (creditorId: number) => {
+  // Get creditor with restocks
   const creditor = await prisma.creditor.findUnique({
     where: { id: creditorId },
     include: {
       restocks: {
         select: { totalCost: true },
       },
-      payments: {
-        where: {
-          paymentType: 'creditor',
-          status: 'COMPLETED',
-        },
-        select: { amount: true },
-      },
     },
   });
 
   if (!creditor) return null;
 
+  // Get payments separately
+  const payments = await prisma.payment.findMany({
+    where: {
+      creditorId: creditorId,
+      paymentType: 'creditor',
+      status: 'COMPLETED',
+    },
+    select: { amount: true },
+  });
+
   const totalOwed = creditor.restocks.reduce((sum: number, r: any) => sum + Number(r.totalCost), 0);
-  const totalPaid = creditor.payments.reduce((sum: number, p: any) => sum + Number(p.amount), 0);
+  const totalPaid = payments.reduce((sum: number, p: any) => sum + Number(p.amount), 0);
   
   return {
     totalOwed,
@@ -59,7 +63,7 @@ export async function GET(req: NextRequest) {
       );
     }
 
-    // Build where clause
+    // Build where clause for payments
     const where: any = {
       creditorId: creditorIdNum,
       paymentType: 'creditor',
@@ -72,7 +76,7 @@ export async function GET(req: NextRequest) {
       where.paidAt = { ...where.paidAt, lte: new Date(endDate) };
     }
 
-    // Fetch creditor with payments
+    // Fetch creditor and payments separately
     const [creditor, payments, totalCount] = await Promise.all([
       prisma.creditor.findUnique({
         where: { id: creditorIdNum },
@@ -316,10 +320,9 @@ export async function POST(req: NextRequest) {
     } catch (ledgerError) {
       console.error('Error creating cash ledger entry:', ledgerError);
       // Don't fail the whole request if cash ledger fails
-      // You can log this for manual reconciliation
     }
 
-    // Fetch updated creditor with all data
+    // Fetch updated creditor with all data - get payments separately
     const updatedCreditorFull = await prisma.creditor.findUnique({
       where: { id: creditorIdNum },
       include: {
@@ -336,18 +339,21 @@ export async function POST(req: NextRequest) {
           },
           orderBy: { createdAt: 'desc' },
         },
-        payments: {
-          where: {
-            paymentType: 'creditor',
-          },
-          orderBy: { paidAt: 'desc' },
-        },
       },
+    });
+
+    // Get payments separately
+    const allPayments = await prisma.payment.findMany({
+      where: {
+        creditorId: creditorIdNum,
+        paymentType: 'creditor',
+      },
+      orderBy: { paidAt: 'desc' },
     });
 
     // Calculate updated totals
     const totalOwed = updatedCreditorFull?.restocks.reduce((sum: number, r: any) => sum + Number(r.totalCost), 0) || 0;
-    const totalPaid = updatedCreditorFull?.payments.reduce((sum: number, p: any) => sum + Number(p.amount), 0) || 0;
+    const totalPaid = allPayments.reduce((sum: number, p: any) => sum + Number(p.amount), 0) || 0;
 
     return NextResponse.json({
       success: true,
@@ -453,19 +459,12 @@ export async function DELETE(req: NextRequest) {
         },
       });
 
-      // Recalculate creditor's balance
+      // Recalculate creditor's balance - get data separately
       const creditor = await tx.creditor.findUnique({
         where: { id: payment.creditorId },
         include: {
           restocks: {
             select: { totalCost: true },
-          },
-          payments: {
-            where: {
-              paymentType: 'creditor',
-              status: 'COMPLETED',
-            },
-            select: { amount: true },
           },
         },
       });
@@ -474,8 +473,18 @@ export async function DELETE(req: NextRequest) {
         throw new Error('Creditor not found');
       }
 
+      // Get payments separately
+      const remainingPayments = await tx.payment.findMany({
+        where: {
+          creditorId: payment.creditorId,
+          paymentType: 'creditor',
+          status: 'COMPLETED',
+        },
+        select: { amount: true },
+      });
+
       const totalOwed = creditor.restocks.reduce((sum: number, r: any) => sum + Number(r.totalCost), 0);
-      const totalPaid = creditor.payments.reduce((sum: number, p: any) => sum + Number(p.amount), 0);
+      const totalPaid = remainingPayments.reduce((sum: number, p: any) => sum + Number(p.amount), 0);
       const newBalance = Math.max(0, totalOwed - totalPaid);
 
       // Update creditor's totalOwed
