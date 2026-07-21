@@ -2,7 +2,84 @@
 import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 
+// ================== HELPER: Get Product Cost at Date ==================
+
+async function getProductCostAtDate(productId: number, saleDate: Date): Promise<number> {
+  try {
+    // Try to get the cost that was effective at the given date
+    const costHistory = await prisma.productCostHistory.findFirst({
+      where: {
+        productId: productId,
+        effectiveDate: {
+          lte: saleDate, // Cost effective on or before the sale date
+        },
+      },
+      orderBy: {
+        effectiveDate: 'desc', // Get the most recent cost before the sale
+      },
+      select: { costPrice: true },
+    });
+
+    if (costHistory) {
+      return costHistory.costPrice;
+    }
+
+    // Fallback to current production cost if no history exists
+    const product = await prisma.product.findUnique({
+      where: { id: productId },
+      select: { productionCost: true },
+    });
+
+    return product?.productionCost || 0;
+  } catch (error) {
+    console.error(`❌ Error getting cost for product ${productId} at date:`, error);
+    return 0;
+  }
+}
+
+// ================== HELPER: Record Product Cost History ==================
+
+async function recordProductCostHistory(
+  productId: number,
+  costPrice: number,
+  notes?: string
+) {
+  try {
+    // Check if we already have a record for today
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const existing = await prisma.productCostHistory.findFirst({
+      where: {
+        productId,
+        effectiveDate: {
+          gte: today,
+          lt: new Date(today.getTime() + 24 * 60 * 60 * 1000),
+        },
+      },
+    });
+
+    // Only create a new record if the cost has changed
+    if (!existing || Math.abs(existing.costPrice - costPrice) > 0.001) {
+      return await prisma.productCostHistory.create({
+        data: {
+          productId,
+          costPrice,
+          effectiveDate: new Date(),
+          notes: notes || `Cost updated to ${costPrice}`,
+        },
+      });
+    }
+
+    return existing;
+  } catch (error) {
+    console.error(`❌ Error recording cost history for product ${productId}:`, error);
+    return null;
+  }
+}
+
 // ================== Type Definitions ==================
+
 interface StaffRecord {
   id: number;
   name: string;
@@ -30,6 +107,8 @@ interface StaffDeductionResult {
   quantityDeducted: number;
   staffInventoryId: number | null;
   message: string;
+  costAtSale?: number;
+  totalCost?: number;
 }
 
 interface MainStockDeductionResult {
@@ -40,28 +119,28 @@ interface MainStockDeductionResult {
   previousQuantity: number;
   newQuantity: number;
   message: string;
+  costAtSale?: number;
+  totalCost?: number;
 }
 
-// Helper to normalize email
+// ================== Helper Functions ==================
+
 function normalizeEmail(email: string): string {
   if (!email) return '';
   return email.trim().toLowerCase();
 }
 
-// Check if string is a valid email
 function isValidEmail(str: string): boolean {
   if (!str) return false;
   const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
   return emailRegex.test(str);
 }
 
-// Check if string is Firebase UID
 function isFirebaseUid(str: string): boolean {
   if (!str) return false;
   return /^[a-zA-Z][a-zA-Z0-9]{20,}$/.test(str) && !str.includes('@');
 }
 
-// Find staff by email (case-insensitive)
 async function findStaffByEmailCaseInsensitive(email: string): Promise<StaffRecord | null> {
   if (!email || !isValidEmail(email)) return null;
   
@@ -125,12 +204,10 @@ async function findOrCreateStaff(userEmail: string, userName?: string): Promise<
   }
 }
 
-// Get current week range (Monday to Sunday)
 function getCurrentWeekRange() {
   const now = new Date();
   const dayOfWeek = now.getDay();
   
-  // Calculate Monday of current week
   let diffToMonday = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
   
   const weekStart = new Date(now);
@@ -144,9 +221,8 @@ function getCurrentWeekRange() {
   return { weekStart, weekEnd };
 }
 
-// ================== CORRECTED AVAILABILITY CHECK ==================
+// ================== Availability Check ==================
 
-// Check product availability for staff
 async function checkProductAvailabilityForStaff(
   productId: number, 
   currentStaffId: number, 
@@ -155,7 +231,6 @@ async function checkProductAvailabilityForStaff(
   weekEnd: Date
 ): Promise<AvailabilityCheckResult> {
   try {
-    // Get product info
     const product = await prisma.product.findUnique({
       where: { id: productId },
       select: { name: true }
@@ -163,7 +238,6 @@ async function checkProductAvailabilityForStaff(
     
     const productName = product?.name || `Product ID ${productId}`;
     
-    // Find if current staff has assignment
     const currentStaffAssignment = await prisma.staffInventory.findFirst({
       where: {
         staffId: currentStaffId,
@@ -177,7 +251,6 @@ async function checkProductAvailabilityForStaff(
       }
     });
     
-    // Get total main stock
     const mainStockItem = await prisma.stock.findFirst({
       where: { productId: productId },
       orderBy: { createdAt: "desc" },
@@ -185,7 +258,6 @@ async function checkProductAvailabilityForStaff(
     
     const totalMainStock = mainStockItem ? mainStockItem.quantity : 0;
     
-    // Find ALL staff assignments for this product
     const allStaffAssignments = await prisma.staffInventory.findMany({
       where: {
         productId: productId,
@@ -198,7 +270,6 @@ async function checkProductAvailabilityForStaff(
       }
     });
     
-    // Calculate REMAINING assigned stock (original - sold - returned)
     let totalRemainingAssigned = 0;
     for (const assignment of allStaffAssignments) {
       const remaining = assignment.quantityGiven - 
@@ -207,19 +278,8 @@ async function checkProductAvailabilityForStaff(
       totalRemainingAssigned += Math.max(0, remaining);
     }
     
-    // Unassigned = Total - Remaining Assigned
     const unassignedStock = Math.max(0, totalMainStock - totalRemainingAssigned);
     
-    console.log(`📊 Availability check for ${productName}:`, {
-      productId,
-      staffId: currentStaffId,
-      totalMainStock,
-      totalRemainingAssigned,
-      unassignedStock,
-      requestedQuantity
-    });
-    
-    // RULE 1: STAFF HAS ASSIGNMENT
     if (currentStaffAssignment) {
       const staffAvailable = Math.max(0,
         currentStaffAssignment.quantityGiven - 
@@ -248,9 +308,7 @@ async function checkProductAvailabilityForStaff(
           message: `Cannot sell ${requestedQuantity}. You only have ${staffAvailable} available from your assigned stock.`
         };
       }
-    }
-    // RULE 2: STAFF HAS NO ASSIGNMENT
-    else {
+    } else {
       if (unassignedStock >= requestedQuantity) {
         return {
           productId,
@@ -285,7 +343,6 @@ async function checkProductAvailabilityForStaff(
   }
 }
 
-// Validate multiple products for staff
 async function validateProductsForStaffSale(
   items: Array<{productId: number, quantity: number}>,
   currentStaffId: number,
@@ -333,12 +390,13 @@ async function validateProductsForStaffSale(
   };
 }
 
-// ================== INVENTORY PROCESSING ==================
+// ================== Inventory Processing with Cost Tracking ==================
 
 async function processInventoryForStaffSale(
   saleId: number, 
   staffId: number, 
-  items: Array<{productId: number, quantity: number}>
+  items: Array<{productId: number, quantity: number}>,
+  saleDate: Date
 ) {
   try {
     console.log(`🔍 Processing inventory for sale ${saleId}, staff ${staffId}`);
@@ -347,15 +405,22 @@ async function processInventoryForStaffSale(
     
     const staffTrackingResults: StaffDeductionResult[] = [];
     const mainStockResults: MainStockDeductionResult[] = [];
+    let totalCostAtSale = 0;
     
     for (const item of items) {
       const product = await prisma.product.findUnique({
         where: { id: item.productId },
-        select: { name: true }
+        select: { name: true, productionCost: true }
       });
       
       const productName = product?.name || `Product ${item.productId}`;
-      console.log(`🛍️ Processing: ${productName}, Quantity: ${item.quantity}`);
+      
+      // Get cost at the time of sale
+      const costAtSale = await getProductCostAtDate(item.productId, saleDate);
+      const itemTotalCost = costAtSale * item.quantity;
+      totalCostAtSale += itemTotalCost;
+      
+      console.log(`🛍️ Processing: ${productName}, Quantity: ${item.quantity}, Cost at sale: ${costAtSale}`);
       
       const staffAssignment = await prisma.staffInventory.findFirst({
         where: {
@@ -389,7 +454,9 @@ async function processInventoryForStaffSale(
         status: 'NO_ASSIGNMENT',
         quantityDeducted: 0,
         staffInventoryId: null,
-        message: ''
+        message: '',
+        costAtSale: costAtSale,
+        totalCost: itemTotalCost
       };
       
       if (staffAssignment) {
@@ -414,7 +481,9 @@ async function processInventoryForStaffSale(
             status: 'ASSIGNED_STOCK_USED',
             quantityDeducted: item.quantity,
             staffInventoryId: staffAssignment.id,
-            message: `Sold ${item.quantity} from assigned stock`
+            message: `Sold ${item.quantity} from assigned stock`,
+            costAtSale: costAtSale,
+            totalCost: itemTotalCost
           };
         } else {
           throw new Error(
@@ -458,7 +527,9 @@ async function processInventoryForStaffSale(
           status: 'UNASSIGNED_STOCK_USED',
           quantityDeducted: 0,
           staffInventoryId: null,
-          message: `Sold ${item.quantity} from unassigned stock`
+          message: `Sold ${item.quantity} from unassigned stock`,
+          costAtSale: costAtSale,
+          totalCost: itemTotalCost
         };
       }
       
@@ -481,27 +552,38 @@ async function processInventoryForStaffSale(
         quantityDeducted: item.quantity,
         previousQuantity: mainStockItem.quantity,
         newQuantity: mainStockItem.quantity - item.quantity,
-        message: `Deducted ${item.quantity} from main stock`
+        message: `Deducted ${item.quantity} from main stock`,
+        costAtSale: costAtSale,
+        totalCost: itemTotalCost
       });
       
-      if (staffTrackingResult.staffInventoryId) {
-        const saleItemRecord = await prisma.saleitem.findFirst({
-          where: {
-            saleId: saleId,
-            productId: item.productId
-          },
-          orderBy: { id: 'desc' }
-        });
-        
-        if (saleItemRecord) {
-          await prisma.saleitem.update({
-            where: { id: saleItemRecord.id },
-            data: { 
-              staffInventoryId: staffTrackingResult.staffInventoryId 
+      // Update saleitem with cost data
+      const saleItemRecord = await prisma.saleitem.findFirst({
+        where: {
+          saleId: saleId,
+          productId: item.productId
+        },
+        orderBy: { id: 'desc' }
+      });
+      
+      if (saleItemRecord) {
+        await prisma.saleitem.update({
+          where: { id: saleItemRecord.id },
+          data: { 
+            staffInventoryId: staffTrackingResult.staffInventoryId,
+            costAtSale: costAtSale,
+            totalCost: itemTotalCost,
+            profitMargin: saleItemRecord.price > 0 ? ((saleItemRecord.price - costAtSale) / saleItemRecord.price) * 100 : 0,
+            costSnapshot: {
+              costAtSale: costAtSale,
+              saleDate: saleDate.toISOString(),
+              productName: productName,
+              sellingPrice: saleItemRecord.price,
+              quantity: item.quantity
             }
-          });
-          console.log(`🔗 Linked sale item to staff assignment ${staffTrackingResult.staffInventoryId}`);
-        }
+          }
+        });
+        console.log(`🔗 Updated sale item with cost data: cost=${costAtSale}, totalCost=${itemTotalCost}`);
       }
     }
     
@@ -509,7 +591,10 @@ async function processInventoryForStaffSale(
       success: true,
       staffTracking: { results: staffTrackingResults },
       mainStockDeductions: { results: mainStockResults },
-      summary: { totalItemsRequested: items.reduce((sum, item) => sum + item.quantity, 0) }
+      summary: { 
+        totalItemsRequested: items.reduce((sum, item) => sum + item.quantity, 0),
+        totalCostAtSale: totalCostAtSale
+      }
     };
     
   } catch (error: any) {
@@ -518,19 +603,28 @@ async function processInventoryForStaffSale(
   }
 }
 
-async function processSaleWithoutStaff(items: Array<{productId: number, quantity: number}>) {
+async function processSaleWithoutStaff(
+  items: Array<{productId: number, quantity: number}>,
+  saleDate: Date
+) {
   try {
     console.log("📦 Processing sale without staff...");
     
     const results: MainStockDeductionResult[] = [];
+    let totalCostAtSale = 0;
     
     for (const item of items) {
       const product = await prisma.product.findUnique({
         where: { id: item.productId },
-        select: { name: true }
+        select: { name: true, productionCost: true }
       });
       
       const productName = product?.name || `Product ${item.productId}`;
+      
+      // Get cost at the time of sale
+      const costAtSale = await getProductCostAtDate(item.productId, saleDate);
+      const itemTotalCost = costAtSale * item.quantity;
+      totalCostAtSale += itemTotalCost;
       
       const mainStockItem = await prisma.stock.findFirst({
         where: { productId: item.productId },
@@ -562,14 +656,46 @@ async function processSaleWithoutStaff(items: Array<{productId: number, quantity
         quantityDeducted: item.quantity,
         previousQuantity: mainStockItem.quantity,
         newQuantity: mainStockItem.quantity - item.quantity,
-        message: `Deducted ${item.quantity} from main stock`
+        message: `Deducted ${item.quantity} from main stock`,
+        costAtSale: costAtSale,
+        totalCost: itemTotalCost
       });
+      
+      // Update saleitem with cost data
+      const saleItemRecord = await prisma.saleitem.findFirst({
+        where: {
+          saleId: 0, // This will be updated after sale creation
+          productId: item.productId
+        },
+        orderBy: { id: 'desc' }
+      });
+      
+      if (saleItemRecord) {
+        await prisma.saleitem.update({
+          where: { id: saleItemRecord.id },
+          data: { 
+            costAtSale: costAtSale,
+            totalCost: itemTotalCost,
+            profitMargin: saleItemRecord.price > 0 ? ((saleItemRecord.price - costAtSale) / saleItemRecord.price) * 100 : 0,
+            costSnapshot: {
+              costAtSale: costAtSale,
+              saleDate: saleDate.toISOString(),
+              productName: productName,
+              sellingPrice: saleItemRecord.price,
+              quantity: item.quantity
+            }
+          }
+        });
+      }
     }
     
     return {
       success: true,
       results,
-      summary: { totalItemsDeducted: items.reduce((sum, item) => sum + item.quantity, 0) }
+      summary: { 
+        totalItemsDeducted: items.reduce((sum, item) => sum + item.quantity, 0),
+        totalCostAtSale: totalCostAtSale
+      }
     };
     
   } catch (error: any) {
@@ -643,12 +769,20 @@ function processSale(sale: any) {
   if (remainingAmount <= 0 && pendingPayments.length === 0) status = "PAID";
   else if (totalPaid > 0 || pendingPayments.length > 0) status = "PARTIAL";
 
+  // Calculate total cost from sale items
+  const totalCost = sale.saleitem?.reduce((sum: number, item: any) => {
+    return sum + (item.totalCost || 0);
+  }, 0) || 0;
+
   return {
     ...sale,
     saleitems: sale.saleitem || [],
     payments: sale.payment || [],
     totalPaid,
     remainingAmount,
+    totalCost: totalCost,
+    grossProfit: sale.amount - totalCost,
+    profitMargin: sale.amount > 0 ? ((sale.amount - totalCost) / sale.amount) * 100 : 0,
     status,
     createdBy: sale.createdBy || "SYSTEM",
     updatedBy: sale.updatedBy || "SYSTEM",
@@ -657,6 +791,7 @@ function processSale(sale: any) {
 }
 
 // ================== GET ALL SALES ==================
+
 export async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
@@ -713,6 +848,7 @@ export async function GET(req: NextRequest) {
 }
 
 // ================== CREATE SALE ==================
+
 export async function POST(req: NextRequest) {
   try {
     const data = await req.json();
@@ -762,6 +898,7 @@ export async function POST(req: NextRequest) {
     }
     
     const normalizedUserEmail = normalizeEmail(userEmail);
+    const saleDate = data.date ? new Date(data.date) : new Date();
     
     console.log("👤 Extracted user info:", {
       userEmail: normalizedUserEmail,
@@ -837,7 +974,10 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // Check main stock availability
+    // Check main stock availability and get costs
+    const saleItemsWithCosts = [];
+    let totalCostAtSale = 0;
+
     for (const item of data.saleItems) {
       const stockItem = await prisma.stock.findFirst({
         where: { productId: item.productId },
@@ -875,9 +1015,29 @@ export async function POST(req: NextRequest) {
           message: `Not enough stock for ${product?.name || `Product ID ${item.productId}`}. Available: ${stockItem.quantity}, Requested: ${item.quantity}`
         }, { status: 400 });
       }
+
+      // Get cost at sale date
+      const costAtSale = await getProductCostAtDate(item.productId, saleDate);
+      const itemTotalCost = costAtSale * item.quantity;
+      totalCostAtSale += itemTotalCost;
+
+      saleItemsWithCosts.push({
+        ...item,
+        costAtSale,
+        totalCost: itemTotalCost,
+        profitMargin: item.price > 0 ? ((item.price - costAtSale) / item.price) * 100 : 0,
+        costSnapshot: {
+          costAtSale,
+          saleDate: saleDate.toISOString(),
+          productId: item.productId,
+          quantity: item.quantity,
+          sellingPrice: item.price
+        }
+      });
     }
     
     console.log("✅ All items available in main stock");
+    console.log(`💰 Total cost at sale: ${totalCostAtSale}`);
 
     // Handle payments
     const payments = data.payments?.map((p: any) => ({
@@ -889,26 +1049,30 @@ export async function POST(req: NextRequest) {
       paidAt: p.paidAt ? new Date(p.paidAt) : new Date(),
     })) || [];
 
-    // Create sale with staff assignments
+    // Create sale with staff assignments and cost data
     const newSale = await prisma.sale.create({
       data: {
         customerId,
         amount,
-        date: data.date ? new Date(data.date) : new Date(),
+        date: saleDate,
         dueDate: data.dueDate ? new Date(data.dueDate) : null,
         paymentMethod: data.paymentMethod || "CASH",
         status: data.status || "UNPAID",
         createdBy: normalizedUserEmail,
         updatedBy: normalizedUserEmail,
         createdById: staffId,
-        assignedStaffId: assignedStaffId,  // NEW: Assign responsible staff
+        assignedStaffId: assignedStaffId,
         payment: { create: payments },
         saleitem: {
-          create: data.saleItems.map((item: any) => ({
+          create: saleItemsWithCosts.map((item: any) => ({
             productId: item.productId,
             quantity: item.quantity,
             price: item.price,
             total: item.price * item.quantity,
+            costAtSale: item.costAtSale,
+            totalCost: item.totalCost,
+            profitMargin: item.profitMargin,
+            costSnapshot: item.costSnapshot,
           })),
         },
       },
@@ -917,7 +1081,7 @@ export async function POST(req: NextRequest) {
         saleitem: { include: { product: true } },
         payment: true,
         createdByStaff: true,
-        assignedStaff: true,  // NEW: Include assigned staff in response
+        assignedStaff: true,
       },
     });
 
@@ -925,10 +1089,12 @@ export async function POST(req: NextRequest) {
       saleId: newSale.id,
       createdBy: newSale.createdBy,
       createdById: newSale.createdById,
-      assignedStaffId: newSale.assignedStaffId,  // NEW: Log assigned staff
-      assignedStaffName: newSale.assignedStaff?.name,  // NEW: Log assigned staff name
+      assignedStaffId: newSale.assignedStaffId,
+      assignedStaffName: newSale.assignedStaff?.name,
       customer: newSale.customer?.name,
-      amount: newSale.amount
+      amount: newSale.amount,
+      totalCostAtSale: totalCostAtSale,
+      grossProfit: newSale.amount - totalCostAtSale
     });
 
     // Process inventory
@@ -938,11 +1104,13 @@ export async function POST(req: NextRequest) {
       inventoryResult = await processInventoryForStaffSale(
         newSale.id, 
         staffId, 
-        data.saleItems.map((item: any) => ({ productId: item.productId, quantity: item.quantity }))
+        data.saleItems.map((item: any) => ({ productId: item.productId, quantity: item.quantity })),
+        saleDate
       );
     } else {
       inventoryResult = await processSaleWithoutStaff(
-        data.saleItems.map((item: any) => ({ productId: item.productId, quantity: item.quantity }))
+        data.saleItems.map((item: any) => ({ productId: item.productId, quantity: item.quantity })),
+        saleDate
       );
     }
     
@@ -995,9 +1163,9 @@ export async function POST(req: NextRequest) {
       inventoryProcessing: {
         result: inventoryResult,
         staffId,
-        assignedStaffId,  // NEW: Return assigned staff ID
+        assignedStaffId,
         staffName: staffRecord?.name || null,
-        assignedStaffName: assignedStaffName  // NEW: Return assigned staff name
+        assignedStaffName: assignedStaffName
       }
     }, { status: 201 });
     
@@ -1024,6 +1192,7 @@ export async function POST(req: NextRequest) {
 }
 
 // ================== GET SINGLE SALE ==================
+
 export async function GET_SINGLE(req: NextRequest, { params }: { params: { id: string } }) {
   try {
     const id = parseInt(params.id);
@@ -1065,6 +1234,7 @@ export async function GET_SINGLE(req: NextRequest, { params }: { params: { id: s
 }
 
 // ================== UPDATE SALE ==================
+
 export async function PUT(req: NextRequest) {
   try {
     const data = await req.json();
@@ -1106,6 +1276,7 @@ export async function PUT(req: NextRequest) {
     }
     
     const normalizedUserEmail = normalizeEmail(userEmail);
+    const saleDate = data.date ? new Date(data.date) : new Date();
     
     // Get existing sale
     const existingSale = await prisma.sale.findUnique({
@@ -1140,6 +1311,29 @@ export async function PUT(req: NextRequest) {
 
     const newItems = data.saleItems || existingSale.saleitem;
     const recalculatedAmount = newItems.reduce((sum: number, item: any) => sum + item.price * item.quantity, 0);
+    let totalCostAtSale = 0;
+
+    // Recalculate costs for items
+    const updatedItems = [];
+    for (const item of newItems) {
+      const costAtSale = await getProductCostAtDate(item.productId, saleDate);
+      const itemTotalCost = costAtSale * item.quantity;
+      totalCostAtSale += itemTotalCost;
+      
+      updatedItems.push({
+        ...item,
+        costAtSale,
+        totalCost: itemTotalCost,
+        profitMargin: item.price > 0 ? ((item.price - costAtSale) / item.price) * 100 : 0,
+        costSnapshot: {
+          costAtSale,
+          saleDate: saleDate.toISOString(),
+          productId: item.productId,
+          quantity: item.quantity,
+          sellingPrice: item.price
+        }
+      });
+    }
 
     // Check availability for updates
     const { weekStart, weekEnd } = getCurrentWeekRange();
@@ -1187,13 +1381,12 @@ export async function PUT(req: NextRequest) {
     const updateData: any = {
       customerId: data.customerId ?? existingSale.customerId,
       amount: recalculatedAmount,
-      date: data.date ? new Date(data.date) : existingSale.date,
+      date: saleDate,
       dueDate: data.dueDate ? new Date(data.dueDate) : existingSale.dueDate,
       paymentMethod: data.paymentMethod ?? existingSale.paymentMethod,
       updatedBy: normalizedUserEmail,
     };
 
-    // Update assignedStaffId if provided (NEW)
     if (data.assignedStaffId !== undefined) {
       updateData.assignedStaffId = data.assignedStaffId ? Number(data.assignedStaffId) : null;
       console.log(`🔄 Updating assigned staff for sale ${id} to: ${data.assignedStaffId || 'none'}`);
@@ -1216,25 +1409,34 @@ export async function PUT(req: NextRequest) {
     if (data.saleItems) {
       await prisma.saleitem.deleteMany({ where: { saleId: id } });
       
-      await prisma.saleitem.createMany({
-        data: data.saleItems.map((item: any) => ({
-          saleId: id,
-          productId: item.productId,
-          quantity: item.quantity,
-          price: item.price,
-          total: item.price * item.quantity,
-        })),
-      });
+      // Create sale items with cost data
+      for (const item of updatedItems) {
+        await prisma.saleitem.create({
+          data: {
+            saleId: id,
+            productId: item.productId,
+            quantity: item.quantity,
+            price: item.price,
+            total: item.price * item.quantity,
+            costAtSale: item.costAtSale,
+            totalCost: item.totalCost,
+            profitMargin: item.profitMargin,
+            costSnapshot: item.costSnapshot,
+          },
+        });
+      }
       
       if (staffId) {
         await processInventoryForStaffSale(
           id, 
           staffId, 
-          data.saleItems.map((item: any) => ({ productId: item.productId, quantity: item.quantity }))
+          data.saleItems.map((item: any) => ({ productId: item.productId, quantity: item.quantity })),
+          saleDate
         );
       } else {
         await processSaleWithoutStaff(
-          data.saleItems.map((item: any) => ({ productId: item.productId, quantity: item.quantity }))
+          data.saleItems.map((item: any) => ({ productId: item.productId, quantity: item.quantity })),
+          saleDate
         );
       }
     }
@@ -1265,7 +1467,9 @@ export async function PUT(req: NextRequest) {
       createdById: updated?.createdById,
       assignedStaffId: updated?.assignedStaffId,
       staffLinked: updated?.createdByStaff?.name || 'None',
-      assignedStaffName: updated?.assignedStaff?.name || 'None'
+      assignedStaffName: updated?.assignedStaff?.name || 'None',
+      totalCostAtSale: totalCostAtSale,
+      grossProfit: updated?.amount - totalCostAtSale
     });
 
     return NextResponse.json(processSale(updated));
@@ -1280,6 +1484,7 @@ export async function PUT(req: NextRequest) {
 }
 
 // ================== DELETE SALE ==================
+
 export async function DELETE(req: NextRequest) {
   try {
     const data = await req.json();
@@ -1354,6 +1559,7 @@ export async function DELETE(req: NextRequest) {
 }
 
 // ================== PATCH SALE (Partial Update) ==================
+
 export async function PATCH(req: NextRequest) {
   try {
     const data = await req.json();

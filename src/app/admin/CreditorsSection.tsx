@@ -1,13 +1,18 @@
 // src/app/admin/creditors/page.tsx
 "use client";
+
 import { 
   CreditCard, Plus, Trash2, Edit2, ChevronDown, ChevronUp, X, Loader, Package,
   Calendar, DollarSign, Phone, Mail, Building2, Clock, CheckCircle, 
   AlertCircle, TrendingUp, TrendingDown, Wallet, Receipt, FileText,
-  Search, Filter, Download, Printer, Eye, User, ArrowRight
+  Search, Filter, Download, Printer, Eye, User, ArrowRight, 
+  History, UserPlus, Check, AlertTriangle, BarChart3, ListChecks,
+  ClipboardList, Layers, ShoppingBag, Users, Home, LogOut, Menu,
+  LayoutDashboard, Moon, Sun, RefreshCw
 } from "lucide-react";
 import { useState, useEffect, useMemo, useCallback } from "react";
 import { useRouter } from "next/navigation";
+import { auth } from "@/lib/firebase";
 
 // ==================== TYPES ====================
 
@@ -25,6 +30,10 @@ type Restock = {
   };
   paymentSource: string;
   creditorId?: number;
+  createdBy?: string;
+  createdByEmail?: string;
+  staffName?: string;
+  notes?: string;
 };
 
 type Payment = {
@@ -34,6 +43,8 @@ type Payment = {
   paymentMethod: string;
   reference?: string;
   notes?: string;
+  recordedBy?: string;
+  recordedByEmail?: string;
 };
 
 type Creditor = {
@@ -44,6 +55,8 @@ type Creditor = {
   totalOwed: number;
   restocks: Restock[];
   payments?: Payment[];
+  createdAt: string;
+  updatedAt: string;
 };
 
 type FormData = {
@@ -68,6 +81,7 @@ function NavigationBar({ activePage }: { activePage: string }) {
   
   const navItems = [
     { id: "dashboard", label: "Dashboard", path: "/admin/dashboard", icon: LayoutDashboard },
+    { id: "creditors", label: "Creditors", path: "/admin/creditors", icon: CreditCard },
   ];
 
   return (
@@ -146,15 +160,9 @@ function NavigationBar({ activePage }: { activePage: string }) {
   );
 }
 
-// Import necessary icons
-import { 
-  LayoutDashboard, ShoppingCart, LogOut, Menu, 
-  Home, BarChart3, Moon, Sun 
-} from "lucide-react";
-import { auth } from "@/lib/firebase";
-
 // ==================== MAIN COMPONENT ====================
 export default function CreditorsSection() {
+  const router = useRouter();
   const [creditors, setCreditors] = useState<Creditor[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -167,6 +175,10 @@ export default function CreditorsSection() {
   const [searchTerm, setSearchTerm] = useState("");
   const [filterPaymentMethod, setFilterPaymentMethod] = useState<string>("all");
   const [theme, setTheme] = useState<'light' | 'dark'>('light');
+  const [currentUser, setCurrentUser] = useState<{email: string, name: string} | null>(null);
+  const [sortBy, setSortBy] = useState<'name' | 'totalOwed' | 'restocks'>('name');
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
+  const [viewMode, setViewMode] = useState<'cards' | 'table'>('cards');
   
   const [formData, setFormData] = useState<FormData>({
     name: "",
@@ -202,28 +214,51 @@ export default function CreditorsSection() {
     document.documentElement.classList.toggle('dark', newTheme === 'dark');
   };
 
+  // ==================== GET CURRENT USER ====================
+  useEffect(() => {
+    const getUser = async () => {
+      const user = auth.currentUser;
+      if (user) {
+        setCurrentUser({
+          email: user.email || 'Unknown',
+          name: user.displayName || user.email?.split('@')[0] || 'User'
+        });
+      }
+    };
+    getUser();
+  }, []);
+
   // ==================== DATA FETCHING ====================
-  const fetchCreditors = async () => {
+  const fetchCreditors = useCallback(async () => {
     try {
       setLoading(true);
       setError(null);
       
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 10000);
+      const timeoutId = setTimeout(() => controller.abort(), 15000);
       
       const response = await fetch("/api/creditors", { signal: controller.signal });
       clearTimeout(timeoutId);
       
-      if (!response.ok) throw new Error("Failed to fetch creditors");
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || "Failed to fetch creditors");
+      }
+      
       const data = await response.json();
       
-      // Ensure each creditor has a payments array
-      const creditorsWithPayments = data.map((creditor: any) => ({
+      // Ensure each creditor has required fields
+      const creditorsWithData = data.map((creditor: any) => ({
         ...creditor,
-        payments: creditor.payments || []
+        payments: creditor.payments || [],
+        restocks: (creditor.restocks || []).map((restock: any) => ({
+          ...restock,
+          createdBy: restock.createdBy || 'System',
+          createdByEmail: restock.createdByEmail || 'system@swiftmetals.com',
+        }))
       }));
       
-      setCreditors(creditorsWithPayments);
+      setCreditors(creditorsWithData);
     } catch (err) {
       if (err instanceof Error && err.name === 'AbortError') {
         setError("Request timed out. Please try again.");
@@ -234,11 +269,11 @@ export default function CreditorsSection() {
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
     fetchCreditors();
-  }, []);
+  }, [fetchCreditors]);
 
   // ==================== FILTERS & SEARCH ====================
   const filteredCreditors = useMemo(() => {
@@ -249,12 +284,37 @@ export default function CreditorsSection() {
       filtered = filtered.filter(c => 
         c.name.toLowerCase().includes(term) ||
         (c.email && c.email.toLowerCase().includes(term)) ||
-        (c.phone && c.phone.includes(term))
+        (c.phone && c.phone.includes(term)) ||
+        c.restocks.some(r => r.product.name.toLowerCase().includes(term))
       );
     }
     
+    // Sort
+    filtered = [...filtered].sort((a, b) => {
+      let valA, valB;
+      switch (sortBy) {
+        case 'name':
+          valA = a.name.toLowerCase();
+          valB = b.name.toLowerCase();
+          break;
+        case 'totalOwed':
+          valA = a.restocks.reduce((sum, r) => sum + r.totalCost, 0);
+          valB = b.restocks.reduce((sum, r) => sum + r.totalCost, 0);
+          break;
+        case 'restocks':
+          valA = a.restocks.length;
+          valB = b.restocks.length;
+          break;
+        default:
+          valA = a.name;
+          valB = b.name;
+      }
+      if (sortOrder === 'asc') return valA > valB ? 1 : -1;
+      return valA < valB ? 1 : -1;
+    });
+    
     return filtered;
-  }, [creditors, searchTerm]);
+  }, [creditors, searchTerm, sortBy, sortOrder]);
 
   // ==================== CRUD OPERATIONS ====================
   const openModal = (creditor?: Creditor) => {
@@ -299,13 +359,21 @@ export default function CreditorsSection() {
         response = await fetch("/api/creditors", {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ id: editingId, ...formData }),
+          body: JSON.stringify({ 
+            id: editingId, 
+            ...formData,
+            updatedBy: currentUser?.email || 'system'
+          }),
         });
       } else {
         response = await fetch("/api/creditors", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(formData),
+          body: JSON.stringify({
+            ...formData,
+            createdBy: currentUser?.email || 'system',
+            createdByEmail: currentUser?.email || 'system@swiftmetals.com'
+          }),
         });
       }
 
@@ -316,8 +384,9 @@ export default function CreditorsSection() {
 
       await fetchCreditors();
       setShowModal(false);
+      setError(null);
     } catch (err) {
-      alert(err instanceof Error ? err.message : "An error occurred");
+      setError(err instanceof Error ? err.message : "An error occurred");
     } finally {
       setSubmitting(false);
     }
@@ -341,7 +410,7 @@ export default function CreditorsSection() {
       await fetchCreditors();
       if (expandedId === id) setExpandedId(null);
     } catch (err) {
-      alert(err instanceof Error ? err.message : "An error occurred");
+      setError(err instanceof Error ? err.message : "An error occurred");
     }
   };
 
@@ -372,6 +441,8 @@ export default function CreditorsSection() {
           paymentMethod: paymentForm.paymentMethod,
           reference: paymentForm.reference,
           notes: paymentForm.notes,
+          recordedBy: currentUser?.email || 'system',
+          recordedByEmail: currentUser?.email || 'system@swiftmetals.com'
         }),
       });
 
@@ -382,21 +453,15 @@ export default function CreditorsSection() {
 
       await fetchCreditors();
       setShowPaymentModal(false);
-      alert("Payment recorded successfully!");
+      setError(null);
     } catch (err) {
-      alert(err instanceof Error ? err.message : "An error occurred");
+      setError(err instanceof Error ? err.message : "An error occurred");
     } finally {
       setSubmitting(false);
     }
   };
 
   // ==================== CALCULATIONS ====================
-  const calculatePaid = (creditor: Creditor) => {
-    const restockTotal = creditor.restocks.reduce((sum, restock) => sum + restock.totalCost, 0);
-    const paymentTotal = (creditor.payments || []).reduce((sum, payment) => sum + payment.amount, 0);
-    return Math.min(restockTotal, paymentTotal);
-  };
-
   const calculateBalance = (creditor: Creditor) => {
     const totalOwed = creditor.restocks.reduce((sum, restock) => sum + restock.totalCost, 0);
     const totalPaid = (creditor.payments || []).reduce((sum, payment) => sum + payment.amount, 0);
@@ -443,10 +508,12 @@ export default function CreditorsSection() {
           'Email': creditor.email || '',
           'Product': restock.product.name,
           'Quantity': restock.quantity,
-          'Unit Price (KSh)': restock.costPrice.toFixed(2),
-          'Total (KSh)': restock.totalCost.toFixed(2),
-          'Date': formatDate(restock.createdAt),
-          'Payment Source': restock.paymentSource
+          'Unit Price (KES)': restock.costPrice.toFixed(2),
+          'Total (KES)': restock.totalCost.toFixed(2),
+          'Date': formatDateTime(restock.createdAt),
+          'Payment Source': restock.paymentSource,
+          'Created By': restock.createdByEmail || 'System',
+          'Staff': restock.staffName || 'N/A'
         });
       }
     }
@@ -473,6 +540,7 @@ export default function CreditorsSection() {
     let totalRestocks = 0;
     let totalCreditors = creditors.length;
     let totalProducts = new Set();
+    let totalTransactions = 0;
 
     for (const creditor of creditors) {
       const owed = creditor.restocks.reduce((sum, r) => sum + r.totalCost, 0);
@@ -480,6 +548,7 @@ export default function CreditorsSection() {
       totalOwed += owed;
       totalPaid += paid;
       totalRestocks += creditor.restocks.length;
+      totalTransactions += creditor.restocks.length + (creditor.payments || []).length;
       
       for (const restock of creditor.restocks) {
         totalProducts.add(restock.product.id);
@@ -492,6 +561,7 @@ export default function CreditorsSection() {
       totalPaid,
       totalRestocks,
       totalProducts: totalProducts.size,
+      totalTransactions,
       balance: totalOwed - totalPaid
     };
   };
@@ -524,9 +594,25 @@ export default function CreditorsSection() {
               </div>
               Accounts Payable
             </h1>
-            <p className="text-gray-600 dark:text-gray-400 text-xs md:text-sm lg:text-base mt-1 md:mt-2">Manage suppliers, creditors, and track payments</p>
+            <p className="text-gray-600 dark:text-gray-400 text-xs md:text-sm lg:text-base mt-1 md:mt-2">
+              Manage suppliers, creditors, and track payments
+              {currentUser && (
+                <span className="ml-2 text-xs bg-gray-200 dark:bg-gray-700 px-2 py-1 rounded">
+                  {currentUser.email}
+                </span>
+              )}
+            </p>
           </div>
-          <div className="flex gap-2">
+          <div className="flex gap-2 flex-wrap">
+            <button
+              onClick={() => {
+                setViewMode(viewMode === 'cards' ? 'table' : 'cards');
+              }}
+              className="bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 px-3 py-2 rounded-lg flex items-center gap-2 text-sm hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors"
+            >
+              {viewMode === 'cards' ? <ListChecks size={16} /> : <Layers size={16} />}
+              {viewMode === 'cards' ? 'Table View' : 'Card View'}
+            </button>
             <button
               onClick={exportToCSV}
               disabled={creditors.length === 0}
@@ -537,7 +623,7 @@ export default function CreditorsSection() {
             </button>
             <button
               onClick={() => openModal()}
-              className="bg-blue-600 hover:bg-blue-700 text-white px-4 md:px-6 py-2 md:py-3 rounded-lg font-medium transition flex items-center gap-2 shadow-lg hover:shadow-xl text-sm md:text-base w-full md:w-auto justify-center"
+              className="bg-blue-600 hover:bg-blue-700 text-white px-4 md:px-6 py-2 md:py-3 rounded-lg font-medium transition flex items-center gap-2 shadow-lg hover:shadow-xl text-sm md:text-base"
             >
               <Plus className="w-4 h-4 md:w-5 md:h-5" /> Add Creditor
             </button>
@@ -546,8 +632,12 @@ export default function CreditorsSection() {
 
         {/* Error Message */}
         {error && (
-          <div className="bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-300 rounded-lg p-4 mb-6">
-            {error}
+          <div className="bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-300 rounded-lg p-4 mb-6 flex items-center gap-3">
+            <AlertCircle className="w-5 h-5 flex-shrink-0" />
+            <span>{error}</span>
+            <button onClick={() => setError(null)} className="ml-auto hover:bg-red-100 dark:hover:bg-red-800/50 p-1 rounded">
+              <X className="w-4 h-4" />
+            </button>
           </div>
         )}
 
@@ -560,7 +650,7 @@ export default function CreditorsSection() {
           <>
             {/* Summary Cards */}
             {creditors.length > 0 && (
-              <div className="grid grid-cols-2 md:grid-cols-5 gap-2 md:gap-4 mb-6 md:mb-8">
+              <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-2 md:gap-4 mb-6 md:mb-8">
                 <div className="bg-white dark:bg-gray-800 rounded-lg p-3 md:p-6 shadow-md border-l-4 border-blue-600">
                   <p className="text-gray-600 dark:text-gray-400 text-xs md:text-sm font-medium mb-1 md:mb-2">Total Creditors</p>
                   <p className="text-2xl md:text-3xl font-bold text-gray-900 dark:text-white">{stats.totalCreditors}</p>
@@ -578,54 +668,89 @@ export default function CreditorsSection() {
                   <p className="text-sm md:text-base font-bold text-red-600 break-all">KES {formatCurrency(stats.balance)}</p>
                 </div>
                 <div className="bg-white dark:bg-gray-800 rounded-lg p-3 md:p-6 shadow-md border-l-4 border-orange-500">
-                  <p className="text-gray-600 dark:text-gray-400 text-xs md:text-sm font-medium mb-1 md:mb-2">Total Restocks</p>
+                  <p className="text-gray-600 dark:text-gray-400 text-xs md:text-sm font-medium mb-1 md:mb-2">Restocks</p>
                   <p className="text-2xl md:text-3xl font-bold text-orange-600">{stats.totalRestocks}</p>
+                </div>
+                <div className="bg-white dark:bg-gray-800 rounded-lg p-3 md:p-6 shadow-md border-l-4 border-teal-500">
+                  <p className="text-gray-600 dark:text-gray-400 text-xs md:text-sm font-medium mb-1 md:mb-2">Transactions</p>
+                  <p className="text-2xl md:text-3xl font-bold text-teal-600">{stats.totalTransactions}</p>
                 </div>
               </div>
             )}
 
-            {/* Search Bar */}
-            <div className="mb-4">
-              <div className="relative max-w-md">
+            {/* Search and Filters */}
+            <div className="mb-4 flex flex-col sm:flex-row gap-3">
+              <div className="relative flex-1">
                 <Search size={18} className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" />
                 <input
                   type="text"
-                  placeholder="Search creditors by name, email or phone..."
+                  placeholder="Search creditors by name, email, phone or product..."
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
                   className="w-full pl-10 pr-4 py-2 border rounded-lg bg-white dark:bg-gray-800 dark:border-gray-700 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition"
                 />
               </div>
+              <div className="flex gap-2">
+                <select
+                  value={sortBy}
+                  onChange={(e) => setSortBy(e.target.value as any)}
+                  className="px-3 py-2 border rounded-lg bg-white dark:bg-gray-800 dark:border-gray-700 dark:text-white focus:ring-2 focus:ring-blue-500 outline-none transition"
+                >
+                  <option value="name">Sort by Name</option>
+                  <option value="totalOwed">Sort by Amount Owed</option>
+                  <option value="restocks">Sort by Restocks</option>
+                </select>
+                <button
+                  onClick={() => setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc')}
+                  className="px-3 py-2 border rounded-lg bg-white dark:bg-gray-800 dark:border-gray-700 dark:text-white hover:bg-gray-50 dark:hover:bg-gray-700 transition"
+                >
+                  {sortOrder === 'asc' ? '↑' : '↓'}
+                </button>
+                <button
+                  onClick={() => {
+                    setSearchTerm('');
+                    setSortBy('name');
+                    setSortOrder('asc');
+                  }}
+                  className="px-3 py-2 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 transition"
+                >
+                  <RefreshCw size={18} />
+                </button>
+              </div>
             </div>
 
             {/* Creditors List */}
-            <div className="space-y-2">
-              {filteredCreditors.length === 0 ? (
-                <div className="bg-white dark:bg-gray-800 rounded-lg p-8 md:p-12 text-center shadow-sm">
-                  <CreditCard className="w-12 h-12 md:w-16 md:h-16 mx-auto mb-3 md:mb-4 text-gray-300 dark:text-gray-600" />
-                  <p className="text-gray-500 dark:text-gray-400 text-sm md:text-lg">No creditors found. Add one to get started.</p>
-                </div>
-              ) : (
-                filteredCreditors.map((creditor) => {
+            {filteredCreditors.length === 0 ? (
+              <div className="bg-white dark:bg-gray-800 rounded-lg p-8 md:p-12 text-center shadow-sm">
+                <CreditCard className="w-12 h-12 md:w-16 md:h-16 mx-auto mb-3 md:mb-4 text-gray-300 dark:text-gray-600" />
+                <p className="text-gray-500 dark:text-gray-400 text-sm md:text-lg">
+                  {searchTerm ? 'No creditors match your search' : 'No creditors found. Add one to get started.'}
+                </p>
+              </div>
+            ) : viewMode === 'cards' ? (
+              // CARD VIEW
+              <div className="space-y-2">
+                {filteredCreditors.map((creditor) => {
                   const balance = calculateBalance(creditor);
                   const paymentPercentage = calculatePaymentPercentage(creditor);
                   const totalRestocks = creditor.restocks.length;
                   const totalCost = creditor.restocks.reduce((sum, r) => sum + r.totalCost, 0);
+                  const isExpanded = expandedId === creditor.id;
 
                   return (
                     <div key={creditor.id} className="bg-white dark:bg-gray-800 rounded-lg shadow-sm hover:shadow-md overflow-hidden transition-all border border-gray-200 dark:border-gray-700">
                       {/* Main Row */}
                       <div
-                        onClick={() => setExpandedId(expandedId === creditor.id ? null : creditor.id)}
+                        onClick={() => setExpandedId(isExpanded ? null : creditor.id)}
                         className="p-3 md:p-4 cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700/50 transition"
                       >
                         <div className="flex items-center justify-between gap-3">
                           {/* Left: Name & Contact */}
                           <div className="flex-1 min-w-0">
-                            <div className="flex items-center gap-2">
+                            <div className="flex items-center gap-2 flex-wrap">
                               <h3 className="text-sm md:text-base font-bold text-gray-900 dark:text-white truncate">{creditor.name}</h3>
                               <span className={`text-xs px-2 py-0.5 rounded-full ${balance > 0 ? 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300' : 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300'}`}>
-                                {balance > 0 ? `KES ${formatCurrency(balance)} due` : 'Fully Paid'}
+                                {balance > 0 ? `KES ${formatCurrency(balance)} due` : '✓ Paid'}
                               </span>
                             </div>
                             <div className="flex flex-wrap items-center gap-2 mt-1 text-xs text-gray-500 dark:text-gray-400">
@@ -642,23 +767,26 @@ export default function CreditorsSection() {
                               <span className="flex items-center gap-1">
                                 <Package size={12} /> {totalRestocks} restocks
                               </span>
+                              <span className="flex items-center gap-1">
+                                <Clock size={12} /> {formatDate(creditor.createdAt)}
+                              </span>
                             </div>
                           </div>
 
-                          {/* Center: Stats Grid */}
-                          <div className="hidden lg:grid grid-cols-3 gap-4 flex-shrink-0">
+                          {/* Center: Stats */}
+                          <div className="hidden lg:flex items-center gap-6 flex-shrink-0">
                             <div className="text-center">
-                              <p className="text-xs text-gray-500 dark:text-gray-400 mb-1">Total Owed</p>
+                              <p className="text-xs text-gray-500 dark:text-gray-400">Total Owed</p>
                               <p className="text-sm font-bold text-purple-600">KES {formatCurrency(totalCost)}</p>
                             </div>
                             <div className="text-center">
-                              <p className="text-xs text-gray-500 dark:text-gray-400 mb-1">Paid</p>
+                              <p className="text-xs text-gray-500 dark:text-gray-400">Paid</p>
                               <p className="text-sm font-bold text-green-600">KES {formatCurrency(totalCost - balance)}</p>
                             </div>
                             <div className="text-center">
-                              <p className="text-xs text-gray-500 dark:text-gray-400 mb-1">Payment Rate</p>
-                              <div className="flex items-center gap-1 justify-center">
-                                <div className="w-12 h-1.5 bg-gray-200 rounded-full overflow-hidden">
+                              <p className="text-xs text-gray-500 dark:text-gray-400">Payment Rate</p>
+                              <div className="flex items-center gap-1">
+                                <div className="w-16 h-1.5 bg-gray-200 rounded-full overflow-hidden">
                                   <div 
                                     className={`h-full rounded-full ${paymentPercentage > 70 ? 'bg-green-500' : paymentPercentage > 40 ? 'bg-yellow-500' : 'bg-red-500'}`}
                                     style={{ width: `${paymentPercentage}%` }}
@@ -670,7 +798,7 @@ export default function CreditorsSection() {
                           </div>
 
                           {/* Right: Actions */}
-                          <div className="flex items-center gap-2 md:gap-3 flex-shrink-0">
+                          <div className="flex items-center gap-2 flex-shrink-0">
                             <button
                               onClick={(e) => {
                                 e.stopPropagation();
@@ -703,15 +831,8 @@ export default function CreditorsSection() {
                               >
                                 <Trash2 className="w-4 h-4" />
                               </button>
-                              <button 
-                                className="p-1.5 text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-700 rounded transition"
-                                onClick={(e) => e.stopPropagation()}
-                              >
-                                {expandedId === creditor.id ? (
-                                  <ChevronUp className="w-4 h-4" />
-                                ) : (
-                                  <ChevronDown className="w-4 h-4" />
-                                )}
+                              <button className="p-1.5 text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-700 rounded transition">
+                                {isExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
                               </button>
                             </div>
                           </div>
@@ -720,23 +841,23 @@ export default function CreditorsSection() {
                         {/* Mobile Stats */}
                         <div className="grid grid-cols-3 gap-2 mt-3 lg:hidden">
                           <div className="bg-purple-50 dark:bg-purple-900/20 rounded p-2">
-                            <p className="text-xs text-gray-600 dark:text-gray-400 mb-1">Owed</p>
+                            <p className="text-xs text-gray-600 dark:text-gray-400">Owed</p>
                             <p className="text-xs font-bold text-purple-600">KES {formatCurrency(totalCost)}</p>
                           </div>
                           <div className="bg-green-50 dark:bg-green-900/20 rounded p-2">
-                            <p className="text-xs text-gray-600 dark:text-gray-400 mb-1">Paid</p>
+                            <p className="text-xs text-gray-600 dark:text-gray-400">Paid</p>
                             <p className="text-xs font-bold text-green-600">KES {formatCurrency(totalCost - balance)}</p>
                           </div>
                           <div className="bg-blue-50 dark:bg-blue-900/20 rounded p-2">
-                            <p className="text-xs text-gray-600 dark:text-gray-400 mb-1">Rate</p>
+                            <p className="text-xs text-gray-600 dark:text-gray-400">Rate</p>
                             <p className="text-xs font-bold text-blue-600">{paymentPercentage}%</p>
                           </div>
                         </div>
                       </div>
 
                       {/* Expanded Details */}
-                      {expandedId === creditor.id && (
-                        <div className="px-3 md:px-4 pb-3 md:pb-4 space-y-3 border-t border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50">
+                      {isExpanded && (
+                        <div className="px-3 md:px-4 pb-3 md:pb-4 space-y-4 border-t border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50">
                           
                           {/* Payment Summary */}
                           <div className="pt-3">
@@ -744,7 +865,7 @@ export default function CreditorsSection() {
                               <Wallet className="w-4 h-4 text-green-600" />
                               Payment Summary
                             </h4>
-                            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                               <div className="bg-white dark:bg-gray-800 rounded p-2 text-center border">
                                 <p className="text-xs text-gray-500 dark:text-gray-400">Total Owed</p>
                                 <p className="text-sm font-bold text-purple-600">KES {formatCurrency(totalCost)}</p>
@@ -759,32 +880,54 @@ export default function CreditorsSection() {
                                   {balance > 0 ? `KES ${formatCurrency(balance)}` : '✓ Paid'}
                                 </p>
                               </div>
+                              <div className="bg-white dark:bg-gray-800 rounded p-2 text-center border">
+                                <p className="text-xs text-gray-500 dark:text-gray-400">Payment Rate</p>
+                                <p className="text-sm font-bold text-blue-600">{paymentPercentage}%</p>
+                              </div>
                             </div>
                           </div>
 
-                          {/* Restock History */}
+                          {/* Restock History with Creator Info */}
                           <div>
                             <h4 className="text-sm font-bold text-gray-900 dark:text-white mb-2 flex items-center gap-2">
                               <Package className="w-4 h-4 text-blue-600" />
                               Restock History ({creditor.restocks.length})
                             </h4>
                             {creditor.restocks.length > 0 ? (
-                              <div className="space-y-1.5 max-h-60 overflow-y-auto">
+                              <div className="space-y-2 max-h-80 overflow-y-auto">
                                 {creditor.restocks.map((restock) => (
-                                  <div key={restock.id} className="bg-white dark:bg-gray-800 rounded p-2.5 hover:bg-gray-50 dark:hover:bg-gray-700/50 transition border border-gray-200 dark:border-gray-700">
-                                    <div className="flex items-center justify-between gap-2">
-                                      <div className="flex-1 min-w-0">
+                                  <div key={restock.id} className="bg-white dark:bg-gray-800 rounded-lg p-3 hover:bg-gray-50 dark:hover:bg-gray-700/50 transition border border-gray-200 dark:border-gray-700">
+                                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                                      <div className="flex-1">
                                         <div className="flex items-center gap-2 flex-wrap">
-                                          <p className="font-semibold text-gray-900 dark:text-white text-xs truncate">{restock.product.name}</p>
+                                          <p className="font-semibold text-gray-900 dark:text-white text-sm">{restock.product.name}</p>
                                           <span className="text-xs text-gray-400">•</span>
-                                          <p className="text-xs text-gray-500 dark:text-gray-400">Qty: {restock.quantity}</p>
+                                          <span className="text-xs text-gray-500 dark:text-gray-400">Qty: {restock.quantity}</span>
                                           <span className="text-xs text-gray-400">•</span>
-                                          <p className="text-xs text-gray-500 dark:text-gray-400">{formatDate(restock.createdAt)}</p>
+                                          <span className="text-xs text-gray-500 dark:text-gray-400">{formatDateTime(restock.createdAt)}</span>
+                                        </div>
+                                        <div className="flex flex-wrap items-center gap-3 mt-1 text-xs text-gray-500 dark:text-gray-400">
+                                          <span className="flex items-center gap-1">
+                                            <User size={12} />
+                                            {restock.createdByEmail || 'System'}
+                                          </span>
+                                          {restock.staffName && (
+                                            <span className="flex items-center gap-1">
+                                              <Users size={12} />
+                                              {restock.staffName}
+                                            </span>
+                                          )}
+                                          {restock.notes && (
+                                            <span className="flex items-center gap-1">
+                                              <FileText size={12} />
+                                              {restock.notes}
+                                            </span>
+                                          )}
                                         </div>
                                       </div>
-                                      <div className="text-right flex items-center gap-2">
-                                        <p className="font-bold text-gray-900 dark:text-white text-xs whitespace-nowrap">KES {formatCurrency(restock.totalCost)}</p>
-                                        <span className={`text-xs px-1.5 py-0.5 rounded ${restock.paymentSource === 'cash' ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300' : 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300'}`}>
+                                      <div className="text-right flex items-center gap-2 flex-shrink-0">
+                                        <p className="font-bold text-gray-900 dark:text-white text-sm whitespace-nowrap">KES {formatCurrency(restock.totalCost)}</p>
+                                        <span className={`text-xs px-2 py-0.5 rounded-full ${restock.paymentSource === 'cash' ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300' : 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300'}`}>
                                           {restock.paymentSource}
                                         </span>
                                       </div>
@@ -796,7 +939,7 @@ export default function CreditorsSection() {
                                 ))}
                               </div>
                             ) : (
-                              <p className="text-gray-500 dark:text-gray-400 text-xs py-2">No restocks recorded</p>
+                              <p className="text-gray-500 dark:text-gray-400 text-sm py-2">No restocks recorded</p>
                             )}
                           </div>
 
@@ -807,46 +950,140 @@ export default function CreditorsSection() {
                               Payment History
                             </h4>
                             {(creditor.payments && creditor.payments.length > 0) ? (
-                              <div className="space-y-1.5 max-h-40 overflow-y-auto">
+                              <div className="space-y-2 max-h-40 overflow-y-auto">
                                 {creditor.payments.map((payment) => (
-                                  <div key={payment.id} className="bg-white dark:bg-gray-800 rounded p-2.5 flex items-center justify-between border border-gray-200 dark:border-gray-700">
-                                    <div className="flex items-center gap-2">
-                                      <CheckCircle size={14} className="text-green-500" />
+                                  <div key={payment.id} className="bg-white dark:bg-gray-800 rounded-lg p-3 flex flex-col sm:flex-row sm:items-center justify-between border border-gray-200 dark:border-gray-700">
+                                    <div className="flex items-start sm:items-center gap-2">
+                                      <CheckCircle size={16} className="text-green-500 flex-shrink-0 mt-0.5 sm:mt-0" />
                                       <div>
-                                        <p className="text-xs font-medium text-gray-900 dark:text-white">
-                                          {formatDate(payment.paymentDate)}
+                                        <p className="text-sm font-medium text-gray-900 dark:text-white">
+                                          {formatDateTime(payment.paymentDate)}
                                         </p>
-                                        <p className="text-xs text-gray-500 dark:text-gray-400">
-                                          {payment.paymentMethod.toUpperCase()}
-                                          {payment.reference && ` • Ref: ${payment.reference}`}
-                                        </p>
+                                        <div className="flex flex-wrap items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
+                                          <span className="flex items-center gap-1">
+                                            <CreditCard size={12} />
+                                            {payment.paymentMethod.toUpperCase()}
+                                          </span>
+                                          {payment.reference && (
+                                            <span>• Ref: {payment.reference}</span>
+                                          )}
+                                          {payment.recordedByEmail && (
+                                            <span className="flex items-center gap-1">
+                                              <User size={12} />
+                                              {payment.recordedByEmail}
+                                            </span>
+                                          )}
+                                        </div>
+                                        {payment.notes && (
+                                          <p className="text-xs text-gray-400 mt-0.5">{payment.notes}</p>
+                                        )}
                                       </div>
                                     </div>
-                                    <div className="text-right">
+                                    <div className="text-right mt-1 sm:mt-0">
                                       <p className="text-sm font-bold text-green-600">-KES {formatCurrency(payment.amount)}</p>
-                                      {payment.notes && (
-                                        <p className="text-xs text-gray-400">{payment.notes}</p>
-                                      )}
                                     </div>
                                   </div>
                                 ))}
                               </div>
                             ) : (
-                              <p className="text-gray-500 dark:text-gray-400 text-xs py-2">No payments recorded</p>
+                              <p className="text-gray-500 dark:text-gray-400 text-sm py-2">No payments recorded</p>
                             )}
                           </div>
                         </div>
                       )}
                     </div>
                   );
-                })
-              )}
-            </div>
+                })}
+              </div>
+            ) : (
+              // TABLE VIEW
+              <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm overflow-hidden border border-gray-200 dark:border-gray-700">
+                <div className="overflow-x-auto">
+                  <table className="w-full">
+                    <thead className="bg-gray-50 dark:bg-gray-700/50 border-b border-gray-200 dark:border-gray-700">
+                      <tr>
+                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Creditor</th>
+                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Contact</th>
+                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Restocks</th>
+                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Total Owed</th>
+                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Paid</th>
+                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Balance</th>
+                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
+                      {filteredCreditors.map((creditor) => {
+                        const balance = calculateBalance(creditor);
+                        const totalCost = creditor.restocks.reduce((sum, r) => sum + r.totalCost, 0);
+                        const paid = totalCost - balance;
+                        
+                        return (
+                          <tr key={creditor.id} className="hover:bg-gray-50 dark:hover:bg-gray-700/50 transition">
+                            <td className="px-4 py-3">
+                              <div className="font-medium text-gray-900 dark:text-white">{creditor.name}</div>
+                              <div className="text-xs text-gray-500 dark:text-gray-400">{formatDate(creditor.createdAt)}</div>
+                            </td>
+                            <td className="px-4 py-3">
+                              {creditor.phone && <div className="text-sm text-gray-600 dark:text-gray-300">{creditor.phone}</div>}
+                              {creditor.email && <div className="text-xs text-gray-500 dark:text-gray-400 truncate max-w-[150px]">{creditor.email}</div>}
+                            </td>
+                            <td className="px-4 py-3 text-center">
+                              <span className="inline-flex items-center gap-1 px-2 py-1 bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 rounded-full text-xs">
+                                <Package size={12} />
+                                {creditor.restocks.length}
+                              </span>
+                            </td>
+                            <td className="px-4 py-3 font-semibold text-purple-600">KES {formatCurrency(totalCost)}</td>
+                            <td className="px-4 py-3 font-semibold text-green-600">KES {formatCurrency(paid)}</td>
+                            <td className={`px-4 py-3 font-bold ${balance > 0 ? 'text-red-600' : 'text-green-600'}`}>
+                              {balance > 0 ? `KES ${formatCurrency(balance)}` : '✓ Paid'}
+                            </td>
+                            <td className="px-4 py-3">
+                              <div className="flex items-center gap-1">
+                                <button
+                                  onClick={() => openPaymentModal(creditor)}
+                                  className="p-1.5 text-green-600 hover:bg-green-50 dark:hover:bg-green-900/20 rounded transition"
+                                  title="Record Payment"
+                                >
+                                  <Wallet size={16} />
+                                </button>
+                                <button
+                                  onClick={() => openModal(creditor)}
+                                  className="p-1.5 text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded transition"
+                                  title="Edit"
+                                >
+                                  <Edit2 size={16} />
+                                </button>
+                                <button
+                                  onClick={() => handleDelete(creditor.id)}
+                                  className="p-1.5 text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 rounded transition"
+                                  title="Delete"
+                                >
+                                  <Trash2 size={16} />
+                                </button>
+                                <button
+                                  onClick={() => setExpandedId(expandedId === creditor.id ? null : creditor.id)}
+                                  className="p-1.5 text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-700 rounded transition"
+                                >
+                                  {expandedId === creditor.id ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
 
             {/* Footer Stats */}
             {creditors.length > 0 && (
               <div className="mt-4 text-center text-xs text-gray-400 dark:text-gray-500">
-                Showing {filteredCreditors.length} of {creditors.length} creditors | Total outstanding: KES {formatCurrency(stats.balance)}
+                Showing {filteredCreditors.length} of {creditors.length} creditors | 
+                Total outstanding: KES {formatCurrency(stats.balance)} | 
+                Last updated: {new Date().toLocaleString()}
               </div>
             )}
           </>
@@ -856,7 +1093,7 @@ export default function CreditorsSection() {
       {/* ==================== CREDITOR MODAL ==================== */}
       {showModal && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
-          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl p-6 w-full max-w-md">
+          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl p-6 w-full max-w-md max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-6">
               <h2 className="text-2xl font-bold text-gray-900 dark:text-white">
                 {editingId ? "Edit Creditor" : "Add New Creditor"}
@@ -941,7 +1178,7 @@ export default function CreditorsSection() {
       {/* ==================== PAYMENT MODAL ==================== */}
       {showPaymentModal && selectedCreditor && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
-          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl p-6 w-full max-w-md">
+          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl p-6 w-full max-w-md max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-6">
               <div>
                 <h2 className="text-2xl font-bold text-gray-900 dark:text-white">Record Payment</h2>

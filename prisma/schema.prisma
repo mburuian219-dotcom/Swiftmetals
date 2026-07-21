@@ -31,7 +31,8 @@ model customer {
   order             order[]
   sale              sale[]
   smsreminder       smsreminder[]
-  deletedsale       deletedsale[]        // Added relation
+  deletedsale       deletedsale[]
+  tradeins          tradein[]   
 }
 
 model expense {
@@ -40,15 +41,9 @@ model expense {
   amount      Float
   category    String?
   notes       String?
-
   date        DateTime @default(now())
-
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
-
-  // =========================
-  // CREATED BY / UPDATED BY
-  // =========================
 
   createdById Int?
   updatedById Int?
@@ -110,25 +105,47 @@ model order {
 
 model payment {
   id               Int            @id @default(autoincrement())
-  saleId           Int
+  saleId           Int?
   amount           Float
   method           String
   note             String?
   paidAt           DateTime       @default(now())
+
   bankName         String?
   checkDate        DateTime?
   checkNumber      String?
+
   isVerified       Boolean        @default(false)
   referenceId      String?
   verifiedAt       DateTime?
   checkDepositDate DateTime?
+
   status           payment_status @default(PENDING)
-  sale             sale           @relation(fields: [saleId], references: [id], onDelete: Cascade)
+
+  // Sale relation (optional now)
+  sale             sale?          @relation(fields: [saleId], references: [id], onDelete: SetNull)
+  tradeins         tradein[]
+
+  // =====================================
+  // CREDITOR PAYMENT SUPPORT
+  // =====================================
+
+  creditorId       Int?
+  creditor         creditor?      @relation("CreditorPayments", fields: [creditorId], references: [id])
+
+  paymentType      String         @default("sale") // "sale" or "creditor"
+
+  recordedBy       String?
+  recordedByEmail  String?
+
+  paymentDate      DateTime?
 
   @@index([isVerified])
   @@index([method])
   @@index([saleId])
   @@index([status])
+  @@index([creditorId])
+  @@index([paymentType])
 }
 
 model paymentschedule {
@@ -165,6 +182,7 @@ model product {
   price            Float
   category         String?
   productionCost   Float?
+   costHistory      productCostHistory[] // New relation
   createdAt        DateTime          @default(now())
   updatedAt        DateTime          @updatedAt
   isPublic         Boolean           @default(false)
@@ -308,10 +326,10 @@ model sale {
 
   assignedStaffId  Int?
   assignedStaff    staff? @relation("AssignedSales", fields: [assignedStaffId], references: [id])
+  tradeins         tradein[]
 
   @@index([assignedStaffId])
   @@index([createdById])
-
   @@index([checkDepositDate])
   @@index([customerId])
   @@index([dueDate])
@@ -326,9 +344,17 @@ model saleitem {
   quantity         Int
   productId        Int
   saleId           Int
-  price            Float
-  total            Float
+  price            Float          // Selling price at time of sale
+  total            Float          // Total selling price (quantity * price)
+  
+  // ===== NEW COST TRACKING FIELDS =====
+  costAtSale       Float?         // Production cost at the time of sale
+  totalCost        Float?         // Total cost (quantity * costAtSale)
+  profitMargin     Float?         // (total - totalCost) / total * 100
+  costSnapshot     Json?          // Full cost snapshot for auditing
+  
   staffInventoryId Int?
+  
   product          product        @relation(fields: [productId], references: [id])
   sale             sale           @relation(fields: [saleId], references: [id], onDelete: Cascade)
   staffInventory   staffInventory? @relation(fields: [staffInventoryId], references: [id])
@@ -336,6 +362,23 @@ model saleitem {
   @@index([staffInventoryId])
   @@index([productId])
   @@index([saleId])
+  @@index([costAtSale])  // Add index for cost lookups
+}
+
+model productCostHistory {
+  id          Int      @id @default(autoincrement())
+  productId   Int
+  costPrice   Float    // The cost at this point in time
+  effectiveDate DateTime @default(now()) // When this cost became effective
+  notes       String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  product     product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  
+  @@index([productId])
+  @@index([effectiveDate])
+  @@unique([productId, effectiveDate]) // One cost per date per product
 }
 
 model creditor {
@@ -345,6 +388,7 @@ model creditor {
   email       String?
   totalOwed   Float     @default(0)
   restocks    restock[]
+  payments    payment[] @relation("CreditorPayments") // Named relation matching payment model
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
 }
@@ -355,15 +399,8 @@ model staff {
   email            String?
   phone            String?
   staffInventories staffInventory[]
-  // Sales physically created by this staff
-createdSales sale[] @relation("CreatedSales")
-
-// Sales owned/responsible by this staff
-assignedSales sale[] @relation("AssignedSales")
-   // =========================
-  // EXPENSE TRACKING
-  // =========================
-
+  createdSales     sale[]            @relation("CreatedSales")
+  assignedSales    sale[]            @relation("AssignedSales")
   createdExpenses  expense[]         @relation("ExpenseCreatedBy")
   updatedExpenses  expense[]         @relation("ExpenseUpdatedBy")
   createdAt        DateTime          @default(now())
@@ -375,8 +412,8 @@ model staffInventory {
   staffId          Int
   productId        Int
 
-  weekStartDate    DateTime?  // TEMP
-  weekEndDate      DateTime?  // TEMP
+  weekStartDate    DateTime?
+  weekEndDate      DateTime?
 
   quantityGiven    Int
   quantitySold     Int       @default(0)
@@ -422,76 +459,91 @@ model systemsetting {
   @@index([key])
 }
 
+model tradein {
+  id              Int      @id @default(autoincrement())
+
+  saleId          Int
+  paymentId       Int?
+  customerId      Int
+
+  itemName        String
+  description     String?
+  category        String?
+
+  quantity        Int      @default(1)
+
+  estimatedValue  Float
+  agreedValue     Float
+
+  condition       String
+  status          String   @default("PENDING")
+
+  notes           String?
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  sale            sale     @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  payment         payment? @relation(fields: [paymentId], references: [id])
+  customer        customer @relation(fields: [customerId], references: [id])
+
+  @@index([saleId])
+  @@index([customerId])
+  @@index([status])
+}
+
 // ==================== NEW MODELS FOR AUDIT & SOFT DELETE ====================
 
-// 1. Audit Log for tracking all changes to sales
 model saleauditlog {
   id              Int      @id @default(autoincrement())
   saleId          Int
-  action          String   // "CREATE", "UPDATE", "DELETE", "RESTORE"
-  fieldName       String?  // Which field was changed (for updates)
-  oldValue        String?  // JSON string of old value
-  newValue        String?  // JSON string of new value
-  difference      String?  // Human readable description of change
-  changedBy       String   // User email or ID who made the change
+  action          String
+  fieldName       String?
+  oldValue        String?
+  newValue        String?
+  difference      String?
+  changedBy       String
   changedByEmail  String?
   changedAt       DateTime @default(now())
   ipAddress       String?
   userAgent       String?
-  
-  // For bulk operations or additional context
-  snapshot        Json?    // Full before/after snapshot
+  snapshot        Json?
   notes           String?
-  
-  // Relations
+
   sale            sale     @relation(fields: [saleId], references: [id], onDelete: Cascade)
-  
+
   @@index([saleId])
   @@index([action])
   @@index([changedAt])
   @@index([changedBy])
 }
 
-// 2. Deleted Sales Archive (soft delete storage)
 model deletedsale {
   id                Int      @id @default(autoincrement())
-  originalSaleId    Int      @unique  // Original sale ID before deletion
-  saleData          Json              // Complete sale data as JSON
-  
-  // Customer info at time of deletion (denormalized for search)
+  originalSaleId    Int      @unique
+  saleData          Json
   customerName      String
   customerPhone     String?
   customerId        Int?
-  
-  // Sale details
   totalAmount       Float
   saleDate          DateTime
-  statusAtDeletion  String   // "PAID", "PARTIAL", "UNPAID"
+  statusAtDeletion  String
   dueDate           DateTime?
-  
-  // Deletion metadata
   deletedAt         DateTime @default(now())
   deletedBy         String
   deletedByEmail    String?
   deletionReason    String?
   ipAddress         String?
-  
-  // Restore tracking
   restoredAt        DateTime?
   restoredBy        String?
   restoredByEmail   String?
-  
-  // Additional data
-  saleItemsSummary  String   // Human readable summary of items
-  paymentsSummary   String?  // Human readable summary of payments
-  restockedItems    Boolean  @default(false)  // Whether items were restocked
-  
-  // For automatic cleanup (7 days after deletion)
+  saleItemsSummary  String
+  paymentsSummary   String?
+  restockedItems    Boolean  @default(false)
   expiresAt         DateTime
-  
-  // Relations - link back to original customer (optional, since customer might be deleted)
+
   customer          customer? @relation(fields: [customerId], references: [id])
-  
+
   @@index([deletedAt])
   @@index([expiresAt])
   @@index([originalSaleId])

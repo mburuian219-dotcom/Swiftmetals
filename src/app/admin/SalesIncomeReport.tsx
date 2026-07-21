@@ -8,6 +8,10 @@ type SaleItem = {
   price: number;
   total: number;
   productId: number;
+  costAtSale?: number;  // NEW: Cost at the time of sale
+  totalCost?: number;   // NEW: Total cost at the time of sale
+  profitMargin?: number; // NEW: Profit margin at the time of sale
+  costSnapshot?: any;   // NEW: Full cost snapshot
   product?: {
     id: number;
     name: string;
@@ -33,6 +37,9 @@ type Sale = {
   dueDate: string | null;
   totalPaid?: number;
   balance?: number;
+  totalCost?: number;    // NEW: Total cost for the sale
+  grossProfit?: number;  // NEW: Gross profit for the sale
+  profitMargin?: number; // NEW: Profit margin for the sale
   saleitem: SaleItem[];
   payment?: Payment[];
   customer?: {
@@ -52,6 +59,9 @@ type GroupedSale = {
   totalAmount: number;
   totalPaid: number;
   balance: number;
+  totalCost: number;      // NEW
+  grossProfit: number;    // NEW
+  profitMargin: number;   // NEW
   status: string;
   dueDate: string | null;
   items: SalesIncomeReport[];
@@ -69,11 +79,12 @@ type SalesIncomeReport = {
   quantity: number;
   unitPrice: number;
   totalRevenue: number;
-  unitProductionCost: number;
-  totalProductionCost: number;
+  unitProductionCost: number;  // Now uses costAtSale
+  totalProductionCost: number; // Now uses totalCost
   grossProfit: number;
   profitMargin: number;
   saleStatus: string;
+  costSource: string;  // NEW: Indicates where the cost came from
 };
 
 type PeriodFilter = "all" | "daily" | "weekly" | "monthly" | "yearly" | "custom";
@@ -151,33 +162,50 @@ export default function SalesIncomeReport() {
       if (!response.ok) throw new Error("Failed to fetch sales");
       const salesData = await response.json();
       
-      const productsResponse = await fetch("/api/products");
-      const productsData = await productsResponse.ok ? await productsResponse.json() : [];
-      
-      const productCostMap = new Map<number, number>();
-      productsData.forEach((product: any) => {
-        if (product.productionCost) {
-          productCostMap.set(product.id, product.productionCost);
-        }
+      // Process sales to ensure cost data is available
+      const processedSales = salesData.map((sale: any) => {
+        // Calculate sale-level totals from costAtSale
+        let totalCost = 0;
+        let grossProfit = 0;
+        
+        const processedItems = sale.saleitem?.map((item: any) => {
+          // Use costAtSale from the saleitem if available, otherwise fallback to product's productionCost
+          const costAtSale = item.costAtSale || item.product?.productionCost || 0;
+          const totalCost = costAtSale * item.quantity;
+          const revenue = item.price * item.quantity;
+          const grossProfit = revenue - totalCost;
+          
+          return {
+            ...item,
+            costAtSale,
+            totalCost,
+            profitMargin: revenue > 0 ? (grossProfit / revenue) * 100 : 0,
+            costSnapshot: item.costSnapshot || {
+              costAtSale,
+              source: costAtSale === item.costAtSale ? 'sale_history' : 'current_product_cost'
+            }
+          };
+        }) || [];
+        
+        // Calculate sale totals
+        totalCost = processedItems.reduce((sum: number, item: any) => sum + (item.totalCost || 0), 0);
+        grossProfit = sale.amount - totalCost;
+        
+        return {
+          ...sale,
+          saleitem: processedItems,
+          totalCost,
+          grossProfit,
+          profitMargin: sale.amount > 0 ? (grossProfit / sale.amount) * 100 : 0,
+          payment: sale.payment || [],
+          totalPaid: sale.payment?.reduce((sum: number, p: any) => 
+            p.status === "COMPLETED" || p.status === "CLEARED" ? sum + p.amount : sum, 0) || 0,
+          balance: sale.amount - (sale.payment?.reduce((sum: number, p: any) => 
+            p.status === "COMPLETED" || p.status === "CLEARED" ? sum + p.amount : sum, 0) || 0)
+        };
       });
       
-      const enrichedSales = salesData.map((sale: any) => ({
-        ...sale,
-        saleitem: sale.saleitem?.map((item: any) => ({
-          ...item,
-          product: {
-            ...item.product,
-            productionCost: productCostMap.get(item.productId) || item.product?.productionCost || 0
-          }
-        })) || [],
-        payment: sale.payment || [],
-        totalPaid: sale.payment?.reduce((sum: number, p: any) => 
-          p.status === "COMPLETED" || p.status === "CLEARED" ? sum + p.amount : sum, 0) || 0,
-        balance: sale.amount - (sale.payment?.reduce((sum: number, p: any) => 
-          p.status === "COMPLETED" || p.status === "CLEARED" ? sum + p.amount : sum, 0) || 0)
-      }));
-      
-      setSales(enrichedSales);
+      setSales(processedSales);
       
     } catch (err) {
       setError(err instanceof Error ? err.message : "An error occurred");
@@ -197,11 +225,22 @@ export default function SalesIncomeReport() {
       let saleGrossProfit = 0;
       
       sale.saleitem.forEach((item: SaleItem) => {
-        const unitProductionCost = item.product?.productionCost || 0;
+        // Use costAtSale from the sale item (historical cost)
+        const unitProductionCost = item.costAtSale || item.product?.productionCost || 0;
         const totalProductionCost = unitProductionCost * item.quantity;
         const totalRevenue = item.quantity * item.price;
         const grossProfit = totalRevenue - totalProductionCost;
         const profitMargin = totalRevenue > 0 ? (grossProfit / totalRevenue) * 100 : 0;
+        
+        // Determine where the cost came from
+        let costSource = 'unknown';
+        if (item.costAtSale !== undefined && item.costAtSale !== null) {
+          costSource = 'sale_history (cost at time of sale)';
+        } else if (item.product?.productionCost !== undefined && item.product?.productionCost !== null) {
+          costSource = 'current product cost (fallback)';
+        } else {
+          costSource = 'default (0)';
+        }
         
         reports.push({
           date: sale.date,
@@ -219,6 +258,7 @@ export default function SalesIncomeReport() {
           grossProfit,
           profitMargin,
           saleStatus: sale.status,
+          costSource,
         });
         
         saleTotalRevenue += totalRevenue;
@@ -235,6 +275,9 @@ export default function SalesIncomeReport() {
         totalAmount: sale.amount,
         totalPaid: sale.totalPaid || 0,
         balance: sale.balance || sale.amount,
+        totalCost: sale.totalCost || saleTotalCost,
+        grossProfit: sale.grossProfit || saleGrossProfit,
+        profitMargin: sale.profitMargin || (sale.amount > 0 ? (saleGrossProfit / sale.amount) * 100 : 0),
         status: sale.status,
         dueDate: sale.dueDate || null,
         items: reports,
@@ -354,9 +397,10 @@ export default function SalesIncomeReport() {
       "Quantity",
       "Unit Price",
       "Total Revenue",
-      "Production Cost",
+      "Production Cost (at sale)",
       "Gross Profit",
       "Profit Margin %",
+      "Cost Source",
       "Sale Status",
       "Total Sale Amount",
       "Amount Paid",
@@ -379,6 +423,7 @@ export default function SalesIncomeReport() {
           formatCurrency(item.totalProductionCost, false),
           formatCurrency(item.grossProfit, false),
           item.profitMargin.toFixed(1),
+          `"${item.costSource}"`,
           item.saleStatus,
           formatCurrency(sale.totalAmount, false),
           formatCurrency(sale.totalPaid, false),
@@ -511,7 +556,7 @@ export default function SalesIncomeReport() {
               </h3>
             </div>
             <p className="text-xs sm:text-sm text-gray-600 pl-9">
-              Gross Profit = (Selling Price - Production Cost) × Quantity
+              Gross Profit = (Selling Price - Production Cost at time of sale) × Quantity
             </p>
           </div>
           
@@ -797,19 +842,25 @@ export default function SalesIncomeReport() {
                     )}
                   </div>
                   
-                  <div className="grid grid-cols-3 gap-3 text-center sm:text-right">
+                  <div className="grid grid-cols-4 gap-2 text-center sm:text-right">
                     <div>
                       <p className="text-xs text-gray-500">Total</p>
                       <p className="text-sm font-semibold text-gray-900">{formatCurrency(sale.totalAmount)}</p>
                     </div>
                     <div>
-                      <p className="text-xs text-gray-500">Paid</p>
-                      <p className="text-sm font-semibold text-green-600">{formatCurrency(sale.totalPaid)}</p>
+                      <p className="text-xs text-gray-500">Cost</p>
+                      <p className="text-sm font-semibold text-orange-600">{formatCurrency(sale.totalCost)}</p>
                     </div>
                     <div>
-                      <p className="text-xs text-gray-500">Balance</p>
-                      <p className={`text-sm font-semibold ${sale.balance > 0 ? 'text-red-600' : 'text-green-600'}`}>
-                        {formatCurrency(sale.balance)}
+                      <p className="text-xs text-gray-500">Profit</p>
+                      <p className={`text-sm font-semibold ${sale.grossProfit >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                        {formatCurrency(sale.grossProfit)}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-gray-500">Margin</p>
+                      <p className={`text-sm font-semibold ${sale.profitMargin >= 0 ? 'text-purple-600' : 'text-red-600'}`}>
+                        {sale.profitMargin.toFixed(1)}%
                       </p>
                     </div>
                   </div>
@@ -834,9 +885,10 @@ export default function SalesIncomeReport() {
                           <th className="px-3 py-2 text-center">Qty</th>
                           <th className="px-3 py-2 text-right">Unit Price</th>
                           <th className="px-3 py-2 text-right">Total</th>
-                          <th className="px-3 py-2 text-right">Cost</th>
+                          <th className="px-3 py-2 text-right">Cost (at sale)</th>
                           <th className="px-3 py-2 text-right">Profit</th>
                           <th className="px-3 py-2 text-right">Margin</th>
+                          <th className="px-3 py-2 text-center text-xs text-gray-400">Cost Source</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-gray-100">
@@ -846,12 +898,18 @@ export default function SalesIncomeReport() {
                             <td className="px-3 py-2 text-center">{item.quantity}</td>
                             <td className="px-3 py-2 text-right">{formatCurrency(item.unitPrice)}</td>
                             <td className="px-3 py-2 text-right">{formatCurrency(item.totalRevenue)}</td>
-                            <td className="px-3 py-2 text-right">{formatCurrency(item.totalProductionCost)}</td>
+                            <td className="px-3 py-2 text-right text-orange-600">{formatCurrency(item.unitProductionCost)}</td>
                             <td className={`px-3 py-2 text-right font-medium ${item.grossProfit >= 0 ? 'text-green-600' : 'text-red-600'}`}>
                               {formatCurrency(item.grossProfit)}
                             </td>
                             <td className={`px-3 py-2 text-right font-medium ${item.profitMargin >= 0 ? 'text-green-600' : 'text-red-600'}`}>
                               {item.profitMargin.toFixed(1)}%
+                            </td>
+                            <td className="px-3 py-2 text-center">
+                              <span className="text-xs text-gray-400" title={item.costSource}>
+                                {item.costSource.includes('sale_history') ? '📜 Historical' : 
+                                 item.costSource.includes('current') ? '📌 Current' : '❓ Unknown'}
+                              </span>
                             </td>
                           </tr>
                         ))}
@@ -860,8 +918,9 @@ export default function SalesIncomeReport() {
                         <tr>
                           <td colSpan={3} className="px-3 py-2 text-right">Totals:</td>
                           <td className="px-3 py-2 text-right">{formatCurrency(sale.totalAmount)}</td>
-                          <td className="px-3 py-2 text-right">{formatCurrency(sale.items.reduce((sum, i) => sum + i.totalProductionCost, 0))}</td>
-                          <td className="px-3 py-2 text-right text-green-600">{formatCurrency(sale.items.reduce((sum, i) => sum + i.grossProfit, 0))}</td>
+                          <td className="px-3 py-2 text-right text-orange-600">{formatCurrency(sale.totalCost)}</td>
+                          <td className="px-3 py-2 text-right text-green-600">{formatCurrency(sale.grossProfit)}</td>
+                          <td className="px-3 py-2 text-right text-purple-600">{sale.profitMargin.toFixed(1)}%</td>
                           <td className="px-3 py-2 text-right"></td>
                         </tr>
                       </tfoot>
@@ -872,7 +931,10 @@ export default function SalesIncomeReport() {
                   <div className="sm:hidden space-y-2">
                     {sale.items.map((item, idx) => (
                       <div key={idx} className="bg-gray-50 rounded-lg p-3">
-                        <p className="font-medium text-gray-900">{item.productName}</p>
+                        <div className="flex justify-between items-start">
+                          <p className="font-medium text-gray-900">{item.productName}</p>
+                          <span className="text-xs text-gray-400">{item.costSource.includes('sale_history') ? '📜' : '📌'}</span>
+                        </div>
                         <div className="grid grid-cols-2 gap-2 mt-2 text-sm">
                           <div>
                             <p className="text-xs text-gray-500">Quantity</p>
@@ -883,8 +945,16 @@ export default function SalesIncomeReport() {
                             <p className="font-medium">{formatCurrency(item.unitPrice)}</p>
                           </div>
                           <div>
-                            <p className="text-xs text-gray-500">Total</p>
+                            <p className="text-xs text-gray-500">Total Revenue</p>
                             <p className="font-medium">{formatCurrency(item.totalRevenue)}</p>
+                          </div>
+                          <div>
+                            <p className="text-xs text-gray-500">Cost (at sale)</p>
+                            <p className="font-medium text-orange-600">{formatCurrency(item.unitProductionCost)}</p>
+                          </div>
+                          <div>
+                            <p className="text-xs text-gray-500">Total Cost</p>
+                            <p className="font-medium text-orange-600">{formatCurrency(item.totalProductionCost)}</p>
                           </div>
                           <div>
                             <p className="text-xs text-gray-500">Profit</p>
@@ -932,9 +1002,10 @@ export default function SalesIncomeReport() {
                 <th className="px-3 py-2 text-left text-xs font-medium text-gray-500">Product</th>
                 <th className="px-3 py-2 text-center text-xs font-medium text-gray-500">Qty</th>
                 <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">Revenue</th>
-                <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">Cost</th>
+                <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">Cost (at sale)</th>
                 <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">Profit</th>
                 <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">Margin</th>
+                <th className="px-3 py-2 text-center text-xs font-medium text-gray-500">Source</th>
               </tr>
             </thead>
             <tbody className="bg-white divide-y divide-gray-200">
@@ -946,17 +1017,20 @@ export default function SalesIncomeReport() {
                   <td className="px-3 py-2 text-xs text-gray-900 truncate max-w-[100px]">{item.productName}</td>
                   <td className="px-3 py-2 text-xs text-gray-900 text-center">{item.quantity}</td>
                   <td className="px-3 py-2 text-xs text-right">{formatCurrency(item.totalRevenue)}</td>
-                  <td className="px-3 py-2 text-xs text-right">{formatCurrency(item.totalProductionCost)}</td>
+                  <td className="px-3 py-2 text-xs text-right text-orange-600">{formatCurrency(item.unitProductionCost)}</td>
                   <td className={`px-3 py-2 text-xs text-right font-medium ${item.grossProfit >= 0 ? 'text-green-600' : 'text-red-600'}`}>
                     {formatCurrency(item.grossProfit)}
                   </td>
                   <td className={`px-3 py-2 text-xs text-right font-medium ${item.profitMargin >= 0 ? 'text-green-600' : 'text-red-600'}`}>
                     {item.profitMargin.toFixed(1)}%
                   </td>
+                  <td className="px-3 py-2 text-xs text-center text-gray-400">
+                    {item.costSource.includes('sale_history') ? '📜' : '📌'}
+                  </td>
                 </tr>
               ))}
             </tbody>
-           </table>
+          </table>
           {displayData.flatMap(s => s.items).length > 100 && (
             <div className="bg-gray-50 px-4 py-3 text-center text-sm text-gray-600">
               Showing 100 of {displayData.flatMap(s => s.items).length} items. Download CSV for complete data.
@@ -978,8 +1052,11 @@ export default function SalesIncomeReport() {
                   <p className="text-xs text-gray-500">{formatDateTime(sale.date)}</p>
                 </div>
                 <div className="text-right">
-                  <p className="text-xs text-gray-500">Total</p>
-                  <p className="text-sm font-bold">{formatCurrency(sale.totalAmount)}</p>
+                  <p className="text-xs text-gray-500">Profit</p>
+                  <p className={`text-sm font-bold ${sale.grossProfit >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                    {formatCurrency(sale.grossProfit)}
+                  </p>
+                  <p className="text-xs text-gray-400">{sale.profitMargin.toFixed(1)}% margin</p>
                 </div>
               </div>
               
@@ -989,19 +1066,17 @@ export default function SalesIncomeReport() {
                   <p className="text-sm font-medium">{sale.items.length} items</p>
                 </div>
                 <div>
-                  <p className="text-xs text-gray-500">Paid</p>
-                  <p className="text-sm font-medium text-green-600">{formatCurrency(sale.totalPaid)}</p>
+                  <p className="text-xs text-gray-500">Revenue</p>
+                  <p className="text-sm font-medium">{formatCurrency(sale.totalAmount)}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-gray-500">Cost</p>
+                  <p className="text-sm font-medium text-orange-600">{formatCurrency(sale.totalCost)}</p>
                 </div>
                 <div>
                   <p className="text-xs text-gray-500">Balance</p>
                   <p className={`text-sm font-medium ${sale.balance > 0 ? 'text-red-600' : 'text-green-600'}`}>
                     {formatCurrency(sale.balance)}
-                  </p>
-                </div>
-                <div>
-                  <p className="text-xs text-gray-500">Profit</p>
-                  <p className="text-sm font-medium text-green-600">
-                    {formatCurrency(sale.items.reduce((sum, i) => sum + i.grossProfit, 0))}
                   </p>
                 </div>
               </div>

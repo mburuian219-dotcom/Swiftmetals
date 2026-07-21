@@ -189,32 +189,10 @@ interface StockAdjustment {
   reason?: string;
 }
 
-// SECRET ADMIN MODE - Only you know this
-// To activate: Press and hold the logo/title for 3 seconds, or click the shield icon 5 times quickly
-// You can also use the secret key combination: Ctrl + Shift + A (or Cmd + Shift + A on Mac)
-const ADMIN_SECRET_KEY = "admin_secret_2024";
-const ADMIN_EMAILS = [
-  "samuelpsalms55@gmail.com",  // Your email - Add yours here
-  "mburuian188@gmail.com",
-  "your-email@example.com"
-];
-
 const StaffDetailsPage = () => {
   const router = useRouter();
   const params = useParams();
   const staffId = params.staffId as string;
-
-  // Admin mode state
-  const [isAdminMode, setIsAdminMode] = useState(false);
-  const [secretClickCount, setSecretClickCount] = useState(0);
-  const [secretClickTimeout, setSecretClickTimeout] = useState<NodeJS.Timeout | null>(null);
-  const [showAdminHint, setShowAdminHint] = useState(false);
-  const [currentUserEmail, setCurrentUserEmail] = useState<string>("");
-  const [isAuthorizedAdmin, setIsAuthorizedAdmin] = useState(false);
-  const [showRestockModal, setShowRestockModal] = useState(false);
-  const [restockQuantity, setRestockQuantity] = useState('');
-  const [restockProduct, setRestockProduct] = useState<Product | null>(null);
-  const [restockInventoryId, setRestockInventoryId] = useState<number | null>(null);
 
   // States
   const [staff, setStaff] = useState<Staff | null>(null);
@@ -258,6 +236,12 @@ const StaffDetailsPage = () => {
   const [adjustQuantity, setAdjustQuantity] = useState('');
   const [adjustReason, setAdjustReason] = useState('');
   
+  // Restock modal states
+  const [showRestockModal, setShowRestockModal] = useState(false);
+  const [restockQuantity, setRestockQuantity] = useState('');
+  const [restockProduct, setRestockProduct] = useState<Product | null>(null);
+  const [restockInventoryId, setRestockInventoryId] = useState<number | null>(null);
+  
   // Close week modal states
   const [showCloseWeekModal, setShowCloseWeekModal] = useState(false);
   const [weekToClose, setWeekToClose] = useState<WeeklyPerformance | null>(null);
@@ -265,96 +249,6 @@ const StaffDetailsPage = () => {
   // Filter states
   const [filterStatus, setFilterStatus] = useState("all");
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
-
-  // Check if current user is authorized admin
-  const checkUserAuthorization = useCallback(async () => {
-    try {
-      const auth = (await import("@/lib/firebase")).auth;
-      const user = auth.currentUser;
-      
-      if (user && user.email) {
-        setCurrentUserEmail(user.email);
-        const isAuthorized = ADMIN_EMAILS.includes(user.email.toLowerCase());
-        setIsAuthorizedAdmin(isAuthorized);
-        
-        // If we're in admin mode but user is not authorized, disable admin mode
-        if (isAdminMode && !isAuthorized) {
-          setIsAdminMode(false);
-          setSuccess("Admin mode disabled - unauthorized user");
-          setTimeout(() => setSuccess(null), 3000);
-        }
-        
-        return isAuthorized;
-      }
-      return false;
-    } catch (error) {
-      console.error("Error checking user authorization:", error);
-      return false;
-    }
-  }, [isAdminMode]);
-
-  // Secret admin mode activation - Press and hold the header
-  const handleSecretClick = () => {
-    if (!isAuthorizedAdmin) return;
-    
-    setSecretClickCount(prev => prev + 1);
-    
-    if (secretClickTimeout) {
-      clearTimeout(secretClickTimeout);
-    }
-    
-    const timeout = setTimeout(() => {
-      setSecretClickCount(0);
-    }, 2000);
-    
-    setSecretClickTimeout(timeout);
-    
-    if (secretClickCount + 1 >= 5) {
-      // 5 clicks activates admin mode
-      setIsAdminMode(true);
-      setSecretClickCount(0);
-      setSuccess("🔓 Admin Mode Activated! You can now edit items and restock.");
-      setTimeout(() => setSuccess(null), 5000);
-    }
-  };
-
-  // Secret key combination: Ctrl+Shift+A (or Cmd+Shift+A)
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (!isAuthorizedAdmin) return;
-      
-      // Check for Ctrl+Shift+A or Cmd+Shift+A
-      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'A') {
-        e.preventDefault();
-        setIsAdminMode(prev => !prev);
-        if (!isAdminMode) {
-          setSuccess("🔓 Admin Mode Activated!");
-        } else {
-          setSuccess("🔒 Admin Mode Deactivated");
-        }
-        setTimeout(() => setSuccess(null), 3000);
-      }
-    };
-    
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isAdminMode, isAuthorizedAdmin]);
-
-  // Show admin hint after 3 seconds if not in admin mode
-  useEffect(() => {
-    if (!isAdminMode && isAuthorizedAdmin && !showAdminHint) {
-      const timer = setTimeout(() => {
-        setShowAdminHint(true);
-        setTimeout(() => setShowAdminHint(false), 5000);
-      }, 3000);
-      return () => clearTimeout(timer);
-    }
-  }, [isAdminMode, isAuthorizedAdmin]);
-
-  // Check user authorization on mount
-  useEffect(() => {
-    checkUserAuthorization();
-  }, [checkUserAuthorization]);
 
   // Get current week dates
   const getCurrentWeekDates = () => {
@@ -414,7 +308,6 @@ const StaffDetailsPage = () => {
     
     setError(errorMessage);
     
-    // Auto-clear error after 5 seconds
     setTimeout(() => {
       setError(null);
     }, 5000);
@@ -746,14 +639,8 @@ const StaffDetailsPage = () => {
     setWeeklyPerformance(weeklyArray);
   };
 
-  // Handle edit click (only available in admin mode)
+  // Handle edit click
   const handleEditClick = async (item: StaffInventory) => {
-    if (!isAdminMode) {
-      setError("Admin mode required to edit items. Press and hold the header or press Ctrl+Shift+A to activate.");
-      setTimeout(() => setError(null), 3000);
-      return;
-    }
-    
     console.log("Edit clicked for item:", item);
     setEditingItem(item);
     setEditForm({
@@ -779,14 +666,8 @@ const StaffDetailsPage = () => {
     }
   };
 
-  // Handle restock items (new feature)
+  // Handle restock items
   const handleRestockClick = (inventory: StaffInventory) => {
-    if (!isAdminMode) {
-      setError("Admin mode required to restock items. Press and hold the header or press Ctrl+Shift+A to activate.");
-      setTimeout(() => setError(null), 3000);
-      return;
-    }
-    
     setRestockProduct(inventory.product);
     setRestockInventoryId(inventory.id);
     setRestockQuantity('');
@@ -806,7 +687,6 @@ const StaffDetailsPage = () => {
     setActionLoading(true);
     
     try {
-      // Call API to restock
       const response = await fetch('/api/staff-inventory/restock', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -814,7 +694,7 @@ const StaffDetailsPage = () => {
           inventoryId: restockInventoryId,
           productId: restockProduct.id,
           quantity: quantity,
-          reason: "Admin restock"
+          reason: "Restock"
         })
       });
       
@@ -829,7 +709,6 @@ const StaffDetailsPage = () => {
       setRestockInventoryId(null);
       setRestockQuantity('');
       
-      // Refresh data
       await Promise.all([
         fetchStaffDetails(),
         fetchAllStockData()
@@ -846,12 +725,6 @@ const StaffDetailsPage = () => {
   // Handle save edit
   const handleSaveEdit = async () => {
     if (!editingItem) return;
-
-    if (!isAdminMode) {
-      setError("Admin mode required to save changes. Press and hold the header or press Ctrl+Shift+A to activate.");
-      setTimeout(() => setError(null), 3000);
-      return;
-    }
 
     try {
       setActionLoading(true);
@@ -922,12 +795,6 @@ const StaffDetailsPage = () => {
 
   // Handle delete assignment
   const handleDeleteAssignment = async (id: number) => {
-    if (!isAdminMode) {
-      setError("Admin mode required to delete assignments.");
-      setTimeout(() => setError(null), 3000);
-      return;
-    }
-    
     if (!confirm('Are you sure you want to delete this assignment? This will return items to stock.')) {
       return;
     }
@@ -991,12 +858,6 @@ const StaffDetailsPage = () => {
       return;
     }
 
-    if (!isAdminMode) {
-      setError("Admin mode required to process returns.");
-      setTimeout(() => setError(null), 3000);
-      return;
-    }
-
     const returnQty = parseInt(returnQuantity);
     const currentGiven = selectedInventory.quantityGiven || 0;
     const currentSold = selectedInventory.quantitySold || 0;
@@ -1049,12 +910,6 @@ const StaffDetailsPage = () => {
   const handleAdjustItems = async () => {
     if (!selectedInventory || !adjustQuantity) {
       setError("Please enter quantity");
-      return;
-    }
-
-    if (!isAdminMode) {
-      setError("Admin mode required to adjust items.");
-      setTimeout(() => setError(null), 3000);
       return;
     }
 
@@ -1119,7 +974,7 @@ const StaffDetailsPage = () => {
     }
   };
 
-  // Handle close week - UPDATED to work with your API
+  // Handle close week
   const handleCloseWeek = async () => {
     if (!weekToClose) return;
     
@@ -1149,13 +1004,11 @@ const StaffDetailsPage = () => {
         throw new Error(data.error || 'Failed to close week');
       }
 
-      // Handle the response from your API
       const totalItemsReturned = data.totalItemsReturned || data.closedAssignments?.length || 0;
       setSuccess(`Week closed successfully! ${totalItemsReturned} items marked as returned.`);
       setShowCloseWeekModal(false);
       setWeekToClose(null);
       
-      // Generate CSV with returned items - using your API response format
       if (data.closedAssignments && data.closedAssignments.length > 0) {
         generateReturnItemsCSV(data.closedAssignments, weekToClose);
       }
@@ -1173,7 +1026,7 @@ const StaffDetailsPage = () => {
     }
   };
 
-  // Generate CSV for returned items - UPDATED to match your API response
+  // Generate CSV for returned items
   const generateReturnItemsCSV = (returnedItems: any[], week: WeeklyPerformance) => {
     if (!staff || !returnedItems.length) return;
     
@@ -1382,33 +1235,6 @@ const StaffDetailsPage = () => {
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 p-3 sm:p-4">
       <div className="max-w-6xl mx-auto">
-        {/* Admin Mode Banner */}
-        {isAdminMode && (
-          <div className="mb-4 bg-green-50 border border-green-200 text-green-700 px-4 py-2 rounded-lg flex items-center justify-between shadow-sm animate-fadeIn">
-            <div className="flex items-center gap-2">
-              <Unlock className="w-4 h-4" />
-              <span className="text-sm font-medium">Admin Mode Active - You can edit items and restock</span>
-            </div>
-            <button
-              onClick={() => setIsAdminMode(false)}
-              className="text-green-700 hover:text-green-900"
-            >
-              <X size={16} />
-            </button>
-          </div>
-        )}
-        
-        {/* Admin Hint */}
-        {showAdminHint && !isAdminMode && isAuthorizedAdmin && (
-          <div className="mb-4 bg-blue-50 border border-blue-200 text-blue-700 px-4 py-2 rounded-lg flex items-center gap-2 shadow-sm animate-fadeIn">
-            <Shield className="w-4 h-4" />
-            <span className="text-sm">🔒 Admin Mode: Press and hold the header or press Ctrl+Shift+A to activate editing & restocking</span>
-            <button onClick={() => setShowAdminHint(false)} className="ml-auto">
-              <X size={14} />
-            </button>
-          </div>
-        )}
-
         {/* Alerts */}
         {error && (
           <div className="mb-4 bg-red-50 border border-red-100 text-red-700 px-4 py-3 rounded-lg flex items-start gap-2 shadow-sm animate-fadeIn">
@@ -1432,7 +1258,7 @@ const StaffDetailsPage = () => {
           </div>
         )}
 
-        {/* Header with secret click handler */}
+        {/* Header */}
         <div className="mb-6">
           <div className="flex items-center justify-between mb-4">
             <Link
@@ -1444,21 +1270,6 @@ const StaffDetailsPage = () => {
             </Link>
             
             <div className="flex items-center gap-2">
-              {/* Admin Mode Indicator */}
-              <div className="flex items-center gap-1">
-                {isAdminMode ? (
-                  <div className="flex items-center gap-1 bg-green-100 text-green-700 px-2 py-1 rounded-lg text-xs">
-                    <Unlock className="w-3 h-3" />
-                    <span>Admin</span>
-                  </div>
-                ) : isAuthorizedAdmin ? (
-                  <div className="flex items-center gap-1 bg-gray-100 text-gray-600 px-2 py-1 rounded-lg text-xs">
-                    <Lock className="w-3 h-3" />
-                    <span>View Only</span>
-                  </div>
-                ) : null}
-              </div>
-              
               <button
                 onClick={fetchStaffDetails}
                 className="inline-flex items-center gap-2 px-3 py-1.5 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors text-sm shadow-sm"
@@ -1467,63 +1278,22 @@ const StaffDetailsPage = () => {
                 <span className="hidden sm:inline">Refresh</span>
               </button>
               
-              {/* Close All Weeks Button - Always visible but disabled if not admin */}
-              <button
-                onClick={() => {
-                  if (!isAdminMode) {
-                    setError("Admin mode required to close weeks. Activate with Ctrl+Shift+A or tap the header 5 times.");
-                    setTimeout(() => setError(null), 3000);
-                    return;
-                  }
-                  const closableWeeks = weeklyPerformance.filter(w => w.remaining > 0);
-                  if (closableWeeks.length === 0) {
-                    setError("No weeks with remaining items to close.");
-                    setTimeout(() => setError(null), 3000);
-                    return;
-                  }
-                  // Call handleCloseAllWeeks function
-                  handleCloseWeek();
-                }}
-                disabled={!isAdminMode || weeklyPerformance.filter(w => w.remaining > 0).length === 0}
-                className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-lg transition-colors text-sm shadow-sm ${
-                  isAdminMode && weeklyPerformance.filter(w => w.remaining > 0).length > 0
-                    ? 'bg-orange-500 text-white hover:bg-orange-600'
-                    : 'bg-gray-300 text-gray-500 cursor-not-allowed'
-                }`}
-                title={!isAdminMode ? "Admin mode required" : "Close all weeks with remaining items"}
+              <Link
+                href="/admin/inventory/assign"
+                className="inline-flex items-center gap-2 px-3 py-1.5 bg-emerald-500 text-white rounded-lg hover:bg-emerald-600 transition-colors text-sm shadow-sm"
               >
-                <Archive className="w-3 h-3" />
-                <span className="hidden sm:inline">Close All Weeks</span>
-              </button>
-              
-              {isAdminMode && (
-                <Link
-                  href="/admin/inventory/assign"
-                  className="inline-flex items-center gap-2 px-3 py-1.5 bg-emerald-500 text-white rounded-lg hover:bg-emerald-600 transition-colors text-sm shadow-sm"
-                >
-                  <Plus className="w-3 h-3" />
-                  <span className="hidden sm:inline">Assign New</span>
-                </Link>
-              )}
+                <Plus className="w-3 h-3" />
+                <span className="hidden sm:inline">Assign New</span>
+              </Link>
             </div>
           </div>
 
-          {/* Staff Info Card - Secret click area */}
-          <div 
-            className="bg-white rounded-xl shadow-sm border border-gray-200 p-4 sm:p-6 cursor-pointer transition-all hover:shadow-md"
-            onClick={handleSecretClick}
-            onTouchStart={handleSecretClick}
-            title={isAuthorizedAdmin ? "Tap 5 times to activate Admin Mode" : "Admin mode restricted"}
-          >
+          {/* Staff Info Card */}
+          <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-4 sm:p-6">
             <div className="flex flex-col sm:flex-row sm:items-start gap-4">
               <div className="flex items-center gap-3 sm:flex-col sm:items-start">
-                <div className="w-14 h-14 sm:w-16 sm:h-16 bg-gradient-to-br from-blue-500 to-blue-600 rounded-full flex items-center justify-center shadow-md relative">
+                <div className="w-14 h-14 sm:w-16 sm:h-16 bg-gradient-to-br from-blue-500 to-blue-600 rounded-full flex items-center justify-center shadow-md">
                   <User className="w-6 h-6 sm:w-8 sm:h-8 text-white" />
-                  {isAdminMode && (
-                    <div className="absolute -top-1 -right-1 bg-green-500 rounded-full p-0.5">
-                      <Shield className="w-3 h-3 text-white" />
-                    </div>
-                  )}
                 </div>
                 <div className="sm:hidden">
                   <div className="text-lg font-bold text-black">{staff.name}</div>
@@ -1569,13 +1339,6 @@ const StaffDetailsPage = () => {
               </div>
             </div>
           </div>
-          
-          {isAuthorizedAdmin && !isAdminMode && (
-            <div className="mt-2 text-xs text-center text-gray-400">
-              <Shield className="w-3 h-3 inline mr-1" />
-              Tap the staff card 5 times or press Ctrl+Shift+A to enable editing
-            </div>
-          )}
         </div>
 
         {/* Quick Stats */}
@@ -1842,7 +1605,7 @@ const StaffDetailsPage = () => {
                           </div>
                         </div>
 
-                        {/* ALWAYS SHOW BUTTONS - Never hide them */}
+                        {/* Buttons - Always visible to everyone */}
                         <div className="mt-3 flex flex-col gap-2">
                           <div className="flex gap-2">
                             <button
@@ -1857,15 +1620,10 @@ const StaffDetailsPage = () => {
                               Details
                             </button>
                             
-                            {/* Close Week Button - Always Visible */}
+                            {/* Close Week Button - Always Visible to Everyone */}
                             <button
                               onClick={(e) => {
                                 e.stopPropagation();
-                                if (!isAdminMode) {
-                                  setError("Admin mode required to close weeks. Activate with Ctrl+Shift+A or tap the header 5 times.");
-                                  setTimeout(() => setError(null), 3000);
-                                  return;
-                                }
                                 if (week.remaining <= 0) {
                                   setError("This week has no remaining items to close.");
                                   setTimeout(() => setError(null), 3000);
@@ -1874,19 +1632,11 @@ const StaffDetailsPage = () => {
                                 setWeekToClose(week);
                                 setShowCloseWeekModal(true);
                               }}
-                              disabled={!isAdminMode || week.remaining <= 0}
-                              className={`flex-1 py-1.5 rounded-lg transition-colors text-xs font-medium flex items-center justify-center gap-1 ${
-                                week.remaining > 0 && isAdminMode
-                                  ? week.status === 'active'
-                                    ? 'bg-orange-500 text-white hover:bg-orange-600'
-                                    : 'bg-red-500 text-white hover:bg-red-600'
-                                  : 'bg-gray-300 text-gray-500 cursor-not-allowed'
-                              }`}
-                              title={!isAdminMode ? "Admin mode required" : week.remaining <= 0 ? "No items to return" : "Close Week"}
+                              className="flex-1 py-1.5 bg-orange-500 text-white rounded-lg hover:bg-orange-600 transition-colors text-xs font-medium flex items-center justify-center gap-1"
+                              title={week.remaining <= 0 ? "No items to return" : "Close Week"}
                             >
                               <Archive className="w-3 h-3" />
-                              {week.status === 'active' && week.remaining > 0 ? 'Close Week' : 
-                               week.remaining > 0 ? 'Close Overdue' : 'No Items'}
+                              Close Week
                             </button>
                           </div>
                           
@@ -1956,15 +1706,10 @@ const StaffDetailsPage = () => {
                               >
                                 <Eye className="w-3 h-3" />
                               </button>
-                              {/* Always show close button */}
+                              {/* Close Week Button - Always Visible in List View */}
                               <button
                                 onClick={(e) => {
                                   e.stopPropagation();
-                                  if (!isAdminMode) {
-                                    setError("Admin mode required to close weeks. Activate with Ctrl+Shift+A or tap the header 5 times.");
-                                    setTimeout(() => setError(null), 3000);
-                                    return;
-                                  }
                                   if (week.remaining <= 0) {
                                     setError("This week has no remaining items to close.");
                                     setTimeout(() => setError(null), 3000);
@@ -1973,15 +1718,8 @@ const StaffDetailsPage = () => {
                                   setWeekToClose(week);
                                   setShowCloseWeekModal(true);
                                 }}
-                                disabled={!isAdminMode || week.remaining <= 0}
-                                className={`p-1.5 rounded-lg transition-colors ${
-                                  week.remaining > 0 && isAdminMode
-                                    ? week.status === 'active'
-                                      ? 'bg-orange-50 text-orange-600 hover:bg-orange-100'
-                                      : 'bg-red-50 text-red-600 hover:bg-red-100'
-                                    : 'bg-gray-100 text-gray-400 cursor-not-allowed'
-                                }`}
-                                title={!isAdminMode ? "Admin mode required" : week.remaining <= 0 ? "No items to return" : "Close Week"}
+                                className="p-1.5 bg-orange-100 text-orange-600 rounded-lg hover:bg-orange-200 transition-colors"
+                                title={week.remaining <= 0 ? "No items to return" : "Close Week"}
                               >
                                 <Archive className="w-3 h-3" />
                               </button>
@@ -2018,19 +1756,13 @@ const StaffDetailsPage = () => {
               <div className="text-sm text-black max-w-md mx-auto mb-6">
                 This staff member doesn't have any inventory assigned yet. Assign inventory to track their performance.
               </div>
-              {isAdminMode ? (
-                <Link
-                  href="/admin/inventory/assign"
-                  className="inline-flex items-center gap-2 px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors text-sm shadow-sm"
-                >
-                  <Plus className="w-4 h-4" />
-                  Assign Inventory
-                </Link>
-              ) : (
-                <div className="text-sm text-gray-500">
-                  Enable Admin Mode to assign inventory
-                </div>
-              )}
+              <Link
+                href="/admin/inventory/assign"
+                className="inline-flex items-center gap-2 px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors text-sm shadow-sm"
+              >
+                <Plus className="w-4 h-4" />
+                Assign Inventory
+              </Link>
             </div>
           )}
         </div>
@@ -2098,25 +1830,6 @@ const StaffDetailsPage = () => {
                         </div>
                       )}
                     </div>
-
-                    {/* Debug Stock Info - Only in Admin Mode */}
-                    {isAdminMode && (
-                      <div className="mt-2 p-2 bg-gray-100 rounded text-xs">
-                        <div className="font-medium">Stock Information:</div>
-                        <div>Product ID: {editingItem.productId}</div>
-                        <div>Stock in state: {stockData.find(s => s.productId === editingItem.productId)?.quantity || 0}</div>
-                        <button 
-                          onClick={async () => {
-                            const freshStock = await fetchProductStock(editingItem.productId);
-                            setAvailableStock(freshStock);
-                            await fetchAllStockData();
-                          }}
-                          className="mt-1 px-2 py-1 bg-blue-100 text-blue-700 rounded text-xs"
-                        >
-                          Refresh Stock Data
-                        </button>
-                      </div>
-                    )}
                   </div>
 
                   {stockError && (
@@ -2212,50 +1925,48 @@ const StaffDetailsPage = () => {
                     </div>
                   )}
                   
-                  {/* Quick Actions - Only in Admin Mode */}
-                  {isAdminMode && (
-                    <div className="border-t border-gray-200 pt-4">
-                      <div className="text-xs font-medium text-black mb-2">Quick Actions</div>
-                      <div className="flex gap-2">
-                        <button
-                          onClick={() => {
-                            setSelectedInventory(editingItem);
-                            setAdjustType('add');
-                            setAdjustQuantity('');
-                            setAdjustReason('');
-                            setShowAdjustModal(true);
-                            setEditingItem(null);
-                          }}
-                          disabled={availableStock <= 0}
-                          className="flex-1 py-2 bg-emerald-50 text-emerald-700 rounded-lg hover:bg-emerald-100 transition-colors text-xs font-medium flex items-center justify-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed"
-                        >
-                          <Plus className="w-3 h-3" />
-                          Add Items
-                        </button>
-                        <button
-                          onClick={() => {
-                            setSelectedInventory(editingItem);
-                            setAdjustType('remove');
-                            setAdjustQuantity('');
-                            setAdjustReason('');
-                            setShowAdjustModal(true);
-                            setEditingItem(null);
-                          }}
-                          className="flex-1 py-2 bg-orange-50 text-orange-700 rounded-lg hover:bg-orange-100 transition-colors text-xs font-medium flex items-center justify-center gap-1"
-                        >
-                          <Minus className="w-3 h-3" />
-                          Remove Items
-                        </button>
-                        <button
-                          onClick={() => handleRestockClick(editingItem)}
-                          className="flex-1 py-2 bg-blue-50 text-blue-700 rounded-lg hover:bg-blue-100 transition-colors text-xs font-medium flex items-center justify-center gap-1"
-                        >
-                          <Package className="w-3 h-3" />
-                          Restock
-                        </button>
-                      </div>
+                  {/* Quick Actions */}
+                  <div className="border-t border-gray-200 pt-4">
+                    <div className="text-xs font-medium text-black mb-2">Quick Actions</div>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => {
+                          setSelectedInventory(editingItem);
+                          setAdjustType('add');
+                          setAdjustQuantity('');
+                          setAdjustReason('');
+                          setShowAdjustModal(true);
+                          setEditingItem(null);
+                        }}
+                        disabled={availableStock <= 0}
+                        className="flex-1 py-2 bg-emerald-50 text-emerald-700 rounded-lg hover:bg-emerald-100 transition-colors text-xs font-medium flex items-center justify-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        <Plus className="w-3 h-3" />
+                        Add Items
+                      </button>
+                      <button
+                        onClick={() => {
+                          setSelectedInventory(editingItem);
+                          setAdjustType('remove');
+                          setAdjustQuantity('');
+                          setAdjustReason('');
+                          setShowAdjustModal(true);
+                          setEditingItem(null);
+                        }}
+                        className="flex-1 py-2 bg-orange-50 text-orange-700 rounded-lg hover:bg-orange-100 transition-colors text-xs font-medium flex items-center justify-center gap-1"
+                      >
+                        <Minus className="w-3 h-3" />
+                        Remove Items
+                      </button>
+                      <button
+                        onClick={() => handleRestockClick(editingItem)}
+                        className="flex-1 py-2 bg-blue-50 text-blue-700 rounded-lg hover:bg-blue-100 transition-colors text-xs font-medium flex items-center justify-center gap-1"
+                      >
+                        <Package className="w-3 h-3" />
+                        Restock
+                      </button>
                     </div>
-                  )}
+                  </div>
                 </div>
               </div>
               
@@ -2269,13 +1980,8 @@ const StaffDetailsPage = () => {
                 </button>
                 <button
                   onClick={handleSaveEdit}
-                  disabled={actionLoading || !isAdminMode}
-                  className={`px-4 py-2 rounded-lg transition-colors text-sm font-medium disabled:opacity-50 ${
-                    isAdminMode 
-                      ? 'bg-blue-500 text-white hover:bg-blue-600' 
-                      : 'bg-gray-300 text-gray-500 cursor-not-allowed'
-                  }`}
-                  title={!isAdminMode ? "Admin mode required to edit" : ""}
+                  disabled={actionLoading}
+                  className="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors text-sm font-medium disabled:opacity-50"
                 >
                   {actionLoading ? (
                     <>
@@ -2417,7 +2123,7 @@ const StaffDetailsPage = () => {
                               </div>
                               
                               <div className="flex items-center gap-2 ml-2">
-                                {remaining > 0 && selectedWeek.status === 'active' && isAdminMode && (
+                                {remaining > 0 && selectedWeek.status === 'active' && (
                                   <>
                                     <button
                                       onClick={(e) => {
@@ -2478,13 +2184,8 @@ const StaffDetailsPage = () => {
                                     e.stopPropagation();
                                     handleEditClick(inventory);
                                   }}
-                                  className={`inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs transition-colors ${
-                                    isAdminMode 
-                                      ? 'bg-blue-100 text-blue-700 hover:bg-blue-200' 
-                                      : 'bg-gray-100 text-gray-400 cursor-not-allowed'
-                                  }`}
-                                  title={!isAdminMode ? "Admin mode required to edit" : "Edit Assignment"}
-                                  disabled={!isAdminMode}
+                                  className="inline-flex items-center gap-1 px-2 py-1 bg-blue-100 text-blue-700 rounded-lg text-xs hover:bg-blue-200 transition-colors"
+                                  title="Edit Assignment"
                                 >
                                   <Edit className="w-3 h-3" />
                                 </button>
@@ -2526,20 +2227,18 @@ const StaffDetailsPage = () => {
                                 <div className="text-xs text-black">
                                   Updated: {formatDate(inventory.updatedAt)}
                                 </div>
-                                {isAdminMode && (
-                                  <button
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      if (confirm("Delete this assignment and return items to stock?")) {
-                                        handleDeleteAssignment(inventory.id);
-                                      }
-                                    }}
-                                    className="text-xs text-red-600 hover:text-red-800 flex items-center gap-1"
-                                  >
-                                    <Trash2 className="w-3 h-3" />
-                                    Delete
-                                  </button>
-                                )}
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    if (confirm("Delete this assignment and return items to stock?")) {
+                                      handleDeleteAssignment(inventory.id);
+                                    }
+                                  }}
+                                  className="text-xs text-red-600 hover:text-red-800 flex items-center gap-1"
+                                >
+                                  <Trash2 className="w-3 h-3" />
+                                  Delete
+                                </button>
                               </div>
                             </div>
                           </div>
@@ -2549,7 +2248,7 @@ const StaffDetailsPage = () => {
                   )}
                 </div>
 
-                {/* Returned Items Summary - This Week Only */}
+                {/* Returned Items Summary */}
                 {selectedWeek.totalReturned > 0 && (
                   <div className="px-4 sm:px-6 pb-6">
                     <div className="flex items-center justify-between mb-4">
@@ -2630,15 +2329,10 @@ const StaffDetailsPage = () => {
                 )}
               </div>
               
-              {/* Modal Footer - Always show close button */}
+              {/* Modal Footer - Always show Close button */}
               <div className="border-t border-gray-200 px-4 sm:px-6 py-4 bg-gray-50 flex justify-between gap-3">
                 <button
                   onClick={() => {
-                    if (!isAdminMode) {
-                      setError("Admin mode required to close weeks. Activate with Ctrl+Shift+A or tap the header 5 times.");
-                      setTimeout(() => setError(null), 3000);
-                      return;
-                    }
                     if (selectedWeek.remaining <= 0) {
                       setError("This week has no remaining items to close.");
                       setTimeout(() => setError(null), 3000);
@@ -2648,19 +2342,11 @@ const StaffDetailsPage = () => {
                     setWeekToClose(selectedWeek);
                     setShowCloseWeekModal(true);
                   }}
-                  disabled={!isAdminMode || selectedWeek.remaining <= 0}
-                  className={`px-4 py-2 rounded-lg transition-colors text-sm font-medium flex items-center gap-1 ${
-                    selectedWeek.remaining > 0 && isAdminMode
-                      ? selectedWeek.status === 'active'
-                        ? 'bg-orange-500 text-white hover:bg-orange-600'
-                        : 'bg-red-500 text-white hover:bg-red-600'
-                      : 'bg-gray-300 text-gray-500 cursor-not-allowed'
-                  }`}
-                  title={!isAdminMode ? "Admin mode required" : selectedWeek.remaining <= 0 ? "No items to return" : "Close Week"}
+                  className="px-4 py-2 bg-orange-500 text-white rounded-lg hover:bg-orange-600 transition-colors text-sm font-medium flex items-center gap-1"
+                  title={selectedWeek.remaining <= 0 ? "No items to return" : "Close Week"}
                 >
                   <Archive className="w-3 h-3" />
-                  {selectedWeek.status === 'active' && selectedWeek.remaining > 0 ? 'Close Week' : 
-                   selectedWeek.remaining > 0 ? 'Close Overdue' : 'No Items'}
+                  Close Week
                 </button>
                 <button
                   onClick={() => setShowWeekDetails(false)}
@@ -2779,13 +2465,8 @@ const StaffDetailsPage = () => {
                 </button>
                 <button
                   onClick={handleReturnItems}
-                  disabled={!returnQuantity || !isAdminMode}
-                  className={`px-4 py-2 rounded-lg transition-colors text-sm font-medium disabled:opacity-50 ${
-                    isAdminMode
-                      ? 'bg-orange-500 text-white hover:bg-orange-600'
-                      : 'bg-gray-300 text-gray-500 cursor-not-allowed'
-                  }`}
-                  title={!isAdminMode ? "Admin mode required to process returns" : ""}
+                  disabled={!returnQuantity}
+                  className="px-4 py-2 bg-orange-500 text-white rounded-lg hover:bg-orange-600 transition-colors text-sm font-medium disabled:opacity-50"
                 >
                   Process Return
                 </button>
@@ -2903,15 +2584,12 @@ const StaffDetailsPage = () => {
                 </button>
                 <button
                   onClick={handleAdjustItems}
-                  disabled={!adjustQuantity || !isAdminMode}
+                  disabled={!adjustQuantity}
                   className={`px-4 py-2 rounded-lg transition-colors text-sm font-medium disabled:opacity-50 ${
-                    isAdminMode
-                      ? adjustType === 'add' 
-                        ? 'bg-emerald-500 text-white hover:bg-emerald-600'
-                        : 'bg-orange-500 text-white hover:bg-orange-600'
-                      : 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                    adjustType === 'add' 
+                      ? 'bg-emerald-500 text-white hover:bg-emerald-600'
+                      : 'bg-orange-500 text-white hover:bg-orange-600'
                   }`}
-                  title={!isAdminMode ? "Admin mode required to adjust items" : ""}
                 >
                   {adjustType === 'add' ? 'Add Items' : 'Remove Items'}
                 </button>
@@ -3002,13 +2680,8 @@ const StaffDetailsPage = () => {
                 </button>
                 <button
                   onClick={handleCloseWeek}
-                  disabled={loadingCloseWeek !== null || !isAdminMode}
-                  className={`px-4 py-2 rounded-lg transition-colors text-sm font-medium disabled:opacity-50 ${
-                    isAdminMode
-                      ? 'bg-orange-500 text-white hover:bg-orange-600'
-                      : 'bg-gray-300 text-gray-500 cursor-not-allowed'
-                  }`}
-                  title={!isAdminMode ? "Admin mode required to close week" : ""}
+                  disabled={loadingCloseWeek !== null}
+                  className="px-4 py-2 bg-orange-500 text-white rounded-lg hover:bg-orange-600 transition-colors text-sm font-medium disabled:opacity-50"
                 >
                   {loadingCloseWeek ? (
                     <>
