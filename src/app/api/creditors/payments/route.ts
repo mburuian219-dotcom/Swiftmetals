@@ -103,8 +103,8 @@ export async function GET(req: NextRequest) {
           recordedByEmail: true,
           status: true,
           isVerified: true,
-          verifiedAt: true,
-          createdAt: true,
+          // removed: createdAt doesn't exist in payment model
+          // removed: verifiedAt doesn't exist in payment model
         },
       }),
       prisma.payment.count({ where }),
@@ -145,8 +145,6 @@ export async function GET(req: NextRequest) {
       recordedByEmail: p.recordedByEmail || 'system@swiftmetals.com',
       status: p.status,
       isVerified: p.isVerified,
-      verifiedAt: p.verifiedAt,
-      createdAt: p.createdAt,
     }));
 
     return NextResponse.json({
@@ -272,7 +270,7 @@ export async function POST(req: NextRequest) {
 
     // Use transaction for atomic operation with increased timeout
     await prisma.$transaction(async (tx: any) => {
-      // Create payment
+      // Create payment - only use fields that exist in the schema
       payment = await tx.payment.create({
         data: {
           creditorId: creditorIdNum,
@@ -283,7 +281,6 @@ export async function POST(req: NextRequest) {
           note: notes || `Payment to creditor: ${creditor.name}`,
           referenceId: reference || null,
           isVerified: true,
-          verifiedAt: new Date(),
           status: 'COMPLETED',
           paymentType: 'creditor',
           recordedBy: recordedBy || 'System',
@@ -570,17 +567,11 @@ export async function PATCH(req: NextRequest) {
       
       if (status === 'COMPLETED' || status === 'CLEARED') {
         updateData.isVerified = true;
-        updateData.verifiedAt = new Date();
       }
     }
 
     if (isVerified !== undefined) {
       updateData.isVerified = isVerified;
-      if (isVerified) {
-        updateData.verifiedAt = new Date();
-      } else {
-        updateData.verifiedAt = null;
-      }
     }
 
     if (notes !== undefined) {
@@ -600,7 +591,6 @@ export async function PATCH(req: NextRequest) {
         id: updatedPayment.id,
         status: updatedPayment.status,
         isVerified: updatedPayment.isVerified,
-        verifiedAt: updatedPayment.verifiedAt,
         notes: updatedPayment.note,
       },
     });
