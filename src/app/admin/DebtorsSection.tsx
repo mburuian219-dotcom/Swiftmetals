@@ -1,4 +1,4 @@
-import { Users, Mail, Phone, Send, FileText, Plus, Trash2, Edit2, ChevronDown, ChevronUp, X, Loader, MessageCircle, Download, Search } from "lucide-react";
+import { Users, Mail, Phone, Send, FileText, Plus, Trash2, Edit2, ChevronDown, ChevronUp, X, Loader, MessageCircle, Download, Search, Filter, UserCheck, Check } from "lucide-react";
 import { useState, useEffect, useMemo } from "react";
 
 type Sale = {
@@ -52,6 +52,9 @@ export default function DebtorsSection() {
   const [editingId, setEditingId] = useState<number | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
+  const [staffFilter, setStaffFilter] = useState<string>("all");
+  const [showStaffFilterDropdown, setShowStaffFilterDropdown] = useState(false);
+  const [uniqueStaffMembers, setUniqueStaffMembers] = useState<string[]>([]);
   const [sortConfig, setSortConfig] = useState<{
     key: keyof Debtor;
     direction: 'asc' | 'desc';
@@ -68,7 +71,21 @@ export default function DebtorsSection() {
     fetchDebtors();
   }, []);
 
-  // Filter and sort debtors when search query or sort config changes
+  // Extract unique staff members from debtors
+  useEffect(() => {
+    const staffSet = new Set<string>();
+    debtors.forEach(debtor => {
+      if (debtor.createdBy) staffSet.add(debtor.createdBy);
+      if (debtor.lastUpdatedBy) staffSet.add(debtor.lastUpdatedBy);
+      debtor.sales.forEach(sale => {
+        if (sale.createdBy) staffSet.add(sale.createdBy);
+        if (sale.updatedBy) staffSet.add(sale.updatedBy);
+      });
+    });
+    setUniqueStaffMembers(Array.from(staffSet).filter(Boolean).sort());
+  }, [debtors]);
+
+  // Filter and sort debtors when search query, staff filter, or sort config changes
   useEffect(() => {
     let result = [...debtors];
     
@@ -84,7 +101,20 @@ export default function DebtorsSection() {
         ) ||
         debtor.balance.toString().includes(query) ||
         debtor.totalSales.toString().includes(query) ||
-        (debtor.lastUpdatedBy && debtor.lastUpdatedBy.toLowerCase().includes(query))
+        (debtor.lastUpdatedBy && debtor.lastUpdatedBy.toLowerCase().includes(query)) ||
+        (debtor.createdBy && debtor.createdBy.toLowerCase().includes(query))
+      );
+    }
+    
+    // Apply staff filter
+    if (staffFilter !== "all") {
+      result = result.filter(debtor => 
+        debtor.createdBy === staffFilter || 
+        debtor.lastUpdatedBy === staffFilter ||
+        debtor.sales.some(sale => 
+          sale.createdBy === staffFilter || 
+          sale.updatedBy === staffFilter
+        )
       );
     }
     
@@ -115,14 +145,13 @@ export default function DebtorsSection() {
     }
     
     setFilteredDebtors(result);
-  }, [debtors, searchQuery, sortConfig]);
+  }, [debtors, searchQuery, staffFilter, sortConfig]);
 
   const fetchDebtors = async () => {
     try {
       setLoading(true);
       setError(null);
       
-      // Fetch all sales with a timeout
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 100000);
       
@@ -132,11 +161,9 @@ export default function DebtorsSection() {
       if (!response.ok) throw new Error("Failed to fetch sales");
       const sales = await response.json();
 
-      // Filter and group sales by customer where payment is not PAID
       const debtorMap = new Map<number, Debtor>();
 
       sales.forEach((sale: any) => {
-        // Only include unpaid or partially paid sales
         if ((sale.status === "UNPAID" || sale.status === "PARTIAL") && sale.customer) {
           const customerId = sale.customer.id;
 
@@ -153,8 +180,8 @@ export default function DebtorsSection() {
               payments: [],
               lastUpdatedBy: sale.updatedBy || sale.createdBy || "System",
               lastUpdatedAt: sale.updatedAt || sale.createdAt,
-              createdBy: sale.createdBy,
-              createdAt: sale.createdAt,
+              createdBy: sale.createdBy || sale.customer.createdBy || "System",
+              createdAt: sale.createdAt || sale.customer.createdAt,
             });
           }
 
@@ -163,14 +190,12 @@ export default function DebtorsSection() {
           debtor.paid += sale.totalPaid;
           debtor.balance = debtor.totalSales - debtor.paid;
 
-          // Update last updated info if this sale is more recent
           const saleUpdatedAt = sale.updatedAt || sale.createdAt;
           if (saleUpdatedAt && (!debtor.lastUpdatedAt || new Date(saleUpdatedAt) > new Date(debtor.lastUpdatedAt))) {
             debtor.lastUpdatedBy = sale.updatedBy || sale.createdBy || "System";
             debtor.lastUpdatedAt = saleUpdatedAt;
           }
 
-          // Build items string from saleitems
           const itemsStr = sale.saleitems
             ?.map((item: any) => `${item.product?.name || "Item"} x${item.quantity}`)
             .join(", ") || "Items";
@@ -187,7 +212,6 @@ export default function DebtorsSection() {
             updatedAt: sale.updatedAt,
           });
 
-          // Add payment history - filter only cleared payments
           if (sale.payments && Array.isArray(sale.payments)) {
             sale.payments.forEach((payment: any) => {
               if (payment.status === "CLEARED") {
@@ -217,7 +241,7 @@ export default function DebtorsSection() {
     }
   };
 
-  // Function to download debtors as CSV - ENHANCED WITH AUDIT INFO
+  // Function to download debtors as CSV with staff filter support
   const downloadDebtorsCSV = () => {
     if (filteredDebtors.length === 0) {
       alert("No debtors to download.");
@@ -225,7 +249,6 @@ export default function DebtorsSection() {
     }
 
     try {
-      // Define CSV headers
       const headers = [
         "Customer ID",
         "Customer Name",
@@ -239,33 +262,28 @@ export default function DebtorsSection() {
         "Last Sale Date",
         "Sale Status",
         "Last Payment Date",
-        "Created By",
+        "Created By (Staff)",
         "Created At",
-        "Last Updated By",
-        "Last Updated At"
+        "Last Updated By (Staff)",
+        "Last Updated At",
+        "Staff Filter Applied"
       ];
 
-      // Prepare data rows
       const rows = filteredDebtors.map(debtor => {
-        // Calculate last sale date
         const lastSale = debtor.sales.length > 0 
           ? new Date(debtor.sales[debtor.sales.length - 1].date).toLocaleDateString()
           : "-";
         
-        // Calculate last payment date
         const lastPayment = debtor.payments.length > 0
           ? new Date(debtor.payments[debtor.payments.length - 1].date).toLocaleDateString()
           : "-";
         
-        // Calculate payment rate as clean percentage
         const paymentRate = debtor.totalSales > 0 
           ? ((debtor.paid / debtor.totalSales) * 100).toFixed(0)
           : "0";
         
-        // Determine sale status
         const saleStatus = debtor.balance === debtor.totalSales ? "UNPAID" : "PARTIALLY PAID";
         
-        // Format dates for CSV
         const createdAt = debtor.createdAt ? new Date(debtor.createdAt).toLocaleString() : "-";
         const updatedAt = debtor.lastUpdatedAt ? new Date(debtor.lastUpdatedAt).toLocaleString() : "-";
 
@@ -285,40 +303,38 @@ export default function DebtorsSection() {
           debtor.createdBy || "System",
           createdAt,
           debtor.lastUpdatedBy || "System",
-          updatedAt
+          updatedAt,
+          staffFilter !== "all" ? staffFilter : "All Staff"
         ];
       });
 
-      // Combine headers and rows
       const csvContent = [
         headers.join(","),
         ...rows.map(row => row.join(","))
       ].join("\n");
 
-      // Create download link
       const blob = new Blob(["\uFEFF" + csvContent], { type: "text/csv;charset=utf-8;" });
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = url;
       
-      // Generate filename with current date
       const date = new Date().toISOString().split('T')[0];
-      link.download = `debtors-report_${date}.csv`;
+      const staffSuffix = staffFilter !== "all" ? `_${staffFilter.replace(/\s+/g, '_')}` : "";
+      link.download = `debtors-report${staffSuffix}_${date}.csv`;
       
-      // Trigger download
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
       URL.revokeObjectURL(url);
       
-      alert(`Debtors report downloaded successfully!`);
+      const staffInfo = staffFilter !== "all" ? ` for staff "${staffFilter}"` : "";
+      alert(`Debtors report${staffInfo} downloaded successfully!`);
     } catch (error) {
       console.error("Error generating CSV:", error);
       alert("Failed to generate CSV file. Please try again.");
     }
   };
 
-  // Helper function to format currency for CSV (without commas)
   const formatCurrencyForCSV = (amount: number) => {
     return Number(amount || 0).toFixed(2);
   };
@@ -329,6 +345,16 @@ export default function DebtorsSection() {
 
   const clearSearch = () => {
     setSearchQuery("");
+  };
+
+  const handleStaffFilterChange = (staffName: string) => {
+    setStaffFilter(staffName);
+    setShowStaffFilterDropdown(false);
+  };
+
+  const clearStaffFilter = () => {
+    setStaffFilter("all");
+    setShowStaffFilterDropdown(false);
   };
 
   const handleSort = (key: keyof Debtor) => {
@@ -377,29 +403,24 @@ export default function DebtorsSection() {
     alert("To remove a debtor, delete all their associated sales from the Sales section.");
   };
 
-  // Single Receipt Download
   const handleDownloadReceipt = (saleId: number) => {
     const receiptUrl = `/api/receipt/${saleId}`;
     window.open(receiptUrl, '_blank');
   };
 
-  // Full Statement Download
   const handleDownloadStatement = (debtor: Debtor) => {
     const statementUrl = `/api/customer-receipt/${debtor.id}`;
     window.open(statementUrl, '_blank');
   };
 
-  // Generate receipt download link for PDF
   const generateReceiptDownloadLink = (saleId: number): string => {
     return `${window.location.origin}/api/receipt/${saleId}`;
   };
 
-  // Generate statement download link
   const generateStatementLink = (customerId: number): string => {
     return `${window.location.origin}/api/customer-receipt/${customerId}`;
   };
 
-  // Generate individual sale reminder message with receipt link
   const generateSaleReminderMessage = (debtor: Debtor, sale: Sale): string => {
     const receiptLink = generateReceiptDownloadLink(sale.id);
     
@@ -423,7 +444,6 @@ Best regards,
 Swiftmetals`;
   };
 
-  // Generate overall account reminder message
   const generateAccountReminderMessage = (debtor: Debtor): string => {
     const receiptLinks = debtor.sales.map(sale => 
       `Sale #${sale.id} (${formatDate(sale.date)}): ${generateReceiptDownloadLink(sale.id)}`
@@ -527,7 +547,7 @@ Swiftmetals`;
           </div>
           <div className="flex flex-col sm:flex-row gap-3 w-full md:w-auto">
             {/* Search Bar */}
-            <div className="relative flex-1 md:flex-none md:w-64 lg:w-80">
+            <div className="relative flex-1 md:flex-none md:w-48 lg:w-64">
               <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
                 <Search className="h-4 w-4 text-gray-400" />
               </div>
@@ -535,7 +555,7 @@ Swiftmetals`;
                 type="text"
                 value={searchQuery}
                 onChange={handleSearch}
-                placeholder="Search by name, phone, updater..."
+                placeholder="Search debtors..."
                 className="pl-10 pr-10 py-2.5 border border-gray-300 rounded-lg w-full focus:ring-2 focus:ring-amber-500 focus:border-transparent focus:outline-none text-sm"
               />
               {searchQuery && (
@@ -548,14 +568,74 @@ Swiftmetals`;
               )}
             </div>
             
+            {/* Staff Filter Dropdown */}
+            <div className="relative">
+              <button
+                onClick={() => setShowStaffFilterDropdown(!showStaffFilterDropdown)}
+                className={`flex items-center gap-2 px-4 py-2.5 border rounded-lg transition text-sm w-full sm:w-auto justify-center ${
+                  staffFilter !== "all" 
+                    ? "bg-amber-100 border-amber-300 text-amber-800" 
+                    : "bg-white border-gray-300 text-gray-700 hover:bg-gray-50"
+                }`}
+              >
+                <Filter className="w-4 h-4" />
+                <span className="truncate max-w-[100px]">
+                  {staffFilter !== "all" ? staffFilter : "Filter by Staff"}
+                </span>
+                {staffFilter !== "all" && (
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      clearStaffFilter();
+                    }}
+                    className="ml-1 p-0.5 hover:bg-amber-200 rounded"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                )}
+              </button>
+              
+              {showStaffFilterDropdown && (
+                <div className="absolute top-full left-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg z-50 w-64 max-h-60 overflow-y-auto">
+                  <div className="p-2">
+                    <button
+                      onClick={clearStaffFilter}
+                      className="w-full text-left px-3 py-2 text-sm hover:bg-gray-100 rounded transition flex items-center gap-2"
+                    >
+                      <Users className="w-4 h-4" />
+                      All Staff
+                    </button>
+                    {uniqueStaffMembers.length === 0 ? (
+                      <div className="px-3 py-2 text-sm text-gray-500">No staff members found</div>
+                    ) : (
+                      uniqueStaffMembers.map(staff => (
+                        <button
+                          key={staff}
+                          onClick={() => handleStaffFilterChange(staff)}
+                          className={`w-full text-left px-3 py-2 text-sm hover:bg-gray-100 rounded transition flex items-center gap-2 ${
+                            staffFilter === staff ? "bg-amber-50 text-amber-800 font-medium" : ""
+                          }`}
+                        >
+                          <UserCheck className="w-4 h-4" />
+                          {staff}
+                          {staffFilter === staff && <Check className="w-3 h-3 ml-auto text-amber-600" />}
+                        </button>
+                      ))
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+            
             {/* CSV Download Button */}
             <button
               onClick={downloadDebtorsCSV}
               disabled={filteredDebtors.length === 0}
               className="bg-gradient-to-r from-green-500 to-emerald-500 hover:from-green-600 hover:to-emerald-600 text-white px-4 md:px-6 py-2.5 rounded-lg font-medium transition flex items-center gap-2 shadow-lg hover:shadow-xl text-sm md:text-base w-full sm:w-auto justify-center disabled:opacity-50 disabled:cursor-not-allowed"
-              title={filteredDebtors.length === 0 ? "No debtors to download" : "Download CSV report with audit columns"}
+              title={filteredDebtors.length === 0 ? "No debtors to download" : `Download CSV report${staffFilter !== "all" ? ` for ${staffFilter}` : ""}`}
             >
-              <Download className="w-4 h-4 md:w-5 md:h-5" /> Download CSV Report
+              <Download className="w-4 h-4 md:w-5 md:h-5" /> 
+              Download CSV{staffFilter !== "all" ? " (Filtered)" : ""}
             </button>
             
             <button
@@ -568,9 +648,9 @@ Swiftmetals`;
         </div>
 
         {/* Search Results Info */}
-        {searchQuery && (
+        {(searchQuery || staffFilter !== "all") && (
           <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg">
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between flex-wrap gap-2">
               <p className="text-sm text-blue-800">
                 Showing {filteredDebtors.length} of {debtors.length} debtors
                 {searchQuery && (
@@ -578,13 +658,30 @@ Swiftmetals`;
                     for "<span className="font-semibold">{searchQuery}</span>"
                   </span>
                 )}
+                {staffFilter !== "all" && (
+                  <span className="ml-2">
+                    • Staff: <span className="font-semibold">{staffFilter}</span>
+                  </span>
+                )}
               </p>
-              <button
-                onClick={clearSearch}
-                className="text-sm text-blue-600 hover:text-blue-800 flex items-center gap-1"
-              >
-                <X className="w-3 h-3" /> Clear search
-              </button>
+              <div className="flex gap-2">
+                {staffFilter !== "all" && (
+                  <button
+                    onClick={clearStaffFilter}
+                    className="text-sm text-amber-600 hover:text-amber-800 flex items-center gap-1"
+                  >
+                    <X className="w-3 h-3" /> Clear staff filter
+                  </button>
+                )}
+                {searchQuery && (
+                  <button
+                    onClick={clearSearch}
+                    className="text-sm text-blue-600 hover:text-blue-800 flex items-center gap-1"
+                  >
+                    <X className="w-3 h-3" /> Clear search
+                  </button>
+                )}
+              </div>
             </div>
           </div>
         )}
@@ -685,18 +782,30 @@ Swiftmetals`;
                 <div className="bg-white rounded-lg p-8 md:p-12 text-center shadow-sm">
                   <Users className="w-12 h-12 md:w-16 md:h-16 mx-auto mb-3 md:mb-4 text-gray-300" />
                   <p className="text-gray-500 text-sm md:text-lg">
-                    {searchQuery ? 
-                      `No debtors found for "${searchQuery}". Try a different search term.` : 
+                    {searchQuery || staffFilter !== "all" ? 
+                      `No debtors found matching your filters.` : 
                       "No debtors yet. Add one to get started."
                     }
                   </p>
-                  {searchQuery && (
-                    <button
-                      onClick={clearSearch}
-                      className="mt-4 px-4 py-2 bg-amber-600 text-white rounded-lg hover:bg-amber-700 transition text-sm"
-                    >
-                      Clear Search
-                    </button>
+                  {(searchQuery || staffFilter !== "all") && (
+                    <div className="flex flex-col sm:flex-row gap-2 justify-center mt-4">
+                      {staffFilter !== "all" && (
+                        <button
+                          onClick={clearStaffFilter}
+                          className="px-4 py-2 bg-amber-600 text-white rounded-lg hover:bg-amber-700 transition text-sm"
+                        >
+                          Clear Staff Filter
+                        </button>
+                      )}
+                      {searchQuery && (
+                        <button
+                          onClick={clearSearch}
+                          className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition text-sm"
+                        >
+                          Clear Search
+                        </button>
+                      )}
+                    </div>
                   )}
                 </div>
               ) : (
@@ -721,6 +830,12 @@ Swiftmetals`;
                               <span className="flex items-center gap-1 truncate">
                                 <Mail className="w-3 h-3" />
                                 <span className="truncate">{debtor.email}</span>
+                              </span>
+                            )}
+                            {debtor.createdBy && (
+                              <span className="flex items-center gap-1 text-amber-600">
+                                <UserCheck className="w-3 h-3" />
+                                {debtor.createdBy}
                               </span>
                             )}
                           </div>
@@ -1020,12 +1135,11 @@ Swiftmetals`;
               </div>
               <div className="bg-purple-50 border border-purple-200 rounded-lg p-4">
                 <p className="text-sm text-purple-800">
-                  <strong>Audit Information:</strong>
+                  <strong>Staff Filter:</strong>
                   <ul className="mt-1 ml-2">
-                    <li>• Shows who created each debtor (through sales)</li>
-                    <li>• Shows who last updated each debtor</li>
-                    <li>• Timestamps for all changes</li>
-                    <li>• CSV report includes full audit trail</li>
+                    <li>• Filter debtors by the staff member who created them</li>
+                    <li>• Filter debtors by the staff member who last updated them</li>
+                    <li>• CSV download includes staff filter information</li>
                   </ul>
                 </p>
               </div>
