@@ -1,4 +1,3 @@
-// src/app/api/creditors/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 
@@ -14,10 +13,7 @@ export async function GET() {
           include: {
             product: {
               select: {
-                id: true,
                 name: true,
-                price: true,
-                category: true,
               },
             },
           },
@@ -25,68 +21,9 @@ export async function GET() {
             createdAt: "desc",
           },
         },
-        payments: {
-          where: {
-            paymentType: "creditor",
-          },
-          orderBy: {
-            paidAt: "desc",
-          },
-        },
       },
     });
-
-    // Transform data and calculate correct totals
-    const transformedCreditors = creditors.map((creditor) => {
-      // Calculate totals from restocks
-      const totalOwedFromRestocks = creditor.restocks.reduce(
-        (sum, restock) => sum + restock.totalCost, 
-        0
-      );
-      
-      // Calculate total paid from payments
-      const totalPaid = (creditor.payments || []).reduce(
-        (sum, payment) => sum + payment.amount, 
-        0
-      );
-      
-      // Calculate actual balance
-      const actualBalance = totalOwedFromRestocks - totalPaid;
-      
-      return {
-        ...creditor,
-        // Use the calculated totalOwed, not the stored one
-        totalOwed: Math.max(0, actualBalance),
-        // Include the raw data for display
-        _rawTotalOwed: totalOwedFromRestocks,
-        _totalPaid: totalPaid,
-        restocks: creditor.restocks.map((restock) => ({
-          ...restock,
-          createdBy: (restock as any).createdBy || 'System',
-          createdByEmail: (restock as any).createdByEmail || 'system@swiftmetals.com',
-          staffName: (restock as any).staffName || null,
-          notes: (restock as any).notes || null,
-          product: {
-            id: restock.product.id,
-            name: restock.product.name,
-            price: restock.product.price,
-            category: restock.product.category || 'Uncategorized',
-          },
-        })),
-        payments: (creditor.payments || []).map((payment) => ({
-          id: payment.id,
-          amount: payment.amount,
-          paymentDate: payment.paymentDate || payment.paidAt,
-          paymentMethod: payment.method,
-          reference: payment.referenceId,
-          notes: payment.note,
-          recordedBy: payment.recordedBy || 'System',
-          recordedByEmail: payment.recordedByEmail || 'system@swiftmetals.com',
-        })),
-      };
-    });
-
-    return NextResponse.json(transformedCreditors);
+    return NextResponse.json(creditors);
   } catch (error) {
     console.error("Error fetching creditors:", error);
     return NextResponse.json(
@@ -100,12 +37,7 @@ export async function GET() {
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { 
-      name, 
-      phone, 
-      email, 
-      totalOwed,
-    } = body;
+    const { name, phone, email, totalOwed } = body;
 
     if (!name || !name.trim()) {
       return NextResponse.json(
@@ -149,13 +81,7 @@ export async function POST(req: NextRequest) {
 export async function PUT(req: NextRequest) {
   try {
     const body = await req.json();
-    const { 
-      id, 
-      name, 
-      phone, 
-      email, 
-      totalOwed,
-    } = body;
+    const { id, name, phone, email, totalOwed } = body;
 
     if (!id) {
       return NextResponse.json(
@@ -260,17 +186,9 @@ export async function DELETE(req: NextRequest) {
       );
     }
 
-    // Delete all related restocks first
+    // Delete all related restocks first, then delete the creditor
     await prisma.restock.deleteMany({
       where: { creditorId },
-    });
-
-    // Delete all related payments for this creditor
-    await prisma.payment.deleteMany({
-      where: { 
-        creditorId,
-        paymentType: "creditor",
-      },
     });
 
     await prisma.creditor.delete({

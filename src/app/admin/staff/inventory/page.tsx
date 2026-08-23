@@ -53,8 +53,8 @@ import {
   PackagePlus,
   PackageMinus,
   TrendingUp,
-  Smartphone,
-  Tablet,
+  Smartphone as SmartphoneIcon,
+  Tablet as TabletIcon2,
   Home,
   Briefcase,
   Settings,
@@ -79,35 +79,68 @@ import {
   Grid3x3,
   Table,
   Database,
-  HardDrive as HardDriveIcon,
-  Cpu as CpuIcon,
-  MemoryStick as MemoryStickIcon,
+  HardDriveIcon,
+  CpuIcon,
+  MemoryStickIcon,
   Monitor,
-  Printer as PrinterIcon,
+  PrinterIcon,
   Network,
-  Wifi as WifiIcon,
-  Bluetooth as BluetoothIcon,
-  Smartphone as SmartphoneIcon,
-  Tablet as TabletIcon2,
-  Laptop as LaptopIcon,
-  Server as ServerIcon,
-  Router as RouterIcon,
-  Camera as CameraIcon,
-  Video as VideoIcon,
-  Mic as MicIcon,
-  Gamepad as GamepadIcon,
-  Watch as WatchIcon,
-  Headphones as HeadphonesIcon,
-  Speaker as SpeakerIcon,
-  Keyboard as KeyboardIcon,
-  Mouse as MouseIcon,
+  WifiIcon,
+  BluetoothIcon,
+  LaptopIcon,
+  ServerIcon,
+  RouterIcon,
+  CameraIcon,
+  VideoIcon,
+  MicIcon,
+  GamepadIcon,
+  WatchIcon,
+  HeadphonesIcon,
+  SpeakerIcon,
+  KeyboardIcon,
+  MouseIcon,
   Copy,
   XSquare,
   PlusSquare,
   MinusSquare,
   ListChecks,
-  Grid as GridIcon,
-  Columns as ColumnsIcon
+  GridIcon,
+  ColumnsIcon,
+  Building2,
+  Phone,
+  Mail,
+  Banknote,
+  Wallet,
+  Landmark,
+  Receipt,
+  FileTextIcon,
+  Calendar,
+  ClockIcon,
+  Building,
+  UserCircle,
+  BriefcaseIcon,
+  UsersIcon,
+  ShoppingBagIcon,
+  PieChartIcon,
+  BarChartIcon,
+  Activity,
+  GitBranch,
+  History,
+  Save,
+  Send,
+  DownloadCloud,
+  UploadCloud,
+  Shield,
+  Lock,
+  Unlock,
+  Key,
+  Fingerprint,
+  Scan,
+  QrCode,
+  Barcode,
+  Tag,
+  Ticket,
+  Gift
 } from "lucide-react";
 import Link from "next/link";
 
@@ -139,6 +172,8 @@ interface Product {
   inStock: boolean;
   stock: Stock[];
   stockQuantity: number;
+  assignedQuantity?: number;
+  availableQuantity?: number;
   avgCostPrice: number;
   sku?: string;
   brand?: string;
@@ -218,6 +253,10 @@ interface RestockForm {
   productName?: string;
   paymentSource: string;
   creditorId: string;
+  isNewCreditor?: boolean;
+  newCreditorName?: string;
+  newCreditorPhone?: string;
+  newCreditorEmail?: string;
 }
 
 interface Creditor {
@@ -314,17 +353,41 @@ const isCurrentWeek = (startDate: string | null, endDate: string | null) => {
   return now >= start && now <= end;
 };
 
-// Product Selection Card Component
+// Helper: Calculate available stock (total - assigned)
+const calculateAvailableStock = (product: Product, assignments: StaffInventory[]): number => {
+  const totalStock = product.stockQuantity || 0;
+  
+  const totalAssigned = assignments
+    .filter(a => a.productId === product.id && a.status !== 'COMPLETED')
+    .reduce((sum, a) => sum + (a.quantityGiven - a.quantitySold - a.quantityReturned), 0);
+  
+  return Math.max(0, totalStock - totalAssigned);
+};
+
+// Product Selection Card Component - Updated with black text
 const ProductSelectionCard: React.FC<{
   product: Product;
   onRemove?: () => void;
   quantity?: number;
   onQuantityChange?: (quantity: number) => void;
   availableStock: number;
+  totalStock: number;
+  assignedStock: number;
   onSetMax?: () => void;
   onSetMin?: () => void;
   onRestock?: () => void;
-}> = ({ product, onRemove, quantity = 1, onQuantityChange, availableStock, onSetMax, onSetMin, onRestock }) => {
+}> = ({ 
+  product, 
+  onRemove, 
+  quantity = 1, 
+  onQuantityChange, 
+  availableStock,
+  totalStock,
+  assignedStock,
+  onSetMax, 
+  onSetMin, 
+  onRestock 
+}) => {
   const handleQuantityChange = (newQty: number) => {
     if (newQty < 1) return;
     if (newQty > availableStock) {
@@ -341,10 +404,10 @@ const ProductSelectionCard: React.FC<{
             <Package className="w-6 h-6 text-blue-600" />
           </div>
           <div className="flex-1 min-w-0">
-            <h4 className="font-bold text-slate-900 text-sm truncate">{product.name}</h4>
+            <h4 className="font-bold text-black text-sm truncate">{product.name}</h4>
             <div className="flex flex-wrap items-center gap-2 mt-1">
               {product.category && (
-                <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-slate-100 rounded text-xs text-slate-700">
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-slate-100 rounded text-xs text-black">
                   {product.category}
                 </span>
               )}
@@ -371,7 +434,7 @@ const ProductSelectionCard: React.FC<{
           {onRemove && (
             <button
               onClick={onRemove}
-              className="p-1.5 text-slate-500 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors opacity-0 group-hover:opacity-100"
+              className="p-1.5 text-black hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors opacity-0 group-hover:opacity-100"
             >
               <X className="w-4 h-4" />
             </button>
@@ -381,7 +444,7 @@ const ProductSelectionCard: React.FC<{
 
       <div className="grid grid-cols-2 gap-4">
         <div>
-          <div className="text-sm text-slate-700 mb-1">Price</div>
+          <div className="text-sm text-black mb-1">Price</div>
           <div className="text-lg font-bold text-green-700">
             KES {product.price.toLocaleString()}
           </div>
@@ -389,7 +452,7 @@ const ProductSelectionCard: React.FC<{
         
         <div>
           <div className="flex items-center justify-between mb-1">
-            <span className="text-sm text-slate-700">Quantity</span>
+            <span className="text-sm text-black">Quantity</span>
             <div className="flex items-center gap-1">
               <button
                 onClick={onSetMin}
@@ -411,7 +474,7 @@ const ProductSelectionCard: React.FC<{
             <button
               onClick={() => handleQuantityChange(quantity - 1)}
               disabled={quantity <= 1}
-              className="w-8 h-8 flex items-center justify-center border border-slate-300 rounded-lg hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed text-slate-800"
+              className="w-8 h-8 flex items-center justify-center border border-slate-300 rounded-lg hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed text-black"
             >
               <span className="text-lg">-</span>
             </button>
@@ -421,12 +484,12 @@ const ProductSelectionCard: React.FC<{
               max={availableStock}
               value={quantity}
               onChange={(e) => handleQuantityChange(parseInt(e.target.value) || 1)}
-              className="w-16 text-center py-1 border border-slate-300 rounded-lg focus:border-blue-500 focus:ring-1 focus:ring-blue-200 text-slate-800"
+              className="w-16 text-center py-1 border border-slate-300 rounded-lg focus:border-blue-500 focus:ring-1 focus:ring-blue-200 text-black"
             />
             <button
               onClick={() => handleQuantityChange(quantity + 1)}
               disabled={quantity >= availableStock}
-              className="w-8 h-8 flex items-center justify-center border border-slate-300 rounded-lg hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed text-slate-800"
+              className="w-8 h-8 flex items-center justify-center border border-slate-300 rounded-lg hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed text-black"
             >
               <span className="text-lg">+</span>
             </button>
@@ -434,33 +497,48 @@ const ProductSelectionCard: React.FC<{
         </div>
       </div>
 
-      <div className="mt-3 pt-3 border-t border-slate-100">
+      <div className="mt-3 pt-3 border-t border-slate-100 space-y-1">
         <div className="flex items-center justify-between text-sm">
-          <span className="text-slate-700">Total:</span>
-          <span className="font-bold text-slate-900">
+          <span className="text-black">Total:</span>
+          <span className="font-bold text-black">
             KES {(product.price * quantity).toLocaleString()}
           </span>
         </div>
-        <div className="flex items-center justify-between text-xs mt-1">
-          <span className="text-slate-600">Available stock:</span>
-          <span className={`font-medium ${availableStock > 10 ? 'text-green-700' : availableStock > 0 ? 'text-orange-700' : 'text-red-700'}`}>
-            {availableStock} units
-            {availableStock === 0 && (
-              <button
-                onClick={onRestock}
-                className="ml-2 text-blue-600 hover:text-blue-800 underline"
-              >
-                Restock now
-              </button>
-            )}
-          </span>
+        
+        <div className="grid grid-cols-3 gap-2 text-xs">
+          <div className="text-center p-1.5 bg-blue-50 rounded-lg">
+            <span className="text-black block">Total</span>
+            <span className="font-bold text-blue-700">{totalStock}</span>
+          </div>
+          <div className="text-center p-1.5 bg-amber-50 rounded-lg">
+            <span className="text-black block">Assigned</span>
+            <span className="font-bold text-amber-700">{assignedStock}</span>
+          </div>
+          <div className="text-center p-1.5 bg-green-50 rounded-lg">
+            <span className="text-black block">Available</span>
+            <span className={`font-bold ${availableStock > 0 ? 'text-green-700' : 'text-red-700'}`}>
+              {availableStock}
+            </span>
+          </div>
         </div>
+
+        {availableStock === 0 && totalStock > 0 && (
+          <div className="text-xs text-amber-600 bg-amber-50 p-1.5 rounded-lg text-center">
+            All stock is currently assigned to staff
+          </div>
+        )}
+        
+        {availableStock === 0 && totalStock === 0 && (
+          <div className="text-xs text-red-600 bg-red-50 p-1.5 rounded-lg text-center">
+            No stock available. Please restock.
+          </div>
+        )}
       </div>
     </div>
   );
 };
 
-// Product Search Modal Component
+// Product Search Modal Component - Updated with black text
 const ProductSearchModal: React.FC<ProductSearchModalProps> = ({ 
   isOpen, 
   onClose, 
@@ -524,8 +602,8 @@ const ProductSearchModal: React.FC<ProductSearchModalProps> = ({
           bVal = b.price;
           break;
         case 'stock':
-          aVal = a.stockQuantity || 0;
-          bVal = b.stockQuantity || 0;
+          aVal = a.availableQuantity || 0;
+          bVal = b.availableQuantity || 0;
           break;
         case 'category':
           aVal = a.category?.toLowerCase() || '';
@@ -598,25 +676,25 @@ const ProductSearchModal: React.FC<ProductSearchModalProps> = ({
 
         <div className="p-4 border-b border-slate-200 bg-white">
           <div className="relative">
-            <Search className="absolute left-4 top-1/2 transform -translate-y-1/2 w-5 h-5 text-slate-400" />
+            <Search className="absolute left-4 top-1/2 transform -translate-y-1/2 w-5 h-5 text-black" />
             <input
               ref={searchInputRef}
               type="text"
               placeholder="Search by name, SKU, category, brand..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              className="w-full pl-12 pr-4 py-3 border-2 border-slate-300 rounded-xl focus:border-blue-500 focus:ring-2 focus:ring-blue-200 text-sm"
+              className="w-full pl-12 pr-4 py-3 border-2 border-slate-300 rounded-xl focus:border-blue-500 focus:ring-2 focus:ring-blue-200 text-sm text-black"
               autoFocus
             />
           </div>
 
           <div className="flex flex-wrap items-center gap-3 mt-3">
             <div className="flex items-center gap-2">
-              <Filter className="w-4 h-4 text-slate-600" />
+              <Filter className="w-4 h-4 text-black" />
               <select
                 value={selectedCategory}
                 onChange={(e) => setSelectedCategory(e.target.value)}
-                className="px-3 py-1.5 border border-slate-300 rounded-lg bg-white text-sm"
+                className="px-3 py-1.5 border border-slate-300 rounded-lg bg-white text-sm text-black"
               >
                 <option value="all">All Categories</option>
                 {categories.map(category => (
@@ -629,7 +707,7 @@ const ProductSearchModal: React.FC<ProductSearchModalProps> = ({
               onClick={() => setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc')}
               className="p-1.5 border border-slate-300 rounded-lg hover:bg-slate-50"
             >
-              {sortOrder === 'asc' ? <SortAsc className="w-4 h-4" /> : <SortDesc className="w-4 h-4" />}
+              {sortOrder === 'asc' ? <SortAsc className="w-4 h-4 text-black" /> : <SortDesc className="w-4 h-4 text-black" />}
             </button>
 
             {(searchTerm || selectedCategory !== 'all') && (
@@ -651,13 +729,13 @@ const ProductSearchModal: React.FC<ProductSearchModalProps> = ({
           {filteredProducts.length === 0 ? (
             <div className="text-center py-12">
               <Package className="w-16 h-16 text-slate-300 mx-auto mb-4" />
-              <h3 className="text-lg font-semibold text-slate-900 mb-2">No products found</h3>
+              <h3 className="text-lg font-semibold text-black mb-2">No products found</h3>
             </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
               {filteredProducts.map(product => {
                 const isSelected = selectedProducts.some(p => p.id === product.id);
-                const stockLevel = product.stockQuantity || 0;
+                const available = product.availableQuantity || 0;
                 return (
                   <div
                     key={product.id}
@@ -671,11 +749,11 @@ const ProductSearchModal: React.FC<ProductSearchModalProps> = ({
                         <Package className="w-5 h-5 text-blue-600" />
                       </div>
                       <div className="flex-1">
-                        <h4 className={`font-bold text-sm ${isSelected ? 'text-blue-800' : 'text-slate-900'}`}>
+                        <h4 className={`font-bold text-sm ${isSelected ? 'text-blue-800' : 'text-black'}`}>
                           {product.name}
                         </h4>
                         {product.category && (
-                          <span className="inline-block px-2 py-0.5 bg-slate-100 rounded text-xs mt-1">
+                          <span className="inline-block px-2 py-0.5 bg-slate-100 rounded text-xs mt-1 text-black">
                             {product.category}
                           </span>
                         )}
@@ -684,14 +762,18 @@ const ProductSearchModal: React.FC<ProductSearchModalProps> = ({
                     </div>
                     <div className="space-y-2">
                       <div className="flex justify-between">
-                        <span className="text-slate-600 text-sm">Price:</span>
+                        <span className="text-black text-sm">Price:</span>
                         <span className="font-bold text-green-700">KES {product.price.toLocaleString()}</span>
                       </div>
                       <div className="flex justify-between">
-                        <span className="text-slate-600 text-sm">Stock:</span>
-                        <span className={`font-medium ${stockLevel > 10 ? 'text-green-700' : stockLevel > 0 ? 'text-orange-700' : 'text-red-700'}`}>
-                          {stockLevel} units
+                        <span className="text-black text-sm">Available:</span>
+                        <span className={`font-medium ${available > 10 ? 'text-green-700' : available > 0 ? 'text-orange-700' : 'text-red-700'}`}>
+                          {available} units
                         </span>
+                      </div>
+                      <div className="flex justify-between text-xs text-black">
+                        <span>Total: {product.stockQuantity || 0}</span>
+                        <span>Assigned: {product.assignedQuantity || 0}</span>
                       </div>
                     </div>
                   </div>
@@ -703,11 +785,11 @@ const ProductSearchModal: React.FC<ProductSearchModalProps> = ({
 
         <div className="border-t border-slate-200 p-4 bg-slate-50 rounded-b-2xl">
           <div className="flex items-center justify-between">
-            <div className="text-sm text-slate-600">
+            <div className="text-sm text-black">
               {filteredProducts.length} products • {selectedProducts.length} selected
             </div>
             <div className="flex gap-2">
-              <button onClick={onClose} className="px-4 py-2 border border-slate-300 rounded-lg hover:bg-white">
+              <button onClick={onClose} className="px-4 py-2 border border-slate-300 rounded-lg hover:bg-white text-black">
                 Cancel
               </button>
               {selectedProducts.length > 0 && (
@@ -726,13 +808,15 @@ const ProductSearchModal: React.FC<ProductSearchModalProps> = ({
   );
 };
 
-// Quick Restock Modal Component
+// Quick Restock Modal Component - Enhanced with Creditor Management and black text
 const QuickRestockModal: React.FC<{
   isOpen: boolean;
   onClose: () => void;
   onRestock: (data: RestockForm) => Promise<boolean>;
   product: Product | null;
-}> = ({ isOpen, onClose, onRestock, product }) => {
+  creditors: Creditor[];
+  onRefreshCreditors: () => void;
+}> = ({ isOpen, onClose, onRestock, product, creditors, onRefreshCreditors }) => {
   const [form, setForm] = useState<RestockForm>({
     productId: 0,
     quantity: "",
@@ -740,33 +824,21 @@ const QuickRestockModal: React.FC<{
     supplier: "",
     notes: "",
     paymentSource: "CASH",
-    creditorId: ""
+    creditorId: "",
+    isNewCreditor: false,
+    newCreditorName: "",
+    newCreditorPhone: "",
+    newCreditorEmail: ""
   });
   const [submitting, setSubmitting] = useState(false);
-  const [creditors, setCreditors] = useState<Creditor[]>([]);
   const [loadingCreditors, setLoadingCreditors] = useState(false);
-
-  // Fetch creditors for credit payment option
-  const fetchCreditors = async () => {
-    setLoadingCreditors(true);
-    try {
-      const response = await fetch("/api/creditors");
-      if (response.ok) {
-        const data = await response.json();
-        setCreditors(data);
-      }
-    } catch (error) {
-      console.error("Error fetching creditors:", error);
-    } finally {
-      setLoadingCreditors(false);
-    }
-  };
+  const [showNewCreditorForm, setShowNewCreditorForm] = useState(false);
 
   useEffect(() => {
     if (isOpen && form.paymentSource === "CREDIT") {
-      fetchCreditors();
+      onRefreshCreditors();
     }
-  }, [isOpen, form.paymentSource]);
+  }, [isOpen, form.paymentSource, onRefreshCreditors]);
 
   useEffect(() => {
     if (product && isOpen) {
@@ -778,8 +850,13 @@ const QuickRestockModal: React.FC<{
         notes: "",
         paymentSource: "CASH",
         creditorId: "",
+        isNewCreditor: false,
+        newCreditorName: "",
+        newCreditorPhone: "",
+        newCreditorEmail: "",
         productName: product.name
       });
+      setShowNewCreditorForm(false);
     }
   }, [product, isOpen]);
 
@@ -789,9 +866,16 @@ const QuickRestockModal: React.FC<{
       return;
     }
 
-    if (form.paymentSource === "CREDIT" && !form.creditorId) {
-      alert("Please select a creditor for credit payment");
-      return;
+    if (form.paymentSource === "CREDIT") {
+      if (form.isNewCreditor) {
+        if (!form.newCreditorName) {
+          alert("Please enter the new creditor's name");
+          return;
+        }
+      } else if (!form.creditorId) {
+        alert("Please select a creditor or add a new one");
+        return;
+      }
     }
 
     setSubmitting(true);
@@ -831,16 +915,21 @@ const QuickRestockModal: React.FC<{
 
         <div className="p-5 space-y-4">
           <div>
-            <label className="block text-sm font-semibold text-slate-900 mb-2">
+            <label className="block text-sm font-semibold text-black mb-2">
               Current Stock
             </label>
-            <div className="text-2xl font-bold text-slate-900">
-              {product.stockQuantity || 0} units
+            <div className="flex items-center justify-between">
+              <span className="text-2xl font-bold text-black">
+                {product.stockQuantity || 0} units
+              </span>
+              <span className="text-sm text-black">
+                Assigned: {product.assignedQuantity || 0}
+              </span>
             </div>
           </div>
 
           <div>
-            <label className="block text-sm font-semibold text-slate-900 mb-2">
+            <label className="block text-sm font-semibold text-black mb-2">
               Quantity to Add *
             </label>
             <input
@@ -849,17 +938,17 @@ const QuickRestockModal: React.FC<{
               value={form.quantity}
               onChange={(e) => setForm({ ...form, quantity: e.target.value })}
               placeholder="Enter quantity"
-              className="w-full px-4 py-3 border-2 border-slate-300 rounded-xl focus:border-green-500 focus:ring-2 focus:ring-green-200 text-sm"
+              className="w-full px-4 py-3 border-2 border-slate-300 rounded-xl focus:border-green-500 focus:ring-2 focus:ring-green-200 text-sm text-black"
               autoFocus
             />
           </div>
 
           <div>
-            <label className="block text-sm font-semibold text-slate-900 mb-2">
+            <label className="block text-sm font-semibold text-black mb-2">
               Cost Price (per unit) *
             </label>
             <div className="relative">
-              <span className="absolute left-4 top-1/2 transform -translate-y-1/2 text-slate-600">KES</span>
+              <span className="absolute left-4 top-1/2 transform -translate-y-1/2 text-black">KES</span>
               <input
                 type="number"
                 min="0"
@@ -867,19 +956,22 @@ const QuickRestockModal: React.FC<{
                 value={form.costPrice}
                 onChange={(e) => setForm({ ...form, costPrice: e.target.value })}
                 placeholder="0.00"
-                className="w-full pl-16 pr-4 py-3 border-2 border-slate-300 rounded-xl focus:border-green-500 focus:ring-2 focus:ring-green-200 text-sm"
+                className="w-full pl-16 pr-4 py-3 border-2 border-slate-300 rounded-xl focus:border-green-500 focus:ring-2 focus:ring-green-200 text-sm text-black"
               />
             </div>
           </div>
 
           <div>
-            <label className="block text-sm font-semibold text-slate-900 mb-2">
+            <label className="block text-sm font-semibold text-black mb-2">
               Payment Source *
             </label>
             <select
               value={form.paymentSource}
-              onChange={(e) => setForm({ ...form, paymentSource: e.target.value, creditorId: "" })}
-              className="w-full px-4 py-3 border-2 border-slate-300 rounded-xl focus:border-green-500 focus:ring-2 focus:ring-green-200 text-sm"
+              onChange={(e) => {
+                setForm({ ...form, paymentSource: e.target.value, creditorId: "", isNewCreditor: false });
+                setShowNewCreditorForm(false);
+              }}
+              className="w-full px-4 py-3 border-2 border-slate-300 rounded-xl focus:border-green-500 focus:ring-2 focus:ring-green-200 text-sm text-black"
             >
               <option value="CASH">Cash</option>
               <option value="BANK">Bank Transfer</option>
@@ -889,31 +981,77 @@ const QuickRestockModal: React.FC<{
           </div>
 
           {form.paymentSource === "CREDIT" && (
-            <div>
-              <label className="block text-sm font-semibold text-slate-900 mb-2">
-                Select Creditor *
-              </label>
-              <select
-                value={form.creditorId}
-                onChange={(e) => setForm({ ...form, creditorId: e.target.value })}
-                className="w-full px-4 py-3 border-2 border-slate-300 rounded-xl focus:border-green-500 focus:ring-2 focus:ring-green-200 text-sm"
-                disabled={loadingCreditors}
-              >
-                <option value="">Select creditor...</option>
-                {creditors.map(creditor => (
-                  <option key={creditor.id} value={creditor.id}>
-                    {creditor.name} (Owed: KES {creditor.totalOwed.toLocaleString()})
-                  </option>
-                ))}
-              </select>
-              <p className="text-xs text-slate-600 mt-1">
-                The creditor's balance will be updated automatically
+            <div className="space-y-3 bg-amber-50 p-3 rounded-xl border border-amber-200">
+              <div className="flex items-center justify-between">
+                <label className="text-sm font-semibold text-black">
+                  Creditor Selection
+                </label>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowNewCreditorForm(!showNewCreditorForm);
+                    if (!showNewCreditorForm) {
+                      setForm({ ...form, isNewCreditor: true, creditorId: "" });
+                    } else {
+                      setForm({ ...form, isNewCreditor: false, newCreditorName: "", newCreditorPhone: "", newCreditorEmail: "" });
+                    }
+                  }}
+                  className="text-sm text-blue-600 hover:text-blue-800 font-medium"
+                >
+                  {showNewCreditorForm ? "Select Existing" : "+ New Creditor"}
+                </button>
+              </div>
+
+              {showNewCreditorForm ? (
+                <div className="space-y-3">
+                  <input
+                    type="text"
+                    value={form.newCreditorName}
+                    onChange={(e) => setForm({ ...form, newCreditorName: e.target.value })}
+                    placeholder="Creditor Name *"
+                    className="w-full px-4 py-2 border-2 border-slate-300 rounded-xl focus:border-green-500 text-sm text-black"
+                  />
+                  <input
+                    type="text"
+                    value={form.newCreditorPhone}
+                    onChange={(e) => setForm({ ...form, newCreditorPhone: e.target.value })}
+                    placeholder="Phone Number"
+                    className="w-full px-4 py-2 border-2 border-slate-300 rounded-xl focus:border-green-500 text-sm text-black"
+                  />
+                  <input
+                    type="email"
+                    value={form.newCreditorEmail}
+                    onChange={(e) => setForm({ ...form, newCreditorEmail: e.target.value })}
+                    placeholder="Email (Optional)"
+                    className="w-full px-4 py-2 border-2 border-slate-300 rounded-xl focus:border-green-500 text-sm text-black"
+                  />
+                </div>
+              ) : (
+                <select
+                  value={form.creditorId}
+                  onChange={(e) => setForm({ ...form, creditorId: e.target.value })}
+                  className="w-full px-4 py-3 border-2 border-slate-300 rounded-xl focus:border-green-500 text-sm text-black"
+                  disabled={loadingCreditors}
+                >
+                  <option value="">Select creditor...</option>
+                  {creditors.map((creditor: Creditor) => (
+                    <option key={creditor.id} value={creditor.id}>
+                      {creditor.name} (Owed: KES {creditor.totalOwed.toLocaleString()})
+                    </option>
+                  ))}
+                </select>
+              )}
+
+              <p className="text-xs text-black">
+                {showNewCreditorForm 
+                  ? "A new creditor will be created and the balance updated" 
+                  : "The creditor's balance will be updated automatically"}
               </p>
             </div>
           )}
 
           <div>
-            <label className="block text-sm font-semibold text-slate-900 mb-2">
+            <label className="block text-sm font-semibold text-black mb-2">
               Supplier (Optional)
             </label>
             <input
@@ -921,12 +1059,12 @@ const QuickRestockModal: React.FC<{
               value={form.supplier}
               onChange={(e) => setForm({ ...form, supplier: e.target.value })}
               placeholder="Supplier name"
-              className="w-full px-4 py-3 border-2 border-slate-300 rounded-xl focus:border-green-500 focus:ring-2 focus:ring-green-200 text-sm"
+              className="w-full px-4 py-3 border-2 border-slate-300 rounded-xl focus:border-green-500 focus:ring-2 focus:ring-green-200 text-sm text-black"
             />
           </div>
 
           <div>
-            <label className="block text-sm font-semibold text-slate-900 mb-2">
+            <label className="block text-sm font-semibold text-black mb-2">
               Notes (Optional)
             </label>
             <textarea
@@ -934,27 +1072,32 @@ const QuickRestockModal: React.FC<{
               onChange={(e) => setForm({ ...form, notes: e.target.value })}
               placeholder="Add notes about this restock..."
               rows={2}
-              className="w-full px-4 py-3 border-2 border-slate-300 rounded-xl focus:border-green-500 focus:ring-2 focus:ring-green-200 text-sm"
+              className="w-full px-4 py-3 border-2 border-slate-300 rounded-xl focus:border-green-500 focus:ring-2 focus:ring-green-200 text-sm text-black"
             />
           </div>
 
           <div className="bg-blue-50 rounded-xl p-3">
             <div className="flex items-center justify-between text-sm">
-              <span className="text-slate-700">New Stock After Restock:</span>
+              <span className="text-black">New Stock After Restock:</span>
               <span className="font-bold text-green-700">
                 {(product.stockQuantity || 0) + (parseInt(form.quantity) || 0)} units
               </span>
             </div>
             <div className="flex items-center justify-between text-sm mt-1">
-              <span className="text-slate-700">Total Cost:</span>
+              <span className="text-black">Total Cost:</span>
               <span className="font-bold text-blue-700">
                 KES {((parseInt(form.quantity) || 0) * (parseFloat(form.costPrice) || 0)).toLocaleString()}
               </span>
             </div>
-            {form.paymentSource === "CREDIT" && form.creditorId && (
+            {form.paymentSource === "CREDIT" && (
               <div className="flex items-center justify-between text-sm mt-1">
-                <span className="text-slate-700">Payment:</span>
-                <span className="font-medium text-amber-700">Credit - Will be added to creditor balance</span>
+                <span className="text-black">Payment:</span>
+                <span className="font-medium text-amber-700">
+                  {form.isNewCreditor 
+                    ? `New Creditor: ${form.newCreditorName || 'Unnamed'}` 
+                    : `Credit - ${creditors.find((c: Creditor) => c.id === parseInt(form.creditorId))?.name || 'Selected'}`
+                  }
+                </span>
               </div>
             )}
           </div>
@@ -965,13 +1108,19 @@ const QuickRestockModal: React.FC<{
             <button
               onClick={onClose}
               disabled={submitting}
-              className="flex-1 px-4 py-3 border-2 border-slate-300 text-slate-800 rounded-xl hover:bg-slate-50 font-medium text-sm"
+              className="flex-1 px-4 py-3 border-2 border-slate-300 text-black rounded-xl hover:bg-slate-50 font-medium text-sm"
             >
               Cancel
             </button>
             <button
               onClick={handleSubmit}
-              disabled={submitting || !form.quantity || !form.costPrice || (form.paymentSource === "CREDIT" && !form.creditorId)}
+              disabled={
+                submitting || 
+                !form.quantity || 
+                !form.costPrice || 
+                (form.paymentSource === "CREDIT" && !form.isNewCreditor && !form.creditorId) ||
+                (form.paymentSource === "CREDIT" && form.isNewCreditor && !form.newCreditorName)
+              }
               className="flex-1 px-4 py-3 bg-gradient-to-r from-green-600 to-emerald-600 text-white rounded-xl hover:from-green-700 hover:to-emerald-700 font-medium text-sm flex items-center justify-center gap-2"
             >
               {submitting ? (
@@ -1008,6 +1157,7 @@ export default function StaffInventoryManagementPage() {
   const [showQuickRestock, setShowQuickRestock] = useState(false);
   const [restockProduct, setRestockProduct] = useState<Product | null>(null);
   const [selectedStaff, setSelectedStaff] = useState<Staff | null>(null);
+  const [creditors, setCreditors] = useState<Creditor[]>([]);
   
   const currentWeek = getCurrentWeekDates();
   const [form, setForm] = useState<AssignmentForm>({
@@ -1033,7 +1183,6 @@ export default function StaffInventoryManagementPage() {
   const [viewMode, setViewMode] = useState<'list' | 'cards' | 'grid' | 'weeks'>('weeks');
   const [isMobile, setIsMobile] = useState(false);
 
-  // Handle window resize for mobile detection
   useEffect(() => {
     const checkMobile = () => {
       setIsMobile(window.innerWidth < 768);
@@ -1043,7 +1192,19 @@ export default function StaffInventoryManagementPage() {
     return () => window.removeEventListener('resize', checkMobile);
   }, []);
 
-  // Fetch all data
+  // Fetch creditors
+  const fetchCreditors = useCallback(async () => {
+    try {
+      const response = await fetch("/api/creditors");
+      if (response.ok) {
+        const data = await response.json();
+        setCreditors(data);
+      }
+    } catch (error) {
+      console.error("Error fetching creditors:", error);
+    }
+  }, []);
+
   const fetchData = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -1067,13 +1228,15 @@ export default function StaffInventoryManagementPage() {
         const data = await productsRes.value.json();
         productsData = Array.isArray(data) ? data : [];
         
-        // Calculate stock quantity for each product
-        productsData = productsData.map(product => ({
-          ...product,
-          stockQuantity: product.stock?.reduce((sum, s) => sum + s.quantity, 0) || 0,
-          avgCostPrice: product.stock?.reduce((sum, s) => sum + (s.costPrice * s.quantity), 0) / 
-                        (product.stock?.reduce((sum, s) => sum + s.quantity, 0) || 1) || 0
-        }));
+        productsData = productsData.map(product => {
+          const totalStock = product.stock?.reduce((sum, s) => sum + s.quantity, 0) || 0;
+          return {
+            ...product,
+            stockQuantity: totalStock,
+            avgCostPrice: product.stock?.reduce((sum, s) => sum + (s.costPrice * s.quantity), 0) / 
+                          (product.stock?.reduce((sum, s) => sum + s.quantity, 0) || 1) || 0
+          };
+        });
       }
 
       if (inventoryRes.status === 'fulfilled' && inventoryRes.value.ok) {
@@ -1100,9 +1263,25 @@ export default function StaffInventoryManagementPage() {
       }
 
       setStaffList(staffData);
-      setProducts(productsData);
+      
+      const productsWithAssignment = productsData.map(product => {
+        const assignedQty = inventoryData
+          .filter(a => a.productId === product.id && a.status !== 'COMPLETED')
+          .reduce((sum, a) => sum + (a.quantityGiven - a.quantitySold - a.quantityReturned), 0);
+        
+        return {
+          ...product,
+          assignedQuantity: assignedQty,
+          availableQuantity: Math.max(0, product.stockQuantity - assignedQty)
+        };
+      });
+      
+      setProducts(productsWithAssignment);
       setInventoryAssignments(inventoryData);
       setFilteredAssignments(inventoryData);
+
+      // Also fetch creditors
+      await fetchCreditors();
 
     } catch (err: any) {
       console.error("Error fetching data:", err);
@@ -1110,9 +1289,8 @@ export default function StaffInventoryManagementPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [fetchCreditors]);
 
-  // Helper to calculate assignment status
   const calculateAssignmentStatus = (assignment: any): StaffInventory['status'] => {
     const remaining = (assignment.quantityGiven || 0) - 
                      (assignment.quantitySold || 0) - 
@@ -1136,48 +1314,79 @@ export default function StaffInventoryManagementPage() {
     try {
       const totalCost = parseInt(restockData.quantity) * parseFloat(restockData.costPrice);
       
+      // Prepare request body to match API expectations
+      const requestBody: any = {
+        productId: parseInt(restockData.productId.toString()),
+        quantity: parseInt(restockData.quantity),
+        totalCost: totalCost,
+        paymentSource: restockData.paymentSource.toLowerCase(), // API expects "cash" or "credit"
+      };
+
+      // Handle creditor logic based on API expectations
+      if (restockData.paymentSource === "CREDIT") {
+        if (restockData.isNewCreditor) {
+          // For new creditor, send the name, phone, email directly
+          requestBody.creditorName = restockData.newCreditorName;
+          requestBody.creditorPhone = restockData.newCreditorPhone || "";
+          requestBody.creditorEmail = restockData.newCreditorEmail || "";
+        } else if (restockData.creditorId) {
+          // For existing creditor, find the creditor in the list
+          const selectedCreditor = creditors.find((c: Creditor) => c.id === parseInt(restockData.creditorId));
+          if (selectedCreditor) {
+            requestBody.creditorName = selectedCreditor.name;
+            requestBody.creditorPhone = selectedCreditor.phone || "";
+            requestBody.creditorEmail = selectedCreditor.email || "";
+          } else {
+            throw new Error("Selected creditor not found");
+          }
+        } else {
+          throw new Error("Please select a creditor or add a new one");
+        }
+      }
+
+      console.log("Sending restock request:", requestBody);
+
+      // Create the restock record
       const response = await fetch("/api/restock", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          productId: restockData.productId,
-          quantity: parseInt(restockData.quantity),
-          costPrice: parseFloat(restockData.costPrice),
-          totalCost: totalCost,
-          paymentSource: restockData.paymentSource,
-          creditorId: restockData.paymentSource === "CREDIT" ? parseInt(restockData.creditorId) : undefined,
-          supplier: restockData.supplier,
-          notes: restockData.notes
-        })
+        body: JSON.stringify(requestBody)
       });
 
       if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || "Failed to restock");
+        const errorData = await response.json();
+        throw new Error(errorData.error || "Failed to restock");
       }
 
       const result = await response.json();
+
+      let successMessage = `✅ Restocked ${restockData.quantity} units of ${restockData.productName}`;
+      if (restockData.paymentSource === "CREDIT") {
+        const creditorName = restockData.isNewCreditor ? restockData.newCreditorName : 
+                           (restockData.creditorId ? creditors.find((c: Creditor) => c.id === parseInt(restockData.creditorId))?.name : "");
+        successMessage += ` on credit from ${creditorName || 'creditor'}`;
+        successMessage += ` (Added KES ${totalCost.toLocaleString()} to balance)`;
+      }
       
-      setSuccess(`✅ Restocked ${restockData.quantity} units of ${restockData.productName}`);
+      setSuccess(successMessage);
       setTimeout(() => setSuccess(null), 3000);
       
-      // Refresh products to update stock levels
+      // Refresh data to update stock levels and creditor balances
       await fetchData();
       
       return true;
     } catch (err: any) {
+      console.error("Restock error:", err);
       setError(err.message || "Failed to restock");
       setTimeout(() => setError(null), 5000);
       return false;
     }
   };
 
-  // Initial load
   useEffect(() => {
     fetchData();
   }, [fetchData]);
 
-  // Filter and sort assignments
   useEffect(() => {
     let filtered = [...inventoryAssignments];
 
@@ -1229,7 +1438,6 @@ export default function StaffInventoryManagementPage() {
     setFilteredAssignments(filtered);
   }, [searchTerm, activeFilter, inventoryAssignments, sortBy]);
 
-  // Calculate stats
   const calculateStats = (): AssignmentStats => {
     const assignments = inventoryAssignments;
     const totalItemsGiven = assignments.reduce((sum, inv) => sum + (inv.quantityGiven || 0), 0);
@@ -1314,13 +1522,12 @@ export default function StaffInventoryManagementPage() {
     };
   };
 
-  const getAvailableStock = (productId: number): number => {
+  const getTotalStock = (productId: number): number => {
     const product = products.find(p => p.id === productId);
     return product?.stockQuantity || 0;
   };
 
-  const getRemainingStockAfterAssignments = (productId: number, weekStartDate?: string): number => {
-    const now = new Date();
+  const getAssignedStock = (productId: number, weekStartDate?: string): number => {
     const targetWeekStart = weekStartDate || form.weekStartDate;
     
     const totalAssigned = inventoryAssignments
@@ -1333,15 +1540,20 @@ export default function StaffInventoryManagementPage() {
         }
         
         const weekEnd = inv.weekEndDate ? new Date(inv.weekEndDate) : null;
-        return weekEnd && now <= weekEnd;
+        return weekEnd && new Date() <= weekEnd;
       })
       .reduce((sum, inv) => {
         const remaining = (inv.quantityGiven || 0) - (inv.quantitySold || 0) - (inv.quantityReturned || 0);
         return sum + remaining;
       }, 0);
 
-    const availableStock = getAvailableStock(productId);
-    return Math.max(0, availableStock - totalAssigned);
+    return totalAssigned;
+  };
+
+  const getAvailableStock = (productId: number, weekStartDate?: string): number => {
+    const totalStock = getTotalStock(productId);
+    const assignedStock = getAssignedStock(productId, weekStartDate);
+    return Math.max(0, totalStock - assignedStock);
   };
 
   const handleBulkProductSelect = (selectedProducts: Product[]) => {
@@ -1394,10 +1606,10 @@ export default function StaffInventoryManagementPage() {
 
   const setAllQuantitiesToMax = () => {
     const newItems = form.items.map(item => {
-      const availableStock = getRemainingStockAfterAssignments(parseInt(item.productId), form.weekStartDate);
+      const availableStock = getAvailableStock(parseInt(item.productId), form.weekStartDate);
       return {
         ...item,
-        quantity: Math.min(availableStock, 10).toString()
+        quantity: Math.max(1, availableStock).toString()
       };
     });
     setForm({ ...form, items: newItems });
@@ -1436,7 +1648,7 @@ export default function StaffInventoryManagementPage() {
         if (isNaN(quantity) || quantity <= 0) {
           errors.push(`Item ${index + 1}: Quantity must be a positive number`);
         } else {
-          const availableStock = getRemainingStockAfterAssignments(parseInt(item.productId), form.weekStartDate);
+          const availableStock = getAvailableStock(parseInt(item.productId), form.weekStartDate);
           if (quantity > availableStock) {
             errors.push(`Item ${index + 1}: Only ${availableStock} units available for this week`);
           } else {
@@ -1687,7 +1899,6 @@ export default function StaffInventoryManagementPage() {
 
   const stats = calculateStats();
 
-  // Mobile-friendly assignment card component
   const AssignmentCard = ({ assignment }: { assignment: StaffInventory }) => {
     const remaining = assignment.quantityGiven - assignment.quantitySold - assignment.quantityReturned;
     const weekRange = assignment.weekStartDate && assignment.weekEndDate 
@@ -1702,8 +1913,8 @@ export default function StaffInventoryManagementPage() {
               <User className="w-5 h-5 text-blue-600" />
             </div>
             <div>
-              <div className="font-semibold text-slate-900">{assignment.staff?.name}</div>
-              <div className="text-xs text-slate-600">{weekRange}</div>
+              <div className="font-semibold text-black">{assignment.staff?.name}</div>
+              <div className="text-xs text-black">{weekRange}</div>
             </div>
           </div>
           <span className={`px-2 py-1 rounded-full text-xs font-medium ${getStatusColor(assignment.status)}`}>
@@ -1717,24 +1928,24 @@ export default function StaffInventoryManagementPage() {
               <Package className="w-5 h-5 text-purple-600" />
             </div>
             <div className="flex-1">
-              <div className="font-medium text-slate-900">{assignment.product?.name}</div>
+              <div className="font-medium text-black">{assignment.product?.name}</div>
               {assignment.product?.sku && (
-                <div className="text-xs text-slate-600 font-mono">{assignment.product.sku}</div>
+                <div className="text-xs text-black font-mono">{assignment.product.sku}</div>
               )}
             </div>
           </div>
 
           <div className="grid grid-cols-3 gap-2 text-center mb-3">
             <div>
-              <div className="text-xs text-slate-600">Given</div>
-              <div className="font-bold text-slate-900">{assignment.quantityGiven}</div>
+              <div className="text-xs text-black">Given</div>
+              <div className="font-bold text-black">{assignment.quantityGiven}</div>
             </div>
             <div>
-              <div className="text-xs text-slate-600">Sold</div>
+              <div className="text-xs text-black">Sold</div>
               <div className="font-bold text-emerald-700">{assignment.quantitySold}</div>
             </div>
             <div>
-              <div className="text-xs text-slate-600">Left</div>
+              <div className="text-xs text-black">Left</div>
               <div className="font-bold text-blue-700">{remaining}</div>
             </div>
           </div>
@@ -1770,11 +1981,11 @@ export default function StaffInventoryManagementPage() {
               onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
               className="p-2 rounded-xl bg-white shadow-sm"
             >
-              <Menu className="w-5 h-5 text-slate-800" />
+              <Menu className="w-5 h-5 text-black" />
             </button>
             <div>
-              <h1 className="text-lg font-bold text-slate-900">Staff Inventory</h1>
-              <p className="text-xs text-slate-700">Weekly assignments</p>
+              <h1 className="text-lg font-bold text-black">Staff Inventory</h1>
+              <p className="text-xs text-black">Weekly assignments</p>
             </div>
           </div>
           <div className="flex items-center gap-1">
@@ -1782,7 +1993,7 @@ export default function StaffInventoryManagementPage() {
               onClick={fetchData}
               className="p-2 bg-white rounded-xl shadow-sm"
             >
-              <RefreshCw className="w-4 h-4 text-slate-800" />
+              <RefreshCw className="w-4 h-4 text-black" />
             </button>
             <button
               onClick={() => setShowAssignModal(true)}
@@ -1809,8 +2020,8 @@ export default function StaffInventoryManagementPage() {
               <CalendarDays className="w-6 h-6 text-white" />
             </div>
             <div>
-              <h1 className="text-2xl font-bold text-slate-900">Weekly Staff Inventory Management</h1>
-              <p className="text-slate-700">Assign and track products with staff members on a weekly basis</p>
+              <h1 className="text-2xl font-bold text-black">Weekly Staff Inventory Management</h1>
+              <p className="text-black">Assign and track products with staff members on a weekly basis</p>
             </div>
           </div>
         </div>
@@ -1825,7 +2036,7 @@ export default function StaffInventoryManagementPage() {
           </button>
           <button
             onClick={fetchData}
-            className="flex items-center gap-2 px-4 py-2.5 border-2 border-slate-200 rounded-xl hover:border-blue-300 hover:bg-blue-50 transition-all text-slate-800 font-medium group"
+            className="flex items-center gap-2 px-4 py-2.5 border-2 border-slate-200 rounded-xl hover:border-blue-300 hover:bg-blue-50 transition-all text-black font-medium group"
           >
             <RefreshCw className="w-4 h-4 transition-transform group-hover:rotate-180" />
             Refresh
@@ -1840,14 +2051,14 @@ export default function StaffInventoryManagementPage() {
         </div>
       </div>
 
-      {/* Stats Dashboard - Responsive Grid */}
+      {/* Stats Dashboard */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
         <div className="bg-gradient-to-br from-blue-50 to-white rounded-2xl border border-blue-100 shadow-sm p-3 md:p-4">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-xs md:text-sm font-medium text-slate-700 mb-1">Current Week</p>
+              <p className="text-xs md:text-sm font-medium text-black mb-1">Current Week</p>
               <p className="text-xl md:text-2xl font-bold text-blue-700">{stats.currentWeekAssignments}</p>
-              <p className="text-xs text-slate-700 mt-1 hidden md:block">Active assignments</p>
+              <p className="text-xs text-black mt-1 hidden md:block">Active assignments</p>
             </div>
             <div className="p-2 md:p-3 rounded-xl bg-gradient-to-br from-blue-100 to-blue-50">
               <CalendarDays className="w-5 h-5 md:w-6 md:h-6 text-blue-600" />
@@ -1858,9 +2069,9 @@ export default function StaffInventoryManagementPage() {
         <div className="bg-gradient-to-br from-emerald-50 to-white rounded-2xl border border-emerald-100 shadow-sm p-3 md:p-4">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-xs md:text-sm font-medium text-slate-700 mb-1">Week Sales</p>
+              <p className="text-xs md:text-sm font-medium text-black mb-1">Week Sales</p>
               <p className="text-xl md:text-2xl font-bold text-emerald-700">{stats.currentWeekSales}</p>
-              <p className="text-xs text-slate-700 mt-1 hidden md:block">Items sold</p>
+              <p className="text-xs text-black mt-1 hidden md:block">Items sold</p>
             </div>
             <div className="p-2 md:p-3 rounded-xl bg-gradient-to-br from-emerald-100 to-emerald-50">
               <ShoppingBag className="w-5 h-5 md:w-6 md:h-6 text-emerald-600" />
@@ -1871,11 +2082,11 @@ export default function StaffInventoryManagementPage() {
         <div className="bg-gradient-to-br from-green-50 to-white rounded-2xl border border-green-100 shadow-sm p-3 md:p-4">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-xs md:text-sm font-medium text-slate-700 mb-1">Sales Value</p>
+              <p className="text-xs md:text-sm font-medium text-black mb-1">Sales Value</p>
               <p className="text-lg md:text-2xl font-bold text-green-700">
                 KES {(stats.totalSalesValue / 1000).toFixed(1)}K
               </p>
-              <p className="text-xs text-slate-700 mt-1 hidden md:block">Total sales</p>
+              <p className="text-xs text-black mt-1 hidden md:block">Total sales</p>
             </div>
             <div className="p-2 md:p-3 rounded-xl bg-gradient-to-br from-green-100 to-green-50">
               <DollarSign className="w-5 h-5 md:w-6 md:h-6 text-green-600" />
@@ -1886,11 +2097,11 @@ export default function StaffInventoryManagementPage() {
         <div className="bg-gradient-to-br from-amber-50 to-white rounded-2xl border border-amber-100 shadow-sm p-3 md:p-4">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-xs md:text-sm font-medium text-slate-700 mb-1">Sell-through</p>
+              <p className="text-xs md:text-sm font-medium text-black mb-1">Sell-through</p>
               <p className="text-xl md:text-2xl font-bold text-amber-700">
                 {stats.averageCompletionRate.toFixed(1)}%
               </p>
-              <p className="text-xs text-slate-700 mt-1 hidden md:block">Weekly average</p>
+              <p className="text-xs text-black mt-1 hidden md:block">Weekly average</p>
             </div>
             <div className="p-2 md:p-3 rounded-xl bg-gradient-to-br from-amber-100 to-amber-50">
               <TrendingUp className="w-5 h-5 md:w-6 md:h-6 text-amber-600" />
@@ -1899,27 +2110,27 @@ export default function StaffInventoryManagementPage() {
         </div>
       </div>
 
-      {/* Search and Filter Section - Mobile Optimized */}
+      {/* Search and Filter Section */}
       <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-3 md:p-4 mb-4">
         <div className="flex flex-col gap-3">
           <div className="relative">
-            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-slate-400" />
+            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-black" />
             <input
               type="text"
               placeholder="Search staff, product, SKU..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              className="w-full pl-10 pr-4 py-2.5 border-2 border-slate-300 rounded-xl focus:border-blue-500 text-sm"
+              className="w-full pl-10 pr-4 py-2.5 border-2 border-slate-300 rounded-xl focus:border-blue-500 text-sm text-black"
             />
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
             <div className="flex items-center gap-2">
-              <Filter className="w-4 h-4 text-slate-600" />
+              <Filter className="w-4 h-4 text-black" />
               <select
                 value={activeFilter}
                 onChange={(e) => setActiveFilter(e.target.value as any)}
-                className="px-3 py-1.5 border-2 border-slate-300 rounded-xl bg-white text-sm"
+                className="px-3 py-1.5 border-2 border-slate-300 rounded-xl bg-white text-sm text-black"
               >
                 <option value="all">All</option>
                 <option value="active">Active</option>
@@ -1934,13 +2145,13 @@ export default function StaffInventoryManagementPage() {
                 onClick={() => setViewMode('list')}
                 className={`p-1.5 rounded-lg ${viewMode === 'list' ? 'bg-white shadow-sm' : 'hover:bg-white/50'}`}
               >
-                <List className="w-4 h-4" />
+                <List className="w-4 h-4 text-black" />
               </button>
               <button
                 onClick={() => setViewMode('cards')}
                 className={`p-1.5 rounded-lg ${viewMode === 'cards' ? 'bg-white shadow-sm' : 'hover:bg-white/50'}`}
               >
-                <Grid className="w-4 h-4" />
+                <Grid className="w-4 h-4 text-black" />
               </button>
             </div>
           </div>
@@ -1977,15 +2188,15 @@ export default function StaffInventoryManagementPage() {
               <div className="absolute top-0 left-0 w-12 h-12 rounded-full border-4 border-blue-600 border-t-transparent animate-spin"></div>
             </div>
           </div>
-          <p className="mt-4 text-slate-700 font-medium">Loading inventory assignments...</p>
+          <p className="mt-4 text-black font-medium">Loading inventory assignments...</p>
         </div>
       ) : filteredAssignments.length === 0 ? (
         <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-12 text-center">
           <div className="w-20 h-20 mx-auto mb-6 rounded-full bg-gradient-to-br from-blue-100 to-blue-50 flex items-center justify-center">
             <CalendarDays className="w-10 h-10 text-blue-400" />
           </div>
-          <h3 className="text-lg font-semibold text-slate-900 mb-2">No assignments found</h3>
-          <p className="text-slate-700 mb-6 max-w-md mx-auto">
+          <h3 className="text-lg font-semibold text-black mb-2">No assignments found</h3>
+          <p className="text-black mb-6 max-w-md mx-auto">
             {searchTerm ? "No results match your search." : "Get started by assigning products to your staff."}
           </p>
           {!searchTerm && (
@@ -2001,24 +2212,22 @@ export default function StaffInventoryManagementPage() {
       ) : (
         <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-3 md:p-4">
           {isMobile || viewMode === 'cards' ? (
-            // Mobile Card View
             <div>
               {filteredAssignments.map((assignment) => (
                 <AssignmentCard key={assignment.id} assignment={assignment} />
               ))}
             </div>
           ) : (
-            // Desktop Table View
             <div className="overflow-x-auto">
               <table className="w-full">
                 <thead className="bg-gradient-to-r from-slate-50 to-slate-100/50">
                   <tr>
-                    <th className="px-4 py-3 text-left text-xs font-semibold text-slate-800">Staff</th>
-                    <th className="px-4 py-3 text-left text-xs font-semibold text-slate-800">Week</th>
-                    <th className="px-4 py-3 text-left text-xs font-semibold text-slate-800">Product</th>
-                    <th className="px-4 py-3 text-left text-xs font-semibold text-slate-800">Quantity</th>
-                    <th className="px-4 py-3 text-left text-xs font-semibold text-slate-800">Status</th>
-                    <th className="px-4 py-3 text-left text-xs font-semibold text-slate-800">Actions</th>
+                    <th className="px-4 py-3 text-left text-xs font-semibold text-black">Staff</th>
+                    <th className="px-4 py-3 text-left text-xs font-semibold text-black">Week</th>
+                    <th className="px-4 py-3 text-left text-xs font-semibold text-black">Product</th>
+                    <th className="px-4 py-3 text-left text-xs font-semibold text-black">Quantity</th>
+                    <th className="px-4 py-3 text-left text-xs font-semibold text-black">Status</th>
+                    <th className="px-4 py-3 text-left text-xs font-semibold text-black">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
@@ -2036,32 +2245,32 @@ export default function StaffInventoryManagementPage() {
                               <User className="w-4 h-4 text-blue-600" />
                             </div>
                             <div>
-                              <div className="font-medium text-slate-900 text-sm">{assignment.staff?.name}</div>
+                              <div className="font-medium text-black text-sm">{assignment.staff?.name}</div>
                               {assignment.staff?.phone && (
-                                <div className="text-xs text-slate-600">{assignment.staff.phone}</div>
+                                <div className="text-xs text-black">{assignment.staff.phone}</div>
                               )}
                             </div>
                           </div>
                         </td>
-                        <td className="px-4 py-3 text-sm text-slate-700">{weekRange}</td>
+                        <td className="px-4 py-3 text-sm text-black">{weekRange}</td>
                         <td className="px-4 py-3">
-                          <div className="font-medium text-slate-900 text-sm">{assignment.product?.name}</div>
+                          <div className="font-medium text-black text-sm">{assignment.product?.name}</div>
                           {assignment.product?.sku && (
-                            <div className="text-xs text-slate-600 font-mono">{assignment.product.sku}</div>
+                            <div className="text-xs text-black font-mono">{assignment.product.sku}</div>
                           )}
                         </td>
                         <td className="px-4 py-3">
                           <div className="flex items-center gap-3">
                             <div className="text-center">
-                              <div className="text-xs text-slate-600">Given</div>
-                              <div className="font-bold text-slate-900">{assignment.quantityGiven}</div>
+                              <div className="text-xs text-black">Given</div>
+                              <div className="font-bold text-black">{assignment.quantityGiven}</div>
                             </div>
                             <div className="text-center">
-                              <div className="text-xs text-slate-600">Sold</div>
+                              <div className="text-xs text-black">Sold</div>
                               <div className="font-bold text-emerald-700">{assignment.quantitySold}</div>
                             </div>
                             <div className="text-center">
-                              <div className="text-xs text-slate-600">Left</div>
+                              <div className="text-xs text-black">Left</div>
                               <div className="font-bold text-blue-700">{remaining}</div>
                             </div>
                           </div>
@@ -2109,7 +2318,7 @@ export default function StaffInventoryManagementPage() {
       )}
 
       {/* Footer */}
-      <div className="mt-8 text-center text-slate-700 text-sm">
+      <div className="mt-8 text-center text-black text-sm">
         <p>© {new Date().getFullYear()} Swift Metals POS • Weekly Staff Inventory Management</p>
         <p className="text-xs mt-1">Total assignments: {stats.totalAssignments} • Current week: {formatWeekRange(currentWeek.weekStartDate, currentWeek.weekEndDate)}</p>
       </div>
@@ -2133,9 +2342,11 @@ export default function StaffInventoryManagementPage() {
         }}
         onRestock={handleQuickRestock}
         product={restockProduct}
+        creditors={creditors}
+        onRefreshCreditors={fetchCreditors}
       />
 
-      {/* Assign Inventory Modal with Integrated Restock */}
+      {/* Assign Inventory Modal */}
       {showAssignModal && (
         <div className="fixed inset-0 bg-black/70 flex items-center justify-center p-2 md:p-4 z-50">
           <div className="bg-white rounded-2xl w-full max-w-4xl shadow-2xl max-h-[90vh] flex flex-col">
@@ -2170,13 +2381,12 @@ export default function StaffInventoryManagementPage() {
             </div>
 
             <div className="flex-1 overflow-y-auto p-4 space-y-4">
-              {/* Staff Selection */}
               <div>
-                <label className="block text-sm font-semibold text-slate-900 mb-2">Select Staff *</label>
+                <label className="block text-sm font-semibold text-black mb-2">Select Staff *</label>
                 <select
                   value={form.staffId}
                   onChange={(e) => setForm({ ...form, staffId: e.target.value })}
-                  className="w-full px-4 py-3 border-2 border-slate-300 rounded-xl focus:border-blue-500 text-sm"
+                  className="w-full px-4 py-3 border-2 border-slate-300 rounded-xl focus:border-blue-500 text-sm text-black"
                   disabled={submitting}
                 >
                   <option value="">Choose staff...</option>
@@ -2188,12 +2398,11 @@ export default function StaffInventoryManagementPage() {
                 </select>
               </div>
 
-              {/* Week Selection */}
               <div>
-                <label className="block text-sm font-semibold text-slate-900 mb-2">Week Dates *</label>
+                <label className="block text-sm font-semibold text-black mb-2">Week Dates *</label>
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <div className="text-xs text-slate-600 mb-1">Start (Monday)</div>
+                    <div className="text-xs text-black mb-1">Start (Monday)</div>
                     <input
                       type="date"
                       value={form.weekStartDate}
@@ -2207,27 +2416,26 @@ export default function StaffInventoryManagementPage() {
                           weekEndDate: endDate.toISOString().split('T')[0]
                         });
                       }}
-                      className="w-full px-3 py-2 border-2 border-slate-300 rounded-xl text-sm"
+                      className="w-full px-3 py-2 border-2 border-slate-300 rounded-xl text-sm text-black"
                       disabled={submitting}
                     />
                   </div>
                   <div>
-                    <div className="text-xs text-slate-600 mb-1">End (Sunday)</div>
+                    <div className="text-xs text-black mb-1">End (Sunday)</div>
                     <input
                       type="date"
                       value={form.weekEndDate}
                       onChange={(e) => setForm({ ...form, weekEndDate: e.target.value })}
                       min={form.weekStartDate}
-                      className="w-full px-3 py-2 border-2 border-slate-300 rounded-xl text-sm"
+                      className="w-full px-3 py-2 border-2 border-slate-300 rounded-xl text-sm text-black"
                       disabled={submitting}
                     />
                   </div>
                 </div>
               </div>
 
-              {/* Product Selection */}
               <div>
-                <label className="block text-sm font-semibold text-slate-900 mb-2">Add Products</label>
+                <label className="block text-sm font-semibold text-black mb-2">Add Products</label>
                 <button
                   type="button"
                   onClick={() => setShowProductSearch(true)}
@@ -2237,18 +2445,17 @@ export default function StaffInventoryManagementPage() {
                   <Search className="w-4 h-4" />
                   Browse & Select Products
                 </button>
-                <p className="text-xs text-slate-600 mt-2">💡 Select multiple products at once. Need more stock? Click the restock button on any product card.</p>
+                <p className="text-xs text-black mt-2">💡 Select multiple products at once. Need more stock? Click the restock button on any product card.</p>
               </div>
 
-              {/* Selected Products */}
               {form.items.length > 0 && (
                 <div>
                   <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
                     <div>
-                      <label className="text-sm font-semibold text-slate-900">
+                      <label className="text-sm font-semibold text-black">
                         Selected ({form.items.length})
                       </label>
-                      <p className="text-xs text-slate-600">
+                      <p className="text-xs text-black">
                         Total items: {form.items.reduce((sum, item) => sum + parseInt(item.quantity), 0)}
                       </p>
                     </div>
@@ -2280,7 +2487,9 @@ export default function StaffInventoryManagementPage() {
                   <div className="grid grid-cols-1 gap-3 max-h-60 overflow-y-auto">
                     {form.items.map((item, index) => {
                       const product = item.product!;
-                      const availableStock = getRemainingStockAfterAssignments(parseInt(item.productId), form.weekStartDate);
+                      const totalStock = getTotalStock(parseInt(item.productId));
+                      const assignedStock = getAssignedStock(parseInt(item.productId), form.weekStartDate);
+                      const availableStock = getAvailableStock(parseInt(item.productId), form.weekStartDate);
                       
                       return (
                         <ProductSelectionCard
@@ -2290,9 +2499,11 @@ export default function StaffInventoryManagementPage() {
                           quantity={parseInt(item.quantity)}
                           onQuantityChange={(qty) => updateItemQuantity(index, qty)}
                           availableStock={availableStock}
+                          totalStock={totalStock}
+                          assignedStock={assignedStock}
                           onSetMax={() => {
-                            const maxStock = getRemainingStockAfterAssignments(parseInt(item.productId), form.weekStartDate);
-                            updateItemQuantity(index, Math.min(maxStock, 10));
+                            const maxStock = getAvailableStock(parseInt(item.productId), form.weekStartDate);
+                            updateItemQuantity(index, Math.max(1, maxStock));
                           }}
                           onSetMin={() => updateItemQuantity(index, 1)}
                           onRestock={() => {
@@ -2306,12 +2517,11 @@ export default function StaffInventoryManagementPage() {
                 </div>
               )}
 
-              {/* Empty State */}
               {form.items.length === 0 && (
                 <div className="bg-gradient-to-r from-slate-50 to-blue-50/50 rounded-xl p-6 text-center border border-slate-200">
                   <Package className="w-12 h-12 text-slate-300 mx-auto mb-3" />
-                  <h4 className="font-medium text-slate-700 mb-2">No products selected</h4>
-                  <p className="text-sm text-slate-600 mb-4">
+                  <h4 className="font-medium text-black mb-2">No products selected</h4>
+                  <p className="text-sm text-black mb-4">
                     Click "Browse & Select Products" to add products in bulk.
                   </p>
                   <button
@@ -2325,9 +2535,8 @@ export default function StaffInventoryManagementPage() {
                 </div>
               )}
 
-              {/* Priority */}
               <div>
-                <label className="block text-sm font-semibold text-slate-900 mb-2">Priority Level</label>
+                <label className="block text-sm font-semibold text-black mb-2">Priority Level</label>
                 <div className="grid grid-cols-4 gap-2">
                   {['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'].map(priority => (
                     <button
@@ -2346,36 +2555,34 @@ export default function StaffInventoryManagementPage() {
                 </div>
               </div>
 
-              {/* Notes */}
               <div>
-                <label className="block text-sm font-semibold text-slate-900 mb-2">Notes (Optional)</label>
+                <label className="block text-sm font-semibold text-black mb-2">Notes (Optional)</label>
                 <textarea
                   value={form.notes}
                   onChange={(e) => setForm({ ...form, notes: e.target.value })}
                   placeholder="Add any special instructions or notes for this assignment..."
                   rows={2}
-                  className="w-full px-4 py-3 border-2 border-slate-300 rounded-xl focus:border-blue-500 text-sm"
+                  className="w-full px-4 py-3 border-2 border-slate-300 rounded-xl focus:border-blue-500 text-sm text-black"
                   disabled={submitting}
                 />
               </div>
 
-              {/* Summary */}
               {form.items.length > 0 && (
                 <div className="bg-gradient-to-r from-slate-50 to-blue-50/50 rounded-xl p-3">
-                  <h4 className="font-semibold text-slate-900 mb-2 text-sm">Summary</h4>
-                  <div className="grid grid-cols-2 gap-3 text-center">
+                  <h4 className="font-semibold text-black mb-2 text-sm">Summary</h4>
+                  <div className="grid grid-cols-3 gap-3 text-center">
                     <div>
-                      <div className="text-xs text-slate-600">Products</div>
-                      <div className="text-lg font-bold text-slate-900">{form.items.length}</div>
+                      <div className="text-xs text-black">Products</div>
+                      <div className="text-lg font-bold text-black">{form.items.length}</div>
                     </div>
                     <div>
-                      <div className="text-xs text-slate-600">Total Items</div>
-                      <div className="text-lg font-bold text-slate-900">
+                      <div className="text-xs text-black">Total Items</div>
+                      <div className="text-lg font-bold text-black">
                         {form.items.reduce((sum, item) => sum + parseInt(item.quantity), 0)}
                       </div>
                     </div>
-                    <div className="col-span-2">
-                      <div className="text-xs text-slate-600">Total Value</div>
+                    <div>
+                      <div className="text-xs text-black">Total Value</div>
                       <div className="text-lg font-bold text-green-700">
                         KES {form.items.reduce((sum, item) => sum + ((item.product?.price || 0) * parseInt(item.quantity)), 0).toLocaleString()}
                       </div>
@@ -2399,7 +2606,7 @@ export default function StaffInventoryManagementPage() {
                       priority: 'MEDIUM'
                     });
                   }}
-                  className="flex-1 px-4 py-3 border-2 border-slate-300 rounded-xl font-medium text-sm"
+                  className="flex-1 px-4 py-3 border-2 border-slate-300 rounded-xl font-medium text-sm text-black"
                 >
                   Cancel
                 </button>
@@ -2459,8 +2666,8 @@ export default function StaffInventoryManagementPage() {
                 <div key={item.assignmentId} className="border-2 border-slate-200 rounded-xl p-3">
                   <div className="flex justify-between items-start mb-2">
                     <div>
-                      <div className="font-medium text-slate-900 text-sm">{item.productName}</div>
-                      <div className="text-xs text-slate-600">Max: {item.maxReturnable}</div>
+                      <div className="font-medium text-black text-sm">{item.productName}</div>
+                      <div className="text-xs text-black">Max: {item.maxReturnable}</div>
                     </div>
                     <button
                       type="button"
@@ -2484,7 +2691,7 @@ export default function StaffInventoryManagementPage() {
                       newItems[index].quantityReturned = e.target.value;
                       setReturnForm({ ...returnForm, items: newItems });
                     }}
-                    className="w-full px-3 py-2 border-2 border-slate-300 rounded-lg text-center text-sm"
+                    className="w-full px-3 py-2 border-2 border-slate-300 rounded-lg text-center text-sm text-black"
                   />
                 </div>
               ))}
@@ -2492,8 +2699,8 @@ export default function StaffInventoryManagementPage() {
               <div className="bg-gradient-to-r from-amber-50 to-orange-50/50 rounded-xl p-3">
                 <div className="flex items-center justify-between">
                   <div>
-                    <div className="text-sm font-semibold text-slate-900">Total to Return</div>
-                    <div className="text-xs text-slate-600">
+                    <div className="text-sm font-semibold text-black">Total to Return</div>
+                    <div className="text-xs text-black">
                       {returnForm.items.filter(i => parseInt(i.quantityReturned) > 0).length} items
                     </div>
                   </div>
@@ -2512,7 +2719,7 @@ export default function StaffInventoryManagementPage() {
                     setSelectedStaff(null);
                     setReturnForm({ items: [], notes: "" });
                   }}
-                  className="flex-1 px-4 py-3 border-2 border-slate-300 rounded-xl font-medium text-sm"
+                  className="flex-1 px-4 py-3 border-2 border-slate-300 rounded-xl font-medium text-sm text-black"
                 >
                   Cancel
                 </button>

@@ -1,3 +1,5 @@
+// prisma/schema.prisma
+
 generator client {
   provider = "prisma-client-js"
 }
@@ -140,12 +142,82 @@ model payment {
 
   paymentDate      DateTime?
 
+  // =====================================
+  // CREDITOR PAYMENT DETAILS RELATION
+  // =====================================
+  
+  creditorPaymentDetails creditorPaymentDetail[] // Relation for payment details
+
   @@index([isVerified])
   @@index([method])
   @@index([saleId])
   @@index([status])
   @@index([creditorId])
   @@index([paymentType])
+}
+
+// =====================================
+// CREDITOR PAYMENT DETAILS MODEL
+// =====================================
+model creditorPaymentDetail {
+  id                    Int      @id @default(autoincrement())
+  paymentId             Int
+  creditorId            Int
+  amount                Float
+  description           String?
+  invoiceNumber         String?
+  paymentReference      String?
+  dueDate               DateTime?
+  bankName              String?
+  accountNumber         String?
+  checkNumber           String?
+  checkDate             DateTime?
+  transactionId         String?
+  notes                 String?
+  attachments           String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+  
+  payment               payment   @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  creditor              creditor  @relation(fields: [creditorId], references: [id])
+  
+  @@index([paymentId])
+  @@index([creditorId])
+  @@index([paymentReference])
+  @@index([invoiceNumber])
+}
+
+// =====================================
+// CREDITOR PAYMENT TEMPLATES MODEL
+// =====================================
+model creditorPaymentTemplate {
+  id                    Int      @id @default(autoincrement())
+  creditorId            Int
+  name                  String   // Template name e.g., "Standard Payment", "Bank Transfer"
+  description           String?
+  
+  // Payment details that can be reused
+  bankName              String?
+  accountNumber         String?
+  accountName           String?
+  bankBranch            String?
+  swiftCode             String?
+  
+  // Default payment method
+  defaultPaymentMethod  String?  // "bank", "cash", "mobile", "cheque"
+  
+  // Additional details
+  notes                 String?
+  isDefault             Boolean  @default(false)
+  
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+  
+  creditor              creditor @relation(fields: [creditorId], references: [id], onDelete: Cascade)
+  
+  @@index([creditorId])
+  @@index([isDefault])
+  @@unique([creditorId, name]) // One template name per creditor
 }
 
 model paymentschedule {
@@ -182,7 +254,7 @@ model product {
   price            Float
   category         String?
   productionCost   Float?
-   costHistory      productCostHistory[] // New relation
+  costHistory      productCostHistory[]
   createdAt        DateTime          @default(now())
   updatedAt        DateTime          @updatedAt
   isPublic         Boolean           @default(false)
@@ -344,14 +416,13 @@ model saleitem {
   quantity         Int
   productId        Int
   saleId           Int
-  price            Float          // Selling price at time of sale
-  total            Float          // Total selling price (quantity * price)
+  price            Float
+  total            Float
   
-  // ===== NEW COST TRACKING FIELDS =====
-  costAtSale       Float?         // Production cost at the time of sale
-  totalCost        Float?         // Total cost (quantity * costAtSale)
-  profitMargin     Float?         // (total - totalCost) / total * 100
-  costSnapshot     Json?          // Full cost snapshot for auditing
+  costAtSale       Float?
+  totalCost        Float?
+  profitMargin     Float?
+  costSnapshot     Json?
   
   staffInventoryId Int?
   
@@ -362,14 +433,14 @@ model saleitem {
   @@index([staffInventoryId])
   @@index([productId])
   @@index([saleId])
-  @@index([costAtSale])  // Add index for cost lookups
+  @@index([costAtSale])
 }
 
 model productCostHistory {
   id          Int      @id @default(autoincrement())
   productId   Int
-  costPrice   Float    // The cost at this point in time
-  effectiveDate DateTime @default(now()) // When this cost became effective
+  costPrice   Float
+  effectiveDate DateTime @default(now())
   notes       String?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
@@ -378,7 +449,7 @@ model productCostHistory {
   
   @@index([productId])
   @@index([effectiveDate])
-  @@unique([productId, effectiveDate]) // One cost per date per product
+  @@unique([productId, effectiveDate])
 }
 
 model creditor {
@@ -388,7 +459,12 @@ model creditor {
   email       String?
   totalOwed   Float     @default(0)
   restocks    restock[]
-  payments    payment[] @relation("CreditorPayments") // Named relation matching payment model
+  payments    payment[] @relation("CreditorPayments")
+  
+  // Relations for payment details and templates
+  creditorPaymentDetails creditorPaymentDetail[]
+  creditorPaymentTemplates creditorPaymentTemplate[]
+  
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
 }
@@ -491,8 +567,6 @@ model tradein {
   @@index([customerId])
   @@index([status])
 }
-
-// ==================== NEW MODELS FOR AUDIT & SOFT DELETE ====================
 
 model saleauditlog {
   id              Int      @id @default(autoincrement())
