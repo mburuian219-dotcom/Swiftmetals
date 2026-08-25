@@ -7,7 +7,10 @@ import {
   CheckCircle, ChevronDown, ChevronUp, Trash2, Edit, Eye,
   Moon, Sun, LogOut, LayoutDashboard, ShoppingCart, Receipt,
   BarChart3, UserPlus, Phone, Mail, Calendar, DollarSign,
-  FileText, Printer, Building2, User, Home
+  FileText, Printer, Building2, User, Home, FileSpreadsheet,
+  ClipboardList, Layers, ShoppingBag, History, ArrowRight,
+  Save, Send, Share2, Copy, Landmark, FileEdit, Calculator,
+  TrendingDown, TrendingUp as TrendingUpIcon, ListChecks
 } from "lucide-react";
 import { auth } from "@/lib/firebase";
 import { onAuthStateChanged } from "firebase/auth";
@@ -63,9 +66,23 @@ interface RestockGroup {
   date: string;
   items: RestockRecord[];
   totalCost: number;
+  cashTotal: number;
+  creditTotal: number;
   paymentSource: string;
   creditorName?: string;
   creditorId?: number | null;
+}
+
+// Payment record for creditors paid
+interface CreditorPaymentRecord {
+  id: number;
+  creditorId: number;
+  creditorName: string;
+  amount: number;
+  paymentDate: string;
+  paymentMethod: string;
+  reference?: string;
+  notes?: string;
 }
 
 // ==================== THEME CONTEXT ====================
@@ -147,6 +164,7 @@ export default function RestockPage() {
   const [showRestockModal, setShowRestockModal] = useState(false);
   const [showCreditorModal, setShowCreditorModal] = useState(false);
   const [showDetailModal, setShowDetailModal] = useState(false);
+  const [showReconciliationModal, setShowReconciliationModal] = useState(false);
   const [selectedRestockGroup, setSelectedRestockGroup] = useState<RestockGroup | null>(null);
   
   // Filter states
@@ -154,6 +172,7 @@ export default function RestockPage() {
   const [paymentFilter, setPaymentFilter] = useState<"all" | "cash" | "credit">("all");
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedCreditorId, setSelectedCreditorId] = useState<string>("");
+  const [selectedDate, setSelectedDate] = useState<string>(new Date().toISOString().split('T')[0]);
   
   // Restock form states
   const [restockItems, setRestockItems] = useState<RestockItem[]>([]);
@@ -167,6 +186,32 @@ export default function RestockPage() {
   const [creditorSearch, setCreditorSearch] = useState("");
   const [showCreditorDropdown, setShowCreditorDropdown] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  
+  // Reconciliation data
+  const [reconciliationData, setReconciliationData] = useState({
+    date: "",
+    items: [] as RestockRecord[],
+    totalProductionCost: 0,
+    paidInCash: 0,
+    restockedOnCredit: 0,
+    creditorsPaid: [] as CreditorPaymentRecord[],
+    creditorsPaidTotal: 0,
+    paymentsMadeInCash: 0,
+    paymentsMadeInCashTotal: 0,
+    openingWIP: 0,
+    cashProductionCosts: 0,
+    closingWIP: 0,
+    balance: 0,
+    notes: "",
+    // Manual entry fields
+    manualCreditorsPaid: 0,
+    manualPaymentsMadeInCash: 0,
+    manualOpeningWIP: 0,
+    manualClosingWIP: 0,
+    // Calculated fields
+    totalCashDisbursed: 0,
+    wipBalance: 0
+  });
   
   // New creditor form states
   const [newCreditor, setNewCreditor] = useState({
@@ -231,7 +276,6 @@ export default function RestockPage() {
     }
   };
 
-  // Get product stock
   const getProductStock = (product: Product) => {
     if (Array.isArray(product.stock)) {
       return product.stock.reduce((sum: number, s: any) => sum + (s.quantity || 0), 0);
@@ -304,25 +348,18 @@ export default function RestockPage() {
 
   // ==================== FILTERED DATA ====================
   const getFilteredRestocks = useCallback(() => {
-    // Group restock records by date and group them
-    const groupedMap = new Map<string, RestockGroup>();
-    
-    // First, filter records
     let filtered = [...restockRecords];
     
-    // Filter by payment source
     if (paymentFilter !== "all") {
       filtered = filtered.filter(r => r.paymentSource === paymentFilter);
     }
     
-    // Filter by creditor
     if (selectedCreditorId) {
       filtered = filtered.filter(r => r.creditorId === Number(selectedCreditorId));
     }
     
-    // Filter by date range
     const now = new Date();
-    let startDate = new Date(0); // Beginning of time
+    let startDate = new Date(0);
     const endDate = new Date(now);
     endDate.setHours(23, 59, 59, 999);
     
@@ -351,7 +388,7 @@ export default function RestockPage() {
       return recordDate >= startDate && recordDate <= endDate;
     });
     
-    // Group by date (using date string as key)
+    const groupedMap = new Map<string, RestockGroup>();
     for (const record of filtered) {
       const dateKey = new Date(record.createdAt).toDateString();
       if (!groupedMap.has(dateKey)) {
@@ -360,6 +397,8 @@ export default function RestockPage() {
           date: record.createdAt,
           items: [],
           totalCost: 0,
+          cashTotal: 0,
+          creditTotal: 0,
           paymentSource: record.paymentSource,
           creditorName: record.creditor?.name || "N/A",
           creditorId: record.creditorId
@@ -368,16 +407,19 @@ export default function RestockPage() {
       const group = groupedMap.get(dateKey)!;
       group.items.push(record);
       group.totalCost += record.totalCost;
+      if (record.paymentSource === 'cash') {
+        group.cashTotal += record.totalCost;
+      } else {
+        group.creditTotal += record.totalCost;
+      }
     }
     
-    // Convert to array and sort by date (newest first)
     const groupedArray = Array.from(groupedMap.values());
     groupedArray.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
     
     return groupedArray;
   }, [restockRecords, paymentFilter, selectedCreditorId, dateRange]);
 
-  // Filter creditors for dropdown
   const filteredCreditors = useMemo(() => {
     if (!creditorSearch.trim()) return creditors.slice(0, 10);
     return creditors.filter(c => 
@@ -386,7 +428,6 @@ export default function RestockPage() {
     ).slice(0, 10);
   }, [creditors, creditorSearch]);
 
-  // Filter products for dropdown
   const filteredProducts = useMemo(() => {
     if (!productSearch.trim()) return products.slice(0, 10);
     return products.filter(p => 
@@ -397,7 +438,6 @@ export default function RestockPage() {
 
   // ==================== CRUD OPERATIONS ====================
   
-  // Add item to restock list
   const addRestockItem = () => {
     if (!selectedProduct) {
       setError("Please select a product");
@@ -435,7 +475,6 @@ export default function RestockPage() {
       }]);
     }
 
-    // Reset form
     setSelectedProduct(null);
     setProductSearch("");
     setQuantity(1);
@@ -444,17 +483,14 @@ export default function RestockPage() {
     setError(null);
   };
 
-  // Remove item from restock list
   const removeRestockItem = (productId: number) => {
     setRestockItems(restockItems.filter(item => item.productId !== productId));
   };
 
-  // Clear all items
   const clearRestockItems = () => {
     setRestockItems([]);
   };
 
-  // Submit restock
   const submitRestock = async () => {
     if (restockItems.length === 0) {
       setError("Please add at least one item to restock");
@@ -481,7 +517,6 @@ export default function RestockPage() {
 
       const token = await user.getIdToken();
 
-      // Submit each item as a separate restock
       const promises = restockItems.map(item => {
         const restockData = {
           productId: item.productId,
@@ -509,11 +544,9 @@ export default function RestockPage() {
         throw new Error(`Failed to restock ${failed.length} item(s)`);
       }
 
-      // Success
-      setSuccess(`Successfully restocked ${restockItems.length} item(s)!`);
+      setSuccess(`✅ Successfully restocked ${restockItems.length} item(s)!`);
       setTimeout(() => setSuccess(null), 4000);
 
-      // Clear form
       setRestockItems([]);
       setSelectedProduct(null);
       setProductSearch("");
@@ -524,7 +557,6 @@ export default function RestockPage() {
       setCreditorSearch("");
       setShowRestockModal(false);
 
-      // Refresh data
       await fetchData();
 
     } catch (err: any) {
@@ -536,7 +568,6 @@ export default function RestockPage() {
     }
   };
 
-  // Create new creditor
   const handleCreateCreditor = async () => {
     if (!newCreditor.name.trim()) {
       setError("Creditor name is required");
@@ -592,10 +623,131 @@ export default function RestockPage() {
     }
   };
 
-  // View restock details
   const viewRestockDetails = (group: RestockGroup) => {
     setSelectedRestockGroup(group);
     setShowDetailModal(true);
+  };
+
+  // ==================== RECONCILIATION FUNCTIONS ====================
+  
+  const generateReconciliation = () => {
+    const selectedDateObj = new Date(selectedDate);
+    const startOfDay = new Date(selectedDateObj);
+    startOfDay.setHours(0, 0, 0, 0);
+    const endOfDay = new Date(selectedDateObj);
+    endOfDay.setHours(23, 59, 59, 999);
+
+    // Filter restocks for the selected day
+    const dayRestocks = restockRecords.filter(r => {
+      const recordDate = new Date(r.createdAt);
+      return recordDate >= startOfDay && recordDate <= endOfDay;
+    });
+
+    // Calculate totals
+    const totalProductionCost = dayRestocks.reduce((sum, r) => sum + r.totalCost, 0);
+    const cashTotal = dayRestocks.filter(r => r.paymentSource === 'cash').reduce((sum, r) => sum + r.totalCost, 0);
+    const creditTotal = dayRestocks.filter(r => r.paymentSource === 'credit').reduce((sum, r) => sum + r.totalCost, 0);
+
+    // Get creditors paid that day (from payments)
+    // This would come from your payments API - for now we'll use a placeholder
+    const creditorsPaid: CreditorPaymentRecord[] = [];
+
+    setReconciliationData({
+      date: selectedDate,
+      items: dayRestocks,
+      totalProductionCost,
+      paidInCash: cashTotal,
+      restockedOnCredit: creditTotal,
+      creditorsPaid: creditorsPaid,
+      creditorsPaidTotal: 0,
+      paymentsMadeInCash: 0,
+      paymentsMadeInCashTotal: 0,
+      openingWIP: 0,
+      cashProductionCosts: cashTotal,
+      closingWIP: 0,
+      balance: 0,
+      notes: "",
+      manualCreditorsPaid: 0,
+      manualPaymentsMadeInCash: 0,
+      manualOpeningWIP: 0,
+      manualClosingWIP: 0,
+      totalCashDisbursed: 0,
+      wipBalance: 0
+    });
+
+    setShowReconciliationModal(true);
+  };
+
+  const calculateReconciliation = useCallback(() => {
+    const totalCashDisbursed = reconciliationData.manualOpeningWIP + reconciliationData.cashProductionCosts;
+    const wipBalance = totalCashDisbursed - reconciliationData.manualPaymentsMadeInCash - reconciliationData.manualCreditorsPaid - reconciliationData.manualClosingWIP;
+    
+    setReconciliationData(prev => ({
+      ...prev,
+      totalCashDisbursed,
+      wipBalance
+    }));
+  }, [reconciliationData.manualOpeningWIP, reconciliationData.cashProductionCosts, reconciliationData.manualPaymentsMadeInCash, reconciliationData.manualCreditorsPaid, reconciliationData.manualClosingWIP]);
+
+  useEffect(() => {
+    if (showReconciliationModal) {
+      calculateReconciliation();
+    }
+  }, [showReconciliationModal, calculateReconciliation]);
+
+  const generateReconciliationReport = () => {
+    const report = `
+=== RESTOCK RECONCILIATION REPORT ===
+Date: ${formatDate(reconciliationData.date)}
+
+ITEMS RESTOCKED:
+${reconciliationData.items.map(item => 
+  `- ${item.product?.name || `Product ID: ${item.productId}`}: ${item.quantity} units × KSh ${formatCurrency(item.costPrice)} = KSh ${formatCurrency(item.totalCost)} (${item.paymentSource.toUpperCase()})`
+).join('\n')}
+
+SUMMARY:
+Total Production Cost: KSh ${formatCurrency(reconciliationData.totalProductionCost)}
+Paid in Cash: KSh ${formatCurrency(reconciliationData.paidInCash)}
+Restocked on Credit: KSh ${formatCurrency(reconciliationData.restockedOnCredit)}
+
+PAYMENTS:
+Creditors Paid: KSh ${formatCurrency(reconciliationData.manualCreditorsPaid)}
+Payments made in Cash: KSh ${formatCurrency(reconciliationData.manualPaymentsMadeInCash)}
+
+CREDITORS PAID TODAY:
+${reconciliationData.creditorsPaid.length > 0 ? 
+  reconciliationData.creditorsPaid.map(c => 
+    `- ${c.creditorName}: KSh ${formatCurrency(c.amount)} (${c.paymentMethod})`
+  ).join('\n') : 
+  'No creditors paid today'}
+
+WORK IN PROGRESS:
+Opening WIP: KSh ${formatCurrency(reconciliationData.manualOpeningWIP)}
+Cash Production Costs: KSh ${formatCurrency(reconciliationData.cashProductionCosts)}
+Payments made in Cash: KSh ${formatCurrency(reconciliationData.manualPaymentsMadeInCash)}
+Creditors Paid: KSh ${formatCurrency(reconciliationData.manualCreditorsPaid)}
+Closing WIP: KSh ${formatCurrency(reconciliationData.manualClosingWIP)}
+
+CALCULATIONS:
+Total Cash Disbursed: KSh ${formatCurrency(reconciliationData.totalCashDisbursed)}
+WIP Balance: KSh ${formatCurrency(reconciliationData.wipBalance)}
+
+Notes: ${reconciliationData.notes || 'N/A'}
+=====================================
+Generated: ${new Date().toLocaleString()}
+    `;
+    return report;
+  };
+
+  const exportReconciliationCSV = () => {
+    const report = generateReconciliationReport();
+    const blob = new Blob([report], { type: 'text/plain;charset=utf-8;' });
+    const link = document.createElement('a');
+    const url = URL.createObjectURL(blob);
+    link.setAttribute('href', url);
+    link.setAttribute('download', `reconciliation_${reconciliationData.date}.txt`);
+    link.click();
+    URL.revokeObjectURL(url);
   };
 
   // ==================== EXPORT ====================
@@ -673,10 +825,8 @@ export default function RestockPage() {
     <ThemeContext.Provider value={{ theme, toggleTheme }}>
       <div className={`min-h-screen transition-colors duration-200 ${theme === 'dark' ? 'dark bg-gray-900' : 'bg-gray-50'}`}>
         
-        {/* Navigation Bar */}
         <NavigationBar activePage="restock" />
         
-        {/* Theme Toggle */}
         <button
           onClick={toggleTheme}
           className="fixed bottom-4 right-4 z-50 p-2.5 rounded-full bg-white dark:bg-gray-800 shadow-lg border border-gray-200 dark:border-gray-700 hover:shadow-xl transition-all"
@@ -694,15 +844,22 @@ export default function RestockPage() {
                   <Package size={24} />
                   Restock Management
                 </h1>
-                <p className="text-xs text-gray-500 mt-1">Track and manage inventory restocks</p>
+                <p className="text-xs text-gray-500 mt-1">Track and manage inventory restocks with reconciliation</p>
               </div>
-              <div className="flex gap-2">
+              <div className="flex flex-wrap gap-2">
                 <button
                   onClick={() => setShowRestockModal(true)}
                   className="bg-orange-600 text-white px-3 py-2 rounded-lg flex items-center gap-2 text-sm hover:bg-orange-700 transition-colors"
                 >
                   <Plus size={16} />
                   New Restock
+                </button>
+                <button
+                  onClick={generateReconciliation}
+                  className="bg-purple-600 text-white px-3 py-2 rounded-lg flex items-center gap-2 text-sm hover:bg-purple-700 transition-colors"
+                >
+                  <FileSpreadsheet size={16} />
+                  Reconcile
                 </button>
                 <button
                   onClick={exportToCSV}
@@ -769,11 +926,11 @@ export default function RestockPage() {
             <div className="p-3 border-b dark:border-gray-700">
               <div className="flex items-center gap-2">
                 <Filter size={16} className="text-gray-500" />
-                <span className="font-medium text-sm">Filters</span>
+                <span className="font-medium text-sm">Filters & Reconciliation</span>
               </div>
             </div>
             <div className="p-3">
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
                 <div>
                   <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Date Range</label>
                   <select
@@ -825,96 +982,114 @@ export default function RestockPage() {
                     />
                   </div>
                 </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Reconcile Date</label>
+                  <div className="flex gap-1">
+                    <input
+                      type="date"
+                      value={selectedDate}
+                      onChange={(e) => setSelectedDate(e.target.value)}
+                      className="flex-1 p-1.5 text-sm border rounded-lg bg-white dark:bg-gray-700 dark:border-gray-600"
+                    />
+                    <button
+                      onClick={generateReconciliation}
+                      className="px-2 py-1.5 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors"
+                      title="Generate Reconciliation"
+                    >
+                      <FileSpreadsheet size={16} />
+                    </button>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
 
-          {/* Loading State */}
-          {loading && (
-            <div className="bg-white dark:bg-gray-800 rounded-xl p-12 text-center">
-              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-orange-600 mx-auto mb-3"></div>
-              <p className="text-gray-500">Loading restock data...</p>
-            </div>
-          )}
-
-          {/* No Data State */}
-          {!loading && filteredGroups.length === 0 && (
-            <div className="bg-white dark:bg-gray-800 rounded-xl p-12 text-center">
-              <Package size={48} className="mx-auto text-gray-300 mb-3" />
-              <p className="text-gray-500">No restock records found</p>
-              <p className="text-xs text-gray-400 mt-1">Start by creating a new restock</p>
-              <button
-                onClick={() => setShowRestockModal(true)}
-                className="mt-3 px-4 py-2 bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition-colors"
-              >
-                <Plus size={16} className="inline mr-1" />
-                New Restock
-              </button>
-            </div>
-          )}
-
           {/* Restock Records */}
-          {!loading && filteredGroups.length > 0 && (
-            <div className="space-y-4">
-              {filteredGroups.map((group) => (
-                <div key={group.id} className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 overflow-hidden">
-                  <div className="p-4 flex flex-wrap justify-between items-center border-b dark:border-gray-700 bg-gradient-to-r from-orange-50 to-amber-50 dark:from-orange-900/20 dark:to-amber-900/20">
-                    <div className="flex flex-wrap items-center gap-3">
-                      <div className="flex items-center gap-2">
-                        <Calendar size={16} className="text-gray-500" />
-                        <span className="font-medium">{formatDate(group.date)}</span>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${
-                          group.paymentSource === 'cash' 
-                            ? 'bg-green-100 text-green-700' 
-                            : 'bg-red-100 text-red-700'
-                        }`}>
-                          {group.paymentSource.toUpperCase()}
-                        </span>
-                      </div>
-                      {group.creditorName && group.creditorName !== "N/A" && (
-                        <div className="flex items-center gap-1">
-                          <Building2 size={14} className="text-gray-500" />
-                          <span className="text-sm font-medium">{group.creditorName}</span>
-                        </div>
-                      )}
-                    </div>
-                    <div className="flex flex-wrap items-center gap-3">
-                      <div className="text-right">
-                        <div className="text-sm text-gray-500">Total Cost</div>
-                        <div className="text-lg font-bold text-orange-600">KSh {formatCurrency(group.totalCost)}</div>
-                      </div>
-                      <button
-                        onClick={() => viewRestockDetails(group)}
-                        className="px-3 py-1.5 bg-blue-600 text-white rounded-lg text-sm hover:bg-blue-700 transition-colors flex items-center gap-1"
-                      >
-                        <Eye size={14} />
-                        View Details
-                      </button>
-                    </div>
-                  </div>
-                  <div className="p-3">
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                      {group.items.slice(0, 3).map((item, idx) => (
-                        <div key={idx} className="bg-gray-50 dark:bg-gray-700/50 rounded-lg p-2 flex justify-between items-center">
-                          <div>
-                            <div className="text-sm font-medium">{item.product?.name || `Product ID: ${item.productId}`}</div>
-                            <div className="text-xs text-gray-500">Qty: {item.quantity} × KSh {formatCurrency(item.costPrice)}</div>
-                          </div>
-                          <div className="text-sm font-semibold text-orange-600">KSh {formatCurrency(item.totalCost)}</div>
-                        </div>
-                      ))}
-                      {group.items.length > 3 && (
-                        <div className="bg-gray-50 dark:bg-gray-700/50 rounded-lg p-2 flex items-center justify-center text-sm text-gray-500">
-                          +{group.items.length - 3} more items
-                        </div>
-                      )}
-                    </div>
-                  </div>
+          {!loading && (
+            <>
+              {filteredGroups.length === 0 ? (
+                <div className="bg-white dark:bg-gray-800 rounded-xl p-12 text-center">
+                  <Package size={48} className="mx-auto text-gray-300 mb-3" />
+                  <p className="text-gray-500">No restock records found</p>
+                  <p className="text-xs text-gray-400 mt-1">Start by creating a new restock</p>
+                  <button
+                    onClick={() => setShowRestockModal(true)}
+                    className="mt-3 px-4 py-2 bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition-colors"
+                  >
+                    <Plus size={16} className="inline mr-1" />
+                    New Restock
+                  </button>
                 </div>
-              ))}
-            </div>
+              ) : (
+                <div className="space-y-4">
+                  {filteredGroups.map((group) => (
+                    <div key={group.id} className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 overflow-hidden">
+                      <div className="p-4 flex flex-wrap justify-between items-center border-b dark:border-gray-700 bg-gradient-to-r from-orange-50 to-amber-50 dark:from-orange-900/20 dark:to-amber-900/20">
+                        <div className="flex flex-wrap items-center gap-3">
+                          <div className="flex items-center gap-2">
+                            <Calendar size={16} className="text-gray-500" />
+                            <span className="font-medium">{formatDate(group.date)}</span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${
+                              group.paymentSource === 'cash' 
+                                ? 'bg-green-100 text-green-700' 
+                                : 'bg-red-100 text-red-700'
+                            }`}>
+                              {group.paymentSource.toUpperCase()}
+                            </span>
+                          </div>
+                          {group.creditorName && group.creditorName !== "N/A" && (
+                            <div className="flex items-center gap-1">
+                              <Building2 size={14} className="text-gray-500" />
+                              <span className="text-sm font-medium">{group.creditorName}</span>
+                            </div>
+                          )}
+                          <div className="flex items-center gap-2 text-sm">
+                            <span className="text-gray-500">Cash:</span>
+                            <span className="font-medium text-green-600">KSh {formatCurrency(group.cashTotal)}</span>
+                            <span className="text-gray-400">|</span>
+                            <span className="text-gray-500">Credit:</span>
+                            <span className="font-medium text-red-600">KSh {formatCurrency(group.creditTotal)}</span>
+                          </div>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-3">
+                          <div className="text-right">
+                            <div className="text-sm text-gray-500">Total Cost</div>
+                            <div className="text-lg font-bold text-orange-600">KSh {formatCurrency(group.totalCost)}</div>
+                          </div>
+                          <button
+                            onClick={() => viewRestockDetails(group)}
+                            className="px-3 py-1.5 bg-blue-600 text-white rounded-lg text-sm hover:bg-blue-700 transition-colors flex items-center gap-1"
+                          >
+                            <Eye size={14} />
+                            View Details
+                          </button>
+                        </div>
+                      </div>
+                      <div className="p-3">
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                          {group.items.slice(0, 3).map((item, idx) => (
+                            <div key={idx} className="bg-gray-50 dark:bg-gray-700/50 rounded-lg p-2 flex justify-between items-center">
+                              <div>
+                                <div className="text-sm font-medium">{item.product?.name || `Product ID: ${item.productId}`}</div>
+                                <div className="text-xs text-gray-500">Qty: {item.quantity} × KSh {formatCurrency(item.costPrice)}</div>
+                              </div>
+                              <div className="text-sm font-semibold text-orange-600">KSh {formatCurrency(item.totalCost)}</div>
+                            </div>
+                          ))}
+                          {group.items.length > 3 && (
+                            <div className="bg-gray-50 dark:bg-gray-700/50 rounded-lg p-2 flex items-center justify-center text-sm text-gray-500">
+                              +{group.items.length - 3} more items
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </>
           )}
 
           {/* Footer Stats */}
@@ -1376,7 +1551,6 @@ export default function RestockPage() {
                 </table>
               </div>
 
-              {/* Timestamp */}
               <div className="text-xs text-gray-400 text-right">
                 Created: {formatDateTime(selectedRestockGroup.items[0]?.createdAt || selectedRestockGroup.date)}
               </div>
@@ -1390,6 +1564,261 @@ export default function RestockPage() {
                   className="px-4 py-2 bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors"
                 >
                   Close
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ==================== RECONCILIATION MODAL ==================== */}
+      {showReconciliationModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-[60]">
+          <div className="bg-white dark:bg-gray-800 rounded-xl max-w-6xl w-full max-h-[90vh] overflow-y-auto shadow-2xl">
+            <div className="sticky top-0 bg-gradient-to-r from-purple-600 to-indigo-600 text-white p-4 rounded-t-xl flex justify-between items-center">
+              <div>
+                <h2 className="text-xl font-bold">Restock Reconciliation</h2>
+                <p className="text-purple-100 text-sm">{formatDate(reconciliationData.date)}</p>
+              </div>
+              <button
+                onClick={() => {
+                  setShowReconciliationModal(false);
+                }}
+                className="text-white hover:bg-white/20 p-1.5 rounded-lg transition-colors"
+              >
+                <X size={24} />
+              </button>
+            </div>
+            <div className="p-6 space-y-6">
+              {/* Items Restocked - Full Table */}
+              <div className="border rounded-lg overflow-hidden">
+                <div className="bg-blue-50 dark:bg-blue-900/20 px-4 py-2 border-b font-semibold text-blue-700 dark:text-blue-300 flex items-center gap-2">
+                  <Package size={16} />
+                  Items Restocked Today
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead className="bg-gray-50 dark:bg-gray-700/50">
+                      <tr>
+                        <th className="text-left p-2 font-semibold">Item</th>
+                        <th className="text-center p-2 font-semibold">QTY</th>
+                        <th className="text-right p-2 font-semibold">Unit Prod Cost</th>
+                        <th className="text-right p-2 font-semibold">Total Prod Cost</th>
+                        <th className="text-center p-2 font-semibold">Payment Method</th>
+                        <th className="text-right p-2 font-semibold">Cash</th>
+                        <th className="text-right p-2 font-semibold">Credit</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y">
+                      {reconciliationData.items.length > 0 ? (
+                        reconciliationData.items.map((item, idx) => (
+                          <tr key={idx} className="hover:bg-gray-50 dark:hover:bg-gray-700/50">
+                            <td className="p-2 font-medium">{item.product?.name || `Product ID: ${item.productId}`}</td>
+                            <td className="p-2 text-center">{item.quantity}</td>
+                            <td className="p-2 text-right">KSh {formatCurrency(item.costPrice)}</td>
+                            <td className="p-2 text-right font-semibold">KSh {formatCurrency(item.totalCost)}</td>
+                            <td className="p-2 text-center">
+                              <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${
+                                item.paymentSource === 'cash' 
+                                  ? 'bg-green-100 text-green-700' 
+                                  : 'bg-red-100 text-red-700'
+                              }`}>
+                                {item.paymentSource.toUpperCase()}
+                              </span>
+                            </td>
+                            <td className="p-2 text-right text-green-600 font-medium">
+                              {item.paymentSource === 'cash' ? `KSh ${formatCurrency(item.totalCost)}` : '-'}
+                            </td>
+                            <td className="p-2 text-right text-red-600 font-medium">
+                              {item.paymentSource === 'credit' ? `KSh ${formatCurrency(item.totalCost)}` : '-'}
+                            </td>
+                          </tr>
+                        ))
+                      ) : (
+                        <tr>
+                          <td colSpan={7} className="p-4 text-center text-gray-500">No items restocked on this day</td>
+                        </tr>
+                      )}
+                    </tbody>
+                    <tfoot className="bg-gray-50 dark:bg-gray-700/50 border-t font-semibold">
+                      <tr>
+                        <td colSpan={3} className="p-2 text-right">Total Production Cost:</td>
+                        <td className="p-2 text-right text-blue-600">KSh {formatCurrency(reconciliationData.totalProductionCost)}</td>
+                        <td className="p-2"></td>
+                        <td className="p-2 text-right text-green-600">KSh {formatCurrency(reconciliationData.paidInCash)}</td>
+                        <td className="p-2 text-right text-red-600">KSh {formatCurrency(reconciliationData.restockedOnCredit)}</td>
+                      </tr>
+                    </tfoot>
+                  </table>
+                </div>
+              </div>
+
+              {/* Payments Today */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                {/* Payments Made */}
+                <div className="border rounded-lg overflow-hidden">
+                  <div className="bg-green-50 dark:bg-green-900/20 px-4 py-2 border-b font-semibold text-green-700 dark:text-green-300 flex items-center gap-2">
+                    <Wallet size={16} />
+                    Payments Today (Manual Entry)
+                  </div>
+                  <div className="p-4 space-y-3">
+                    <div>
+                      <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Creditors Paid</label>
+                      <div className="relative">
+                        <span className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-500 text-sm">KSh</span>
+                        <input
+                          type="number"
+                          value={reconciliationData.manualCreditorsPaid}
+                          onChange={(e) => setReconciliationData({ ...reconciliationData, manualCreditorsPaid: parseFloat(e.target.value) || 0 })}
+                          className="w-full pl-12 p-2 border rounded-lg focus:ring-2 focus:ring-purple-500 dark:bg-gray-700 dark:border-gray-600"
+                        />
+                      </div>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Payments made in Cash</label>
+                      <div className="relative">
+                        <span className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-500 text-sm">KSh</span>
+                        <input
+                          type="number"
+                          value={reconciliationData.manualPaymentsMadeInCash}
+                          onChange={(e) => setReconciliationData({ ...reconciliationData, manualPaymentsMadeInCash: parseFloat(e.target.value) || 0 })}
+                          className="w-full pl-12 p-2 border rounded-lg focus:ring-2 focus:ring-purple-500 dark:bg-gray-700 dark:border-gray-600"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Creditors Paid List */}
+                <div className="border rounded-lg overflow-hidden">
+                  <div className="bg-amber-50 dark:bg-amber-900/20 px-4 py-2 border-b font-semibold text-amber-700 dark:text-amber-300 flex items-center gap-2">
+                    <Users size={16} />
+                    Creditors Paid Today
+                  </div>
+                  <div className="p-4">
+                    {reconciliationData.creditorsPaid.length > 0 ? (
+                      <div className="space-y-2">
+                        {reconciliationData.creditorsPaid.map((creditor, idx) => (
+                          <div key={idx} className="flex justify-between items-center border-b pb-2">
+                            <div>
+                              <div className="font-medium">{creditor.creditorName}</div>
+                              <div className="text-xs text-gray-500">{creditor.paymentMethod}</div>
+                            </div>
+                            <div className="font-semibold text-green-600">KSh {formatCurrency(creditor.amount)}</div>
+                          </div>
+                        ))}
+                        <div className="flex justify-between font-bold pt-2 border-t">
+                          <span>Total:</span>
+                          <span className="text-green-600">KSh {formatCurrency(reconciliationData.creditorsPaid.reduce((sum, c) => sum + c.amount, 0))}</span>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="text-center text-gray-500 py-4">No creditors paid today</div>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* WIP Section */}
+              <div className="border rounded-lg overflow-hidden">
+                <div className="bg-purple-50 dark:bg-purple-900/20 px-4 py-2 border-b font-semibold text-purple-700 dark:text-purple-300 flex items-center gap-2">
+                  <Calculator size={16} />
+                  Work In Progress (WIP)
+                </div>
+                <div className="p-4">
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div>
+                      <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Opening WIP</label>
+                      <div className="relative">
+                        <span className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-500 text-sm">KSh</span>
+                        <input
+                          type="number"
+                          value={reconciliationData.manualOpeningWIP}
+                          onChange={(e) => setReconciliationData({ ...reconciliationData, manualOpeningWIP: parseFloat(e.target.value) || 0 })}
+                          className="w-full pl-12 p-2 border rounded-lg focus:ring-2 focus:ring-purple-500 dark:bg-gray-700 dark:border-gray-600"
+                        />
+                      </div>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Cash Production Costs</label>
+                      <div className="relative">
+                        <span className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-500 text-sm">KSh</span>
+                        <input
+                          type="number"
+                          value={reconciliationData.cashProductionCosts}
+                          onChange={(e) => setReconciliationData({ ...reconciliationData, cashProductionCosts: parseFloat(e.target.value) || 0 })}
+                          className="w-full pl-12 p-2 border rounded-lg focus:ring-2 focus:ring-purple-500 dark:bg-gray-700 dark:border-gray-600"
+                        />
+                      </div>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Closing WIP</label>
+                      <div className="relative">
+                        <span className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-500 text-sm">KSh</span>
+                        <input
+                          type="number"
+                          value={reconciliationData.manualClosingWIP}
+                          onChange={(e) => setReconciliationData({ ...reconciliationData, manualClosingWIP: parseFloat(e.target.value) || 0 })}
+                          className="w-full pl-12 p-2 border rounded-lg focus:ring-2 focus:ring-purple-500 dark:bg-gray-700 dark:border-gray-600"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                  <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4 bg-gray-50 dark:bg-gray-700/50 rounded-lg p-4">
+                    <div className="grid grid-cols-2 gap-2 text-sm">
+                      <div className="text-gray-600 font-medium">Total Cash Disbursed:</div>
+                      <div className="text-right font-bold text-blue-600">KSh {formatCurrency(reconciliationData.totalCashDisbursed)}</div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2 text-sm">
+                      <div className="text-gray-600 font-medium">WIP Balance:</div>
+                      <div className={`text-right font-bold ${reconciliationData.wipBalance >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                        KSh {formatCurrency(reconciliationData.wipBalance)}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Notes */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Notes</label>
+                <textarea
+                  value={reconciliationData.notes}
+                  onChange={(e) => setReconciliationData({ ...reconciliationData, notes: e.target.value })}
+                  rows={2}
+                  placeholder="Add notes about this reconciliation..."
+                  className="w-full p-3 border rounded-lg focus:ring-2 focus:ring-purple-500 dark:bg-gray-700 dark:border-gray-600"
+                />
+              </div>
+
+              {/* Actions */}
+              <div className="flex flex-wrap gap-2 pt-3 border-t">
+                <button
+                  onClick={() => {
+                    setShowReconciliationModal(false);
+                  }}
+                  className="px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
+                >
+                  Close
+                </button>
+                <button
+                  onClick={exportReconciliationCSV}
+                  className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors flex items-center gap-2"
+                >
+                  <Download size={16} />
+                  Export Report
+                </button>
+                <button
+                  onClick={() => {
+                    const report = generateReconciliationReport();
+                    navigator.clipboard.writeText(report);
+                    setSuccess("Report copied to clipboard!");
+                    setTimeout(() => setSuccess(null), 3000);
+                  }}
+                  className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors flex items-center gap-2"
+                >
+                  <Copy size={16} />
+                  Copy Report
                 </button>
               </div>
             </div>
