@@ -11,6 +11,8 @@ type Sale = {
   updatedBy?: string;
   createdAt?: string;
   updatedAt?: string;
+  assignedStaff?: string;
+  assignedStaffId?: number;
 };
 
 type Payment = {
@@ -33,6 +35,7 @@ type Debtor = {
   lastUpdatedAt?: string;
   createdBy?: string;
   createdAt?: string;
+  assignedStaff?: string;
 };
 
 type FormData = {
@@ -75,10 +78,14 @@ export default function DebtorsSection() {
   useEffect(() => {
     const staffSet = new Set<string>();
     debtors.forEach(debtor => {
-      if (debtor.createdBy) staffSet.add(debtor.createdBy);
+      // Use assignedStaff if available, otherwise fallback to createdBy
+      const primaryStaff = debtor.assignedStaff || debtor.createdBy;
+      if (primaryStaff) staffSet.add(primaryStaff);
       if (debtor.lastUpdatedBy) staffSet.add(debtor.lastUpdatedBy);
       debtor.sales.forEach(sale => {
-        if (sale.createdBy) staffSet.add(sale.createdBy);
+        // Use assignedStaff for sales if available
+        const saleStaff = sale.assignedStaff || sale.createdBy;
+        if (saleStaff) staffSet.add(saleStaff);
         if (sale.updatedBy) staffSet.add(sale.updatedBy);
       });
     });
@@ -101,17 +108,20 @@ export default function DebtorsSection() {
         ) ||
         debtor.balance.toString().includes(query) ||
         debtor.totalSales.toString().includes(query) ||
-        (debtor.lastUpdatedBy && debtor.lastUpdatedBy.toLowerCase().includes(query)) ||
-        (debtor.createdBy && debtor.createdBy.toLowerCase().includes(query))
+        (debtor.assignedStaff && debtor.assignedStaff.toLowerCase().includes(query)) ||
+        (debtor.createdBy && debtor.createdBy.toLowerCase().includes(query)) ||
+        (debtor.lastUpdatedBy && debtor.lastUpdatedBy.toLowerCase().includes(query))
       );
     }
     
-    // Apply staff filter
+    // Apply staff filter - check both assignedStaff and createdBy
     if (staffFilter !== "all") {
       result = result.filter(debtor => 
+        debtor.assignedStaff === staffFilter ||
         debtor.createdBy === staffFilter || 
         debtor.lastUpdatedBy === staffFilter ||
         debtor.sales.some(sale => 
+          sale.assignedStaff === staffFilter ||
           sale.createdBy === staffFilter || 
           sale.updatedBy === staffFilter
         )
@@ -124,13 +134,11 @@ export default function DebtorsSection() {
         let aValue = a[sortConfig.key];
         let bValue = b[sortConfig.key];
         
-        // Handle special cases for dates and undefined values
         if (sortConfig.key === 'lastUpdatedAt') {
           aValue = a.lastUpdatedAt || '';
           bValue = b.lastUpdatedAt || '';
         }
         
-        // Handle undefined or null values
         const aVal = aValue !== undefined && aValue !== null ? aValue : '';
         const bVal = bValue !== undefined && bValue !== null ? bValue : '';
         
@@ -155,7 +163,9 @@ export default function DebtorsSection() {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 100000);
       
-      const response = await fetch("/api/sales", { signal: controller.signal });
+      const response = await fetch("/api/sales?includeAssignedStaff=true", { 
+        signal: controller.signal 
+      });
       clearTimeout(timeoutId);
       
       if (!response.ok) throw new Error("Failed to fetch sales");
@@ -166,6 +176,22 @@ export default function DebtorsSection() {
       sales.forEach((sale: any) => {
         if ((sale.status === "UNPAID" || sale.status === "PARTIAL") && sale.customer) {
           const customerId = sale.customer.id;
+          
+          // Determine the responsible staff - assignedStaff takes priority
+          let responsibleStaff = "System";
+          
+          // Check if assignedStaff exists and has a name
+          if (sale.assignedStaff && sale.assignedStaff.name) {
+            responsibleStaff = sale.assignedStaff.name;
+          } 
+          // Fallback to createdByStaff
+          else if (sale.createdByStaff && sale.createdByStaff.name) {
+            responsibleStaff = sale.createdByStaff.name;
+          }
+          // Fallback to the createdBy string
+          else if (sale.createdBy) {
+            responsibleStaff = sale.createdBy;
+          }
 
           if (!debtorMap.has(customerId)) {
             debtorMap.set(customerId, {
@@ -178,25 +204,34 @@ export default function DebtorsSection() {
               balance: 0,
               sales: [],
               payments: [],
-              lastUpdatedBy: sale.updatedBy || sale.createdBy || "System",
+              lastUpdatedBy: sale.updatedBy || sale.createdBy || responsibleStaff,
               lastUpdatedAt: sale.updatedAt || sale.createdAt,
-              createdBy: sale.createdBy || sale.customer.createdBy || "System",
+              // CHANGE: Use responsibleStaff instead of sale.createdBy
+              createdBy: responsibleStaff,
               createdAt: sale.createdAt || sale.customer.createdAt,
+              assignedStaff: responsibleStaff,
             });
           }
 
           const debtor = debtorMap.get(customerId)!;
           debtor.totalSales += sale.amount;
-          debtor.paid += sale.totalPaid;
+          debtor.paid += sale.totalPaid || 0;
           debtor.balance = debtor.totalSales - debtor.paid;
+
+          // Update assignedStaff if this sale has a different responsible staff
+          if (sale.assignedStaff?.name) {
+            debtor.assignedStaff = sale.assignedStaff.name;
+            // ALSO UPDATE createdBy to show assigned staff
+            debtor.createdBy = sale.assignedStaff.name;
+          }
 
           const saleUpdatedAt = sale.updatedAt || sale.createdAt;
           if (saleUpdatedAt && (!debtor.lastUpdatedAt || new Date(saleUpdatedAt) > new Date(debtor.lastUpdatedAt))) {
-            debtor.lastUpdatedBy = sale.updatedBy || sale.createdBy || "System";
+            debtor.lastUpdatedBy = sale.updatedBy || sale.createdBy || responsibleStaff;
             debtor.lastUpdatedAt = saleUpdatedAt;
           }
 
-          const itemsStr = sale.saleitems
+          const itemsStr = sale.saleitem
             ?.map((item: any) => `${item.product?.name || "Item"} x${item.quantity}`)
             .join(", ") || "Items";
 
@@ -206,15 +241,18 @@ export default function DebtorsSection() {
             items: itemsStr,
             amount: sale.amount,
             status: sale.status,
-            createdBy: sale.createdBy,
+            // CHANGE: Prioritize assignedStaff
+            createdBy: sale.assignedStaff?.name || sale.createdByStaff?.name || sale.createdBy || "System",
             updatedBy: sale.updatedBy,
             createdAt: sale.createdAt,
             updatedAt: sale.updatedAt,
+            assignedStaff: sale.assignedStaff?.name || null,
+            assignedStaffId: sale.assignedStaffId || null,
           });
 
-          if (sale.payments && Array.isArray(sale.payments)) {
-            sale.payments.forEach((payment: any) => {
-              if (payment.status === "CLEARED") {
+          if (sale.payment && Array.isArray(sale.payment)) {
+            sale.payment.forEach((payment: any) => {
+              if (payment.status === "CLEARED" || payment.status === "COMPLETED") {
                 debtor.payments.push({
                   date: payment.paidAt || payment.createdAt,
                   amount: payment.amount,
@@ -262,8 +300,9 @@ export default function DebtorsSection() {
         "Last Sale Date",
         "Sale Status",
         "Last Payment Date",
-        "Created By (Staff)",
+        "Assigned Staff", // CHANGE: Changed from "Created By (Staff)"
         "Created At",
+        "Responsible Staff (Assigned)",
         "Last Updated By (Staff)",
         "Last Updated At",
         "Staff Filter Applied"
@@ -287,6 +326,9 @@ export default function DebtorsSection() {
         const createdAt = debtor.createdAt ? new Date(debtor.createdAt).toLocaleString() : "-";
         const updatedAt = debtor.lastUpdatedAt ? new Date(debtor.lastUpdatedAt).toLocaleString() : "-";
 
+        // Determine the staff to display - assignedStaff overrides createdBy
+        const responsibleStaff = debtor.assignedStaff || debtor.createdBy || "System";
+
         return [
           debtor.id,
           `"${debtor.name.replace(/"/g, '""')}"`,
@@ -300,8 +342,10 @@ export default function DebtorsSection() {
           lastSale,
           saleStatus,
           lastPayment,
-          debtor.createdBy || "System",
+          // CHANGE: Use assignedStaff instead of createdBy
+          responsibleStaff, 
           createdAt,
+          responsibleStaff,
           debtor.lastUpdatedBy || "System",
           updatedAt,
           staffFilter !== "all" ? staffFilter : "All Staff"
@@ -763,11 +807,11 @@ Swiftmetals`;
                 </div>
                 <div className="col-span-2">
                   <button
-                    onClick={() => handleSort('lastUpdatedBy')}
+                    onClick={() => handleSort('assignedStaff')}
                     className="flex items-center justify-center gap-1 text-xs font-semibold text-gray-700 hover:text-gray-900 group"
                   >
-                    Last Updated By
-                    <SortIcon sortKey="lastUpdatedBy" />
+                    Assigned Staff
+                    <SortIcon sortKey="assignedStaff" />
                   </button>
                 </div>
                 <div className="col-span-1 text-right">
@@ -832,12 +876,11 @@ Swiftmetals`;
                                 <span className="truncate">{debtor.email}</span>
                               </span>
                             )}
-                            {debtor.createdBy && (
-                              <span className="flex items-center gap-1 text-amber-600">
-                                <UserCheck className="w-3 h-3" />
-                                {debtor.createdBy}
-                              </span>
-                            )}
+                            {/* CHANGE: Always show assignedStaff, fallback to createdBy */}
+                            <span className="flex items-center gap-1 text-amber-600 font-medium">
+                              <UserCheck className="w-3 h-3" />
+                              {debtor.assignedStaff || debtor.createdBy || "System"}
+                            </span>
                           </div>
                         </div>
 
@@ -858,9 +901,9 @@ Swiftmetals`;
                             </p>
                           </div>
                           <div className="text-left">
-                            <p className="text-xs text-gray-500 mb-1">Last Updated</p>
-                            <p className="text-xs font-medium text-gray-700 truncate" title={`${debtor.lastUpdatedBy} at ${formatDateTime(debtor.lastUpdatedAt)}`}>
-                              {debtor.lastUpdatedBy}
+                            <p className="text-xs text-gray-500 mb-1">Assigned Staff</p>
+                            <p className="text-xs font-medium text-gray-700 truncate">
+                              {debtor.assignedStaff || debtor.createdBy || "System"}
                             </p>
                           </div>
                         </div>
@@ -932,9 +975,11 @@ Swiftmetals`;
                             {debtor.totalSales > 0 ? Math.round((debtor.paid / debtor.totalSales) * 100) : 0}%
                           </p>
                         </div>
-                        <div className="bg-gray-50 rounded p-2">
-                          <p className="text-xs text-gray-600 mb-1">Updated</p>
-                          <p className="text-xs font-bold text-gray-700 truncate">{debtor.lastUpdatedBy}</p>
+                        <div className="bg-amber-50 rounded p-2">
+                          <p className="text-xs text-gray-600 mb-1">Staff</p>
+                          <p className="text-xs font-bold text-amber-700 truncate">
+                            {debtor.assignedStaff || debtor.createdBy || "System"}
+                          </p>
                         </div>
                       </div>
                     </div>
@@ -942,12 +987,16 @@ Swiftmetals`;
                     {/* Expanded Details */}
                     {expandedId === debtor.id && (
                       <div className="px-3 md:px-4 pb-3 md:pb-4 space-y-3 border-t border-gray-200 bg-gray-50">
-                        {/* Last Updated Info */}
+                        {/* Staff Info */}
                         <div className="bg-gray-100 rounded-lg p-2.5 flex flex-col sm:flex-row justify-between gap-2 text-xs">
                           <div className="flex items-center gap-2">
                             <span className="font-medium text-gray-600">Created:</span>
                             <span className="text-gray-700">{debtor.createdBy || "System"}</span>
                             <span className="text-gray-400">{formatDateTime(debtor.createdAt)}</span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span className="font-medium text-gray-600">Assigned Staff:</span>
+                            <span className="text-amber-700 font-semibold">{debtor.assignedStaff || debtor.createdBy || "System"}</span>
                           </div>
                           <div className="flex items-center gap-2">
                             <span className="font-medium text-gray-600">Last Updated:</span>
@@ -996,8 +1045,11 @@ Swiftmetals`;
                                       </div>
                                       <p className="text-xs text-gray-600 mt-0.5 truncate">{sale.items}</p>
                                       <div className="flex flex-wrap gap-3 mt-1 text-[10px] text-gray-400">
-                                        {sale.createdBy && <span>Created: {sale.createdBy}</span>}
-                                        {sale.updatedBy && sale.updatedBy !== sale.createdBy && (
+                                        {/* CHANGE: Always show assignedStaff, fallback to createdBy */}
+                                        <span className="text-amber-600 font-medium">
+                                          Assigned: {sale.assignedStaff || sale.createdBy || "System"}
+                                        </span>
+                                        {sale.updatedBy && sale.updatedBy !== sale.createdBy && sale.updatedBy !== sale.assignedStaff && (
                                           <span>Updated: {sale.updatedBy}</span>
                                         )}
                                       </div>
@@ -1135,11 +1187,11 @@ Swiftmetals`;
               </div>
               <div className="bg-purple-50 border border-purple-200 rounded-lg p-4">
                 <p className="text-sm text-purple-800">
-                  <strong>Staff Filter:</strong>
+                  <strong>Staff Tracking:</strong>
                   <ul className="mt-1 ml-2">
-                    <li>• Filter debtors by the staff member who created them</li>
-                    <li>• Filter debtors by the staff member who last updated them</li>
-                    <li>• CSV download includes staff filter information</li>
+                    <li>• <span className="font-semibold">Assigned Staff</span> - The salesperson responsible for the sale</li>
+                    <li>• <span className="font-semibold">Created By</span> - Who created the sale (fallback if no assigned staff)</li>
+                    <li>• CSV shows assigned staff, overriding created by when available</li>
                   </ul>
                 </p>
               </div>

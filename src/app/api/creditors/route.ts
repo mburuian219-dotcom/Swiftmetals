@@ -25,13 +25,11 @@ export async function GET() {
           },
         },
         payments: {
-          include: {
-            creditorPaymentDetails: true,
-          },
           orderBy: {
             paymentDate: "desc",
           },
         },
+        // Fetch creditorPaymentDetails directly from creditor
         creditorPaymentDetails: {
           orderBy: {
             createdAt: "desc",
