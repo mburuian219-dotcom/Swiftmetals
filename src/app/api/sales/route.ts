@@ -6,16 +6,15 @@ import prisma from "@/lib/prisma";
 
 async function getProductCostAtDate(productId: number, saleDate: Date): Promise<number> {
   try {
-    // Try to get the cost that was effective at the given date
     const costHistory = await prisma.productCostHistory.findFirst({
       where: {
         productId: productId,
         effectiveDate: {
-          lte: saleDate, // Cost effective on or before the sale date
+          lte: saleDate,
         },
       },
       orderBy: {
-        effectiveDate: 'desc', // Get the most recent cost before the sale
+        effectiveDate: 'desc',
       },
       select: { costPrice: true },
     });
@@ -24,7 +23,6 @@ async function getProductCostAtDate(productId: number, saleDate: Date): Promise<
       return costHistory.costPrice;
     }
 
-    // Fallback to current production cost if no history exists
     const product = await prisma.product.findUnique({
       where: { id: productId },
       select: { productionCost: true },
@@ -45,7 +43,6 @@ async function recordProductCostHistory(
   notes?: string
 ) {
   try {
-    // Check if we already have a record for today
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
@@ -59,7 +56,6 @@ async function recordProductCostHistory(
       },
     });
 
-    // Only create a new record if the cost has changed
     if (!existing || Math.abs(existing.costPrice - costPrice) > 0.001) {
       return await prisma.productCostHistory.create({
         data: {
@@ -143,23 +139,23 @@ function isFirebaseUid(str: string): boolean {
 
 async function findStaffByEmailCaseInsensitive(email: string): Promise<StaffRecord | null> {
   if (!email || !isValidEmail(email)) return null;
-  
+
   const normalizedEmail = normalizeEmail(email);
-  
+
   let staff = await prisma.staff.findFirst({
-    where: { 
-      email: normalizedEmail 
+    where: {
+      email: normalizedEmail
     }
   });
 
   if (!staff) {
     const allStaff = await prisma.staff.findMany({
-      where: { 
+      where: {
         email: { not: null }
       }
     });
-    
-    staff = allStaff.find(s => 
+
+    staff = allStaff.find(s =>
       s.email && normalizeEmail(s.email) === normalizedEmail
     ) || null;
   }
@@ -174,16 +170,16 @@ async function findOrCreateStaff(userEmail: string, userName?: string): Promise<
   }
 
   const normalizedEmail = normalizeEmail(userEmail);
-  
+
   try {
     let staff = await findStaffByEmailCaseInsensitive(normalizedEmail);
 
     if (!staff) {
-      const name = userName || 
+      const name = userName ||
         normalizedEmail.split('@')[0]
           .replace(/[._-]/g, ' ')
           .replace(/\b\w/g, (l: string) => l.toUpperCase());
-      
+
       const newStaff = await prisma.staff.create({
         data: {
           name,
@@ -207,27 +203,27 @@ async function findOrCreateStaff(userEmail: string, userName?: string): Promise<
 function getCurrentWeekRange() {
   const now = new Date();
   const dayOfWeek = now.getDay();
-  
+
   let diffToMonday = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
-  
+
   const weekStart = new Date(now);
   weekStart.setDate(now.getDate() + diffToMonday);
   weekStart.setHours(0, 0, 0, 0);
-  
+
   const weekEnd = new Date(weekStart);
   weekEnd.setDate(weekStart.getDate() + 6);
   weekEnd.setHours(23, 59, 59, 999);
-  
+
   return { weekStart, weekEnd };
 }
 
 // ================== Availability Check ==================
 
 async function checkProductAvailabilityForStaff(
-  productId: number, 
-  currentStaffId: number, 
+  productId: number,
+  currentStaffId: number,
   requestedQuantity: number,
-  weekStart: Date, 
+  weekStart: Date,
   weekEnd: Date
 ): Promise<AvailabilityCheckResult> {
   try {
@@ -235,58 +231,50 @@ async function checkProductAvailabilityForStaff(
       where: { id: productId },
       select: { name: true }
     });
-    
+
     const productName = product?.name || `Product ID ${productId}`;
-    
+
     const currentStaffAssignment = await prisma.staffInventory.findFirst({
       where: {
         staffId: currentStaffId,
         productId: productId,
-        weekStartDate: {
-          lte: weekEnd
-        },
-        weekEndDate: {
-          gte: weekStart
-        }
+        weekStartDate: { lte: weekEnd },
+        weekEndDate: { gte: weekStart }
       }
     });
-    
+
     const mainStockItem = await prisma.stock.findFirst({
       where: { productId: productId },
       orderBy: { createdAt: "desc" },
     });
-    
+
     const totalMainStock = mainStockItem ? mainStockItem.quantity : 0;
-    
+
     const allStaffAssignments = await prisma.staffInventory.findMany({
       where: {
         productId: productId,
-        weekStartDate: {
-          lte: weekEnd
-        },
-        weekEndDate: {
-          gte: weekStart
-        }
+        weekStartDate: { lte: weekEnd },
+        weekEndDate: { gte: weekStart }
       }
     });
-    
+
     let totalRemainingAssigned = 0;
     for (const assignment of allStaffAssignments) {
-      const remaining = assignment.quantityGiven - 
-                       assignment.quantitySold - 
-                       assignment.quantityReturned;
+      const remaining = assignment.quantityGiven -
+        assignment.quantitySold -
+        assignment.quantityReturned;
       totalRemainingAssigned += Math.max(0, remaining);
     }
-    
+
     const unassignedStock = Math.max(0, totalMainStock - totalRemainingAssigned);
-    
+
     if (currentStaffAssignment) {
       const staffAvailable = Math.max(0,
-        currentStaffAssignment.quantityGiven - 
-        currentStaffAssignment.quantitySold - 
+        currentStaffAssignment.quantityGiven -
+        currentStaffAssignment.quantitySold -
         currentStaffAssignment.quantityReturned
       );
-      
+
       if (staffAvailable >= requestedQuantity) {
         return {
           productId,
@@ -329,7 +317,7 @@ async function checkProductAvailabilityForStaff(
         };
       }
     }
-    
+
   } catch (error: any) {
     console.error("❌ Error checking product availability:", error);
     return {
@@ -344,7 +332,7 @@ async function checkProductAvailabilityForStaff(
 }
 
 async function validateProductsForStaffSale(
-  items: Array<{productId: number, quantity: number}>,
+  items: Array<{ productId: number, quantity: number }>,
   currentStaffId: number,
   weekStart: Date,
   weekEnd: Date
@@ -358,7 +346,7 @@ async function validateProductsForStaffSale(
     message: string;
     availableFrom?: string;
   }> = [];
-  
+
   for (const item of items) {
     const check = await checkProductAvailabilityForStaff(
       item.productId,
@@ -367,9 +355,9 @@ async function validateProductsForStaffSale(
       weekStart,
       weekEnd
     );
-    
+
     availabilityChecks.push(check);
-    
+
     if (!check.canSell) {
       insufficientItems.push({
         productId: item.productId,
@@ -381,7 +369,7 @@ async function validateProductsForStaffSale(
       });
     }
   }
-  
+
   return {
     availabilityChecks,
     insufficientItems,
@@ -393,61 +381,56 @@ async function validateProductsForStaffSale(
 // ================== Inventory Processing with Cost Tracking ==================
 
 async function processInventoryForStaffSale(
-  saleId: number, 
-  staffId: number, 
-  items: Array<{productId: number, quantity: number}>,
+  saleId: number,
+  staffId: number,
+  items: Array<{ productId: number, quantity: number }>,
   saleDate: Date
 ) {
   try {
     console.log(`🔍 Processing inventory for sale ${saleId}, staff ${staffId}`);
-    
+
     const { weekStart, weekEnd } = getCurrentWeekRange();
-    
+
     const staffTrackingResults: StaffDeductionResult[] = [];
     const mainStockResults: MainStockDeductionResult[] = [];
     let totalCostAtSale = 0;
-    
+
     for (const item of items) {
       const product = await prisma.product.findUnique({
         where: { id: item.productId },
         select: { name: true, productionCost: true }
       });
-      
+
       const productName = product?.name || `Product ${item.productId}`;
-      
-      // Get cost at the time of sale
+
       const costAtSale = await getProductCostAtDate(item.productId, saleDate);
       const itemTotalCost = costAtSale * item.quantity;
       totalCostAtSale += itemTotalCost;
-      
+
       console.log(`🛍️ Processing: ${productName}, Quantity: ${item.quantity}, Cost at sale: ${costAtSale}`);
-      
+
       const staffAssignment = await prisma.staffInventory.findFirst({
         where: {
           staffId: staffId,
           productId: item.productId,
-          weekStartDate: {
-            lte: weekEnd
-          },
-          weekEndDate: {
-            gte: weekStart
-          }
+          weekStartDate: { lte: weekEnd },
+          weekEndDate: { gte: weekStart }
         }
       });
-      
+
       const mainStockItem = await prisma.stock.findFirst({
         where: { productId: item.productId },
         orderBy: { createdAt: "desc" },
       });
-      
+
       if (!mainStockItem) {
         throw new Error(`${productName} not found in main stock`);
       }
-      
+
       if (mainStockItem.quantity < item.quantity) {
         throw new Error(`Not enough stock for ${productName}. Available: ${mainStockItem.quantity}, Requested: ${item.quantity}`);
       }
-      
+
       let staffTrackingResult: StaffDeductionResult = {
         productId: item.productId,
         productName,
@@ -458,14 +441,14 @@ async function processInventoryForStaffSale(
         costAtSale: costAtSale,
         totalCost: itemTotalCost
       };
-      
+
       if (staffAssignment) {
         const staffAvailable = Math.max(0,
-          staffAssignment.quantityGiven - 
-          staffAssignment.quantitySold - 
+          staffAssignment.quantityGiven -
+          staffAssignment.quantitySold -
           staffAssignment.quantityReturned
         );
-        
+
         if (staffAvailable >= item.quantity) {
           await prisma.staffInventory.update({
             where: { id: staffAssignment.id },
@@ -474,7 +457,7 @@ async function processInventoryForStaffSale(
               updatedAt: new Date()
             }
           });
-          
+
           staffTrackingResult = {
             productId: item.productId,
             productName,
@@ -495,32 +478,28 @@ async function processInventoryForStaffSale(
         const allAssignments = await prisma.staffInventory.findMany({
           where: {
             productId: item.productId,
-            weekStartDate: {
-              lte: weekEnd
-            },
-            weekEndDate: {
-              gte: weekStart
-            }
+            weekStartDate: { lte: weekEnd },
+            weekEndDate: { gte: weekStart }
           }
         });
-        
+
         let totalRemainingAssigned = 0;
         for (const assignment of allAssignments) {
-          const remaining = assignment.quantityGiven - 
-                           assignment.quantitySold - 
-                           assignment.quantityReturned;
+          const remaining = assignment.quantityGiven -
+            assignment.quantitySold -
+            assignment.quantityReturned;
           totalRemainingAssigned += Math.max(0, remaining);
         }
-        
+
         const unassignedStock = Math.max(0, mainStockItem.quantity - totalRemainingAssigned);
-        
+
         if (unassignedStock < item.quantity) {
           throw new Error(
             `Cannot sell ${item.quantity} ${productName}. ` +
             `Only ${unassignedStock} available in unassigned stock.`
           );
         }
-        
+
         staffTrackingResult = {
           productId: item.productId,
           productName,
@@ -532,19 +511,19 @@ async function processInventoryForStaffSale(
           totalCost: itemTotalCost
         };
       }
-      
+
       await prisma.stock.update({
         where: { id: mainStockItem.id },
-        data: { 
+        data: {
           quantity: mainStockItem.quantity - item.quantity,
           updatedAt: new Date()
         },
       });
-      
+
       console.log(`📉 Main stock updated: ${productName} -${item.quantity}`);
-      
+
       staffTrackingResults.push(staffTrackingResult);
-      
+
       mainStockResults.push({
         productId: item.productId,
         productName,
@@ -556,8 +535,7 @@ async function processInventoryForStaffSale(
         costAtSale: costAtSale,
         totalCost: itemTotalCost
       });
-      
-      // Update saleitem with cost data
+
       const saleItemRecord = await prisma.saleitem.findFirst({
         where: {
           saleId: saleId,
@@ -565,11 +543,11 @@ async function processInventoryForStaffSale(
         },
         orderBy: { id: 'desc' }
       });
-      
+
       if (saleItemRecord) {
         await prisma.saleitem.update({
           where: { id: saleItemRecord.id },
-          data: { 
+          data: {
             staffInventoryId: staffTrackingResult.staffInventoryId,
             costAtSale: costAtSale,
             totalCost: itemTotalCost,
@@ -586,17 +564,17 @@ async function processInventoryForStaffSale(
         console.log(`🔗 Updated sale item with cost data: cost=${costAtSale}, totalCost=${itemTotalCost}`);
       }
     }
-    
+
     return {
       success: true,
       staffTracking: { results: staffTrackingResults },
       mainStockDeductions: { results: mainStockResults },
-      summary: { 
+      summary: {
         totalItemsRequested: items.reduce((sum, item) => sum + item.quantity, 0),
         totalCostAtSale: totalCostAtSale
       }
     };
-    
+
   } catch (error: any) {
     console.error("❌ Error in inventory processing:", error);
     return { success: false, error: error.message };
@@ -604,51 +582,50 @@ async function processInventoryForStaffSale(
 }
 
 async function processSaleWithoutStaff(
-  items: Array<{productId: number, quantity: number}>,
+  items: Array<{ productId: number, quantity: number }>,
   saleDate: Date
 ) {
   try {
     console.log("📦 Processing sale without staff...");
-    
+
     const results: MainStockDeductionResult[] = [];
     let totalCostAtSale = 0;
-    
+
     for (const item of items) {
       const product = await prisma.product.findUnique({
         where: { id: item.productId },
         select: { name: true, productionCost: true }
       });
-      
+
       const productName = product?.name || `Product ${item.productId}`;
-      
-      // Get cost at the time of sale
+
       const costAtSale = await getProductCostAtDate(item.productId, saleDate);
       const itemTotalCost = costAtSale * item.quantity;
       totalCostAtSale += itemTotalCost;
-      
+
       const mainStockItem = await prisma.stock.findFirst({
         where: { productId: item.productId },
         orderBy: { createdAt: "desc" },
       });
-      
+
       if (!mainStockItem) {
         throw new Error(`${productName} not found in main stock`);
       }
-      
+
       if (mainStockItem.quantity < item.quantity) {
         throw new Error(`Not enough stock for ${productName}. Available: ${mainStockItem.quantity}, Requested: ${item.quantity}`);
       }
-      
+
       await prisma.stock.update({
         where: { id: mainStockItem.id },
-        data: { 
+        data: {
           quantity: mainStockItem.quantity - item.quantity,
           updatedAt: new Date()
         },
       });
-      
+
       console.log(`📉 Main stock updated: ${productName} -${item.quantity}`);
-      
+
       results.push({
         productId: item.productId,
         productName,
@@ -660,20 +637,19 @@ async function processSaleWithoutStaff(
         costAtSale: costAtSale,
         totalCost: itemTotalCost
       });
-      
-      // Update saleitem with cost data
+
       const saleItemRecord = await prisma.saleitem.findFirst({
         where: {
-          saleId: 0, // This will be updated after sale creation
+          saleId: 0,
           productId: item.productId
         },
         orderBy: { id: 'desc' }
       });
-      
+
       if (saleItemRecord) {
         await prisma.saleitem.update({
           where: { id: saleItemRecord.id },
-          data: { 
+          data: {
             costAtSale: costAtSale,
             totalCost: itemTotalCost,
             profitMargin: saleItemRecord.price > 0 ? ((saleItemRecord.price - costAtSale) / saleItemRecord.price) * 100 : 0,
@@ -688,79 +664,167 @@ async function processSaleWithoutStaff(
         });
       }
     }
-    
+
     return {
       success: true,
       results,
-      summary: { 
+      summary: {
         totalItemsDeducted: items.reduce((sum, item) => sum + item.quantity, 0),
         totalCostAtSale: totalCostAtSale
       }
     };
-    
+
   } catch (error: any) {
     console.error("❌ Error processing sale:", error);
     return { success: false, error: error.message };
   }
 }
 
+// ================== RESTORE INVENTORY (ASSIGNMENT-AWARE, FINAL) ==================
+//
+// Restoration rules — mirror of the two processing functions above:
+//
+//   - If saleitem.staffInventoryId is set → the item came from an assignment:
+//       • reduce that assignment's quantitySold by item.quantity (clamped at 0)
+//       • DO NOT add to general stock — the physical items belong back
+//         to the salesperson's assigned pool, and general stock was only
+//         reduced for the sold portion. Adding to general stock here
+//         would double-count the return.
+//
+//   - If saleitem.staffInventoryId is null → the item came from general stock:
+//       • add item.quantity back to the general stock row.
+//
+// Caller MUST wrap in prisma.$transaction if other operations follow.
+//
 async function restoreInventoryForSale(sale: any) {
-  try {
-    console.log(`🔄 Restoring inventory for sale ${sale.id}...`);
-    
-    const { weekStart, weekEnd } = getCurrentWeekRange();
-    
-    for (const item of sale.saleitem) {
-      const stockItem = await prisma.stock.findFirst({
-        where: { productId: item.productId },
-        orderBy: { createdAt: "desc" },
-      });
-      
-      if (stockItem) {
-        await prisma.stock.update({
-          where: { id: stockItem.id },
-          data: { 
-            quantity: stockItem.quantity + item.quantity,
-            updatedAt: new Date()
-          }
-        });
-        console.log(`📈 Restored ${item.quantity} items to main stock for product ${item.productId}`);
-      }
-      
-      if (item.staffInventoryId && sale.createdById) {
-        const staffInventory = await prisma.staffInventory.findUnique({
-          where: { id: item.staffInventoryId }
-        });
-        
-        if (staffInventory && staffInventory.staffId === sale.createdById) {
-          const newQuantitySold = Math.max(0, staffInventory.quantitySold - item.quantity);
-          await prisma.staffInventory.update({
-            where: { id: item.staffInventoryId },
-            data: {
-              quantitySold: newQuantitySold,
-              updatedAt: new Date()
-            }
-          });
-          console.log(`🔄 Restored ${item.quantity} items to staff tracking ${item.staffInventoryId}`);
-        }
-      }
+  console.log(`🔄 Restoring inventory for sale ${sale.id}...`);
+
+  const results = {
+    mainStockRestored: [] as Array<{ productId: number; quantity: number }>,
+    assignmentsRestored: [] as Array<{
+      staffInventoryId: number;
+      staffId: number;
+      productId: number;
+      quantityRestored: number;
+      quantitySoldBefore: number;
+      quantitySoldAfter: number;
+    }>,
+    skipped: [] as Array<{ productId: number; reason: string }>,
+    warnings: [] as string[],
+  };
+
+  for (const item of sale.saleitem) {
+    // ---- 1) Sanity: product still exists? ----
+    const productExists = await prisma.product.findUnique({
+      where: { id: item.productId },
+      select: { id: true, name: true },
+    });
+
+    if (!productExists) {
+      console.warn(`⚠️ Skipping item for missing product ${item.productId}`);
+      results.skipped.push({ productId: item.productId, reason: "PRODUCT_MISSING" });
+      continue;
     }
-    
-    console.log("✅ Inventory restoration completed");
-  } catch (error: any) {
-    console.error("❌ Error restoring inventory:", error);
-    throw error;
+
+    const fromAssignment = !!item.staffInventoryId;
+
+    // ==========================================================
+    // BRANCH A — Item came from a salesperson's assignment
+    // ==========================================================
+    if (fromAssignment) {
+      const staffInventory = await prisma.staffInventory.findUnique({
+        where: { id: item.staffInventoryId },
+      });
+
+      if (!staffInventory) {
+        // Assignment was deleted externally. Cannot reconstruct it.
+        // We do NOT add to general stock either, because the sale was
+        // originally removed from the assignment pool — adding to
+        // general stock would corrupt inventory.
+        console.warn(
+          `⚠️ staffInventory ${item.staffInventoryId} not found — cannot restore assignment for product ${item.productId}`
+        );
+        results.skipped.push({ productId: item.productId, reason: "ASSIGNMENT_MISSING" });
+        results.warnings.push(
+          `Assignment ${item.staffInventoryId} missing for product ${productExists.name}`
+        );
+        continue;
+      }
+
+      const quantitySoldBefore = staffInventory.quantitySold;
+      const quantitySoldAfter = Math.max(0, quantitySoldBefore - item.quantity);
+
+      if (quantitySoldBefore < item.quantity) {
+        results.warnings.push(
+          `Possible double-restore on assignment ${staffInventory.id}: ` +
+          `quantitySold=${quantitySoldBefore}, requested reduction=${item.quantity}`
+        );
+      }
+
+      await prisma.staffInventory.update({
+        where: { id: staffInventory.id },
+        data: {
+          quantitySold: quantitySoldAfter,
+          updatedAt: new Date(),
+        },
+      });
+
+      console.log(
+        `🔄 Assignment ${staffInventory.id} (staff ${staffInventory.staffId}, product ${staffInventory.productId}): ` +
+        `quantitySold ${quantitySoldBefore} → ${quantitySoldAfter}`
+      );
+
+      results.assignmentsRestored.push({
+        staffInventoryId: staffInventory.id,
+        staffId: staffInventory.staffId,
+        productId: staffInventory.productId,
+        quantityRestored: item.quantity,
+        quantitySoldBefore,
+        quantitySoldAfter,
+      });
+
+      // IMPORTANT: skip general-stock branch for this item.
+      continue;
+    }
+
+    // ==========================================================
+    // BRANCH B — Item came from general (unassigned) stock
+    // ==========================================================
+    const stockItem = await prisma.stock.findFirst({
+      where: { productId: item.productId },
+      orderBy: { createdAt: "desc" },
+    });
+
+    if (!stockItem) {
+      console.warn(`⚠️ No stock row to restore into for product ${item.productId}`);
+      results.skipped.push({ productId: item.productId, reason: "STOCK_ROW_MISSING" });
+      continue;
+    }
+
+    await prisma.stock.update({
+      where: { id: stockItem.id },
+      data: {
+        quantity: stockItem.quantity + item.quantity,
+        updatedAt: new Date(),
+      },
+    });
+
+    console.log(`📈 Restored ${item.quantity} to general stock for product ${item.productId}`);
+    results.mainStockRestored.push({ productId: item.productId, quantity: item.quantity });
   }
+
+  console.log("✅ Inventory restoration completed", results);
+  return results;
 }
 
 function processSale(sale: any) {
   if (!sale) return null;
-  
+
   const totalPaid = sale.payment
     ?.filter((p: any) => p.status === "CLEARED" || p.status === "COMPLETED")
     ?.reduce((sum: number, p: any) => sum + p.amount, 0) || 0;
 
-  const pendingPayments = sale.payment?.filter((p: any) => 
+  const pendingPayments = sale.payment?.filter((p: any) =>
     p.status === "PENDING" || p.status === "BOUNCED"
   ) || [];
   const remainingAmount = sale.amount - totalPaid;
@@ -769,7 +833,6 @@ function processSale(sale: any) {
   if (remainingAmount <= 0 && pendingPayments.length === 0) status = "PAID";
   else if (totalPaid > 0 || pendingPayments.length > 0) status = "PARTIAL";
 
-  // Calculate total cost from sale items
   const totalCost = sale.saleitem?.reduce((sum: number, item: any) => {
     return sum + (item.totalCost || 0);
   }, 0) || 0;
@@ -778,6 +841,7 @@ function processSale(sale: any) {
     ...sale,
     saleitems: sale.saleitem || [],
     payments: sale.payment || [],
+    tradeins: sale.tradeins || [],
     totalPaid,
     remainingAmount,
     totalCost: totalCost,
@@ -788,6 +852,132 @@ function processSale(sale: any) {
     updatedBy: sale.updatedBy || "SYSTEM",
     staff: sale.assignedStaff || sale.createdByStaff || null
   };
+}
+
+// ================== TRADE-IN HELPERS ==================
+
+function extractTradeInFromPayment(payment: any): { items: any[] } | null {
+  if (!payment || payment.method !== "TRADE_IN") return null;
+  const items = Array.isArray(payment.tradeInItems) ? payment.tradeInItems : [];
+  if (items.length === 0) return null;
+  return { items };
+}
+
+async function persistTradeIn(params: {
+  saleId: number;
+  customerId: number;
+  saleAmount: number;
+  tradeInPayment: any;
+  recordedBy: string;
+}) {
+  const { saleId, customerId, saleAmount, tradeInPayment, recordedBy } = params;
+
+  const items: any[] = Array.isArray(tradeInPayment.tradeInItems) ? tradeInPayment.tradeInItems : [];
+  if (items.length === 0) {
+    return null;
+  }
+
+  const tradeInTotal = items.reduce((sum: number, it: any) => {
+    const qty = Number(it.quantity) || 0;
+    const unit = Number(it.unitValue) || 0;
+    return sum + (qty * unit);
+  }, 0);
+
+  const settledAmount = Math.min(tradeInTotal, Number(saleAmount) || 0);
+  const difference = (Number(saleAmount) || 0) - tradeInTotal;
+  const balanceAmount = Math.abs(difference);
+  const balanceDirection =
+    balanceAmount < 0.01
+      ? "EVEN"
+      : tradeInTotal > (Number(saleAmount) || 0)
+        ? "WE_OWE"
+        : "CUSTOMER_OWES";
+
+  const tradeInPaymentRow = await prisma.payment.create({
+    data: {
+      saleId,
+      amount: settledAmount,
+      method: "TRADE_IN",
+      status: "COMPLETED",
+      paymentType: "sale",
+      paidAt: new Date(),
+      recordedBy,
+      note: `Trade-In: ${items.length} item(s), total KES ${tradeInTotal.toFixed(2)}, settled KES ${settledAmount.toFixed(2)}`,
+    },
+  });
+
+  const createdTradeIns: any[] = [];
+  for (const it of items) {
+    const qty = Number(it.quantity) || 1;
+    const unit = Number(it.unitValue) || 0;
+    const total = qty * unit;
+
+    const tradeinRow = await prisma.tradein.create({
+      data: {
+        saleId,
+        paymentId: tradeInPaymentRow.id,
+        customerId,
+        itemName: it.itemName || "Trade-In Item",
+        description: it.description || null,
+        category: it.category || null,
+        quantity: qty,
+        estimatedValue: unit,
+        agreedValue: unit,
+        condition: it.condition || "GOOD",
+        status: "COMPLETED",
+        notes: `Total=${total.toFixed(2)} | Balance=${balanceDirection}|${balanceAmount.toFixed(2)}`,
+      },
+    });
+    createdTradeIns.push(tradeinRow);
+  }
+
+  console.log(
+    `🎁 Trade-In recorded for sale ${saleId}: items=${items.length}, ` +
+    `total=${tradeInTotal}, settled=${settledAmount}, balance=${balanceDirection} ${balanceAmount}`
+  );
+
+  return {
+    paymentId: tradeInPaymentRow.id,
+    itemCount: items.length,
+    tradeInTotal,
+    settledAmount,
+    balanceAmount,
+    balanceDirection,
+    tradeInIds: createdTradeIns.map(t => t.id),
+  };
+}
+
+async function deleteTradeInForSale(saleId: number) {
+  try {
+    const tradeInPayments = await prisma.payment.findMany({
+      where: { saleId, method: "TRADE_IN" },
+      select: { id: true },
+    });
+
+    const deletedTradeIns = await prisma.tradein.deleteMany({
+      where: { saleId },
+    });
+
+    if (tradeInPayments.length > 0) {
+      await prisma.payment.deleteMany({
+        where: { id: { in: tradeInPayments.map(p => p.id) } },
+      });
+    }
+
+    if (deletedTradeIns.count > 0 || tradeInPayments.length > 0) {
+      console.log(
+        `🧹 Deleted ${deletedTradeIns.count} tradein row(s) and ${tradeInPayments.length} TRADE_IN payment(s) for sale ${saleId}`
+      );
+    }
+
+    return {
+      deleted: deletedTradeIns.count,
+      deletedPayments: tradeInPayments.length,
+    };
+  } catch (error: any) {
+    console.error(`❌ Error deleting trade-in data for sale ${saleId}:`, error);
+    throw error;
+  }
 }
 
 // ================== GET ALL SALES ==================
@@ -802,9 +992,9 @@ export async function GET(req: NextRequest) {
     const endDate = searchParams.get('endDate');
     const status = searchParams.get('status');
     const assignedStaffId = searchParams.get('assignedStaffId');
-    
+
     const where: any = {};
-    
+
     if (staffId) where.createdById = parseInt(staffId);
     if (assignedStaffId) where.assignedStaffId = parseInt(assignedStaffId);
     if (createdBy && isValidEmail(createdBy)) where.createdBy = { contains: normalizeEmail(createdBy) };
@@ -820,13 +1010,14 @@ export async function GET(req: NextRequest) {
       where,
       include: {
         customer: true,
-        saleitem: { 
-          include: { 
+        saleitem: {
+          include: {
             product: true,
             staffInventory: { include: { staff: true } }
-          } 
+          }
         },
         payment: true,
+        tradeins: true,
         createdByStaff: true,
         assignedStaff: true,
         paymentschedule: true,
@@ -839,7 +1030,7 @@ export async function GET(req: NextRequest) {
     });
 
     const processedSales = sales.map(sale => processSale(sale));
-    
+
     return NextResponse.json(processedSales);
   } catch (err: any) {
     console.error("❌ Fetch sales error:", err);
@@ -852,21 +1043,20 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   try {
     const data = await req.json();
-    
+
     console.log("📨 Creating sale...");
     console.log("📊 Sale items:", data.saleItems);
-    
-    // Extract user info
+
     let userId = "";
     let userEmail = "";
     let userName = "";
-    
+
     if (data.authInfo) {
       userId = data.authInfo.userId || data.authInfo.uid || "";
       userEmail = data.authInfo.email || "";
       userName = data.authInfo.name || data.authInfo.displayName || "";
     }
-    
+
     if (!userEmail) {
       const possibleEmailFields = ['email', 'userEmail', 'createdBy', 'userName', 'user'];
       for (const field of possibleEmailFields) {
@@ -876,7 +1066,7 @@ export async function POST(req: NextRequest) {
         }
       }
     }
-    
+
     if (!userId) {
       const possibleUidFields = ['userId', 'uid', 'userEmail', 'createdBy'];
       for (const field of possibleUidFields) {
@@ -886,31 +1076,30 @@ export async function POST(req: NextRequest) {
         }
       }
     }
-    
+
     if (!userName && userEmail) {
       userName = userEmail.split('@')[0]
         .replace(/[._-]/g, ' ')
         .replace(/\b\w/g, (l: string) => l.toUpperCase());
     }
-    
+
     if (!userEmail) {
       userEmail = userId ? `${userId}@firebase.uid` : "unknown@example.com";
     }
-    
+
     const normalizedUserEmail = normalizeEmail(userEmail);
     const saleDate = data.date ? new Date(data.date) : new Date();
-    
+
     console.log("👤 Extracted user info:", {
       userEmail: normalizedUserEmail,
       userName: userName,
       assignedStaffId: data.assignedStaffId,
       createdById: data.createdById
     });
-    
-    // Find or create staff for the creator
+
     let staffRecord: StaffRecord | null = null;
     let staffId: number | null = data.createdById || null;
-    
+
     if (!staffId && isValidEmail(normalizedUserEmail)) {
       staffRecord = await findOrCreateStaff(normalizedUserEmail, userName);
       if (staffRecord) {
@@ -919,7 +1108,6 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // Validate required fields
     const customerId = Number(data.customerId);
     const amount = Number(data.amount);
     const assignedStaffId = data.assignedStaffId ? Number(data.assignedStaffId) : null;
@@ -936,7 +1124,6 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "No sale items provided", details: "At least one sale item is required" }, { status: 400 });
     }
 
-    // Validate sale items
     for (const [index, item] of data.saleItems.entries()) {
       if (!item.productId || isNaN(item.productId)) {
         return NextResponse.json({ error: `Invalid product ID at item ${index + 1}` }, { status: 400 });
@@ -949,9 +1136,29 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // Check availability if staff exists
+    const allIncomingPayments: any[] = Array.isArray(data.payments) ? data.payments : [];
+    const tradeInPaymentIncoming = allIncomingPayments.find(p => p.method === "TRADE_IN");
+    const tradeInExtract = tradeInPaymentIncoming ? extractTradeInFromPayment(tradeInPaymentIncoming) : null;
+
+    if (tradeInExtract) {
+      for (const [idx, it] of tradeInExtract.items.entries()) {
+        if (!it.itemName || String(it.itemName).trim() === "") {
+          return NextResponse.json({ error: `Trade-in item ${idx + 1} is missing a name` }, { status: 400 });
+        }
+        const qty = Number(it.quantity);
+        const unit = Number(it.unitValue);
+        if (!qty || qty <= 0) {
+          return NextResponse.json({ error: `Trade-in item ${idx + 1} has invalid quantity` }, { status: 400 });
+        }
+        if (!unit || unit <= 0) {
+          return NextResponse.json({ error: `Trade-in item ${idx + 1} has invalid unit value` }, { status: 400 });
+        }
+      }
+      console.log(`🎁 Trade-in detected: ${tradeInExtract.items.length} item(s)`);
+    }
+
     const { weekStart, weekEnd } = getCurrentWeekRange();
-    
+
     if (staffId) {
       const availabilityValidation = await validateProductsForStaffSale(
         data.saleItems.map((item: any) => ({ productId: item.productId, quantity: item.quantity })),
@@ -959,13 +1166,13 @@ export async function POST(req: NextRequest) {
         weekStart,
         weekEnd
       );
-      
+
       if (availabilityValidation.hasInsufficientItems) {
-        const errorMessages = availabilityValidation.insufficientItems.map(item => 
+        const errorMessages = availabilityValidation.insufficientItems.map(item =>
           `• ${item.productName}: ${item.message}`
         );
-        
-        return NextResponse.json({ 
+
+        return NextResponse.json({
           error: "INSUFFICIENT AVAILABILITY",
           details: "You don't have enough availability to sell these items",
           insufficientItems: availabilityValidation.insufficientItems,
@@ -974,7 +1181,6 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // Check main stock availability and get costs
     const saleItemsWithCosts = [];
     let totalCostAtSale = 0;
 
@@ -983,13 +1189,13 @@ export async function POST(req: NextRequest) {
         where: { productId: item.productId },
         orderBy: { createdAt: "desc" },
       });
-      
+
       if (!stockItem) {
         const product = await prisma.product.findUnique({
           where: { id: item.productId },
           select: { name: true }
         });
-        
+
         return NextResponse.json({
           error: "PRODUCT NOT IN STOCK",
           details: "Product not found in main stock",
@@ -998,13 +1204,13 @@ export async function POST(req: NextRequest) {
           message: `${product?.name || `Product ID ${item.productId}`} is not available in stock`
         }, { status: 400 });
       }
-      
+
       if (stockItem.quantity < item.quantity) {
         const product = await prisma.product.findUnique({
           where: { id: item.productId },
           select: { name: true }
         });
-        
+
         return NextResponse.json({
           error: "INSUFFICIENT STOCK",
           details: "Not enough stock available",
@@ -1016,7 +1222,6 @@ export async function POST(req: NextRequest) {
         }, { status: 400 });
       }
 
-      // Get cost at sale date
       const costAtSale = await getProductCostAtDate(item.productId, saleDate);
       const itemTotalCost = costAtSale * item.quantity;
       totalCostAtSale += itemTotalCost;
@@ -1035,21 +1240,21 @@ export async function POST(req: NextRequest) {
         }
       });
     }
-    
+
     console.log("✅ All items available in main stock");
     console.log(`💰 Total cost at sale: ${totalCostAtSale}`);
 
-    // Handle payments
-    const payments = data.payments?.map((p: any) => ({
+    const normalPayments = allIncomingPayments.filter(p => p.method !== "TRADE_IN");
+
+    const payments = normalPayments.map((p: any) => ({
       amount: Number(p.amount),
       method: p.method,
       referenceId: p.referenceId || null,
       status: p.method === "CHECK" && !p.checkDate ? "PENDING" : "CLEARED",
       checkDate: p.checkDate ? new Date(p.checkDate) : null,
       paidAt: p.paidAt ? new Date(p.paidAt) : new Date(),
-    })) || [];
+    }));
 
-    // Create sale with staff assignments and cost data
     const newSale = await prisma.sale.create({
       data: {
         customerId,
@@ -1090,20 +1295,37 @@ export async function POST(req: NextRequest) {
       createdBy: newSale.createdBy,
       createdById: newSale.createdById,
       assignedStaffId: newSale.assignedStaffId,
-      assignedStaffName: newSale.assignedStaff?.name,
       customer: newSale.customer?.name,
       amount: newSale.amount,
-      totalCostAtSale: totalCostAtSale,
-      grossProfit: newSale.amount - totalCostAtSale
     });
 
-    // Process inventory
+    let tradeInResult = null;
+    if (tradeInExtract && tradeInPaymentIncoming) {
+      try {
+        tradeInResult = await persistTradeIn({
+          saleId: newSale.id,
+          customerId: newSale.customerId,
+          saleAmount: Number(newSale.amount),
+          tradeInPayment: tradeInPaymentIncoming,
+          recordedBy: normalizedUserEmail,
+        });
+      } catch (tradeInErr: any) {
+        console.error("❌ Trade-in persistence failed:", tradeInErr);
+        await prisma.sale.delete({ where: { id: newSale.id } });
+        return NextResponse.json({
+          error: "FAILED TO RECORD TRADE-IN",
+          details: tradeInErr.message,
+          message: "Sale was rolled back because trade-in could not be recorded."
+        }, { status: 500 });
+      }
+    }
+
     let inventoryResult = null;
-    
+
     if (staffId) {
       inventoryResult = await processInventoryForStaffSale(
-        newSale.id, 
-        staffId, 
+        newSale.id,
+        staffId,
         data.saleItems.map((item: any) => ({ productId: item.productId, quantity: item.quantity })),
         saleDate
       );
@@ -1113,29 +1335,29 @@ export async function POST(req: NextRequest) {
         saleDate
       );
     }
-    
+
     if (!inventoryResult.success) {
       console.error("❌ Inventory processing failed:", inventoryResult.error);
       await prisma.sale.delete({ where: { id: newSale.id } });
-      return NextResponse.json({ 
+      return NextResponse.json({
         error: "FAILED TO PROCESS INVENTORY",
         details: inventoryResult.error,
         message: "Sale created but inventory processing failed. Sale has been rolled back."
       }, { status: 500 });
     }
 
-    // Fetch complete sale
     const completeSale = await prisma.sale.findUnique({
       where: { id: newSale.id },
       include: {
         customer: true,
-        saleitem: { 
-          include: { 
+        saleitem: {
+          include: {
             product: true,
             staffInventory: { include: { staff: true } }
-          } 
+          }
         },
         payment: true,
+        tradeins: true,
         createdByStaff: true,
         assignedStaff: true,
         paymentschedule: true,
@@ -1146,7 +1368,6 @@ export async function POST(req: NextRequest) {
       },
     });
 
-    // Get staff names
     let assignedStaffName = null;
     if (completeSale?.assignedStaff) {
       assignedStaffName = completeSale.assignedStaff.name;
@@ -1166,15 +1387,16 @@ export async function POST(req: NextRequest) {
         assignedStaffId,
         staffName: staffRecord?.name || null,
         assignedStaffName: assignedStaffName
-      }
+      },
+      tradeIn: tradeInResult,
     }, { status: 201 });
-    
+
   } catch (err: any) {
     console.error("❌ Sale creation error:", err);
-    
+
     let errorMessage = "Failed to create sale";
     let statusCode = 500;
-    
+
     if (err.code === 'P2002') {
       errorMessage = "Database constraint violation";
       statusCode = 400;
@@ -1182,8 +1404,8 @@ export async function POST(req: NextRequest) {
       errorMessage = "Foreign key constraint failed";
       statusCode = 400;
     }
-    
-    return NextResponse.json({ 
+
+    return NextResponse.json({
       error: errorMessage,
       details: err.message,
       type: err.code || 'UNKNOWN_ERROR'
@@ -1196,7 +1418,7 @@ export async function POST(req: NextRequest) {
 export async function GET_SINGLE(req: NextRequest, { params }: { params: { id: string } }) {
   try {
     const id = parseInt(params.id);
-    
+
     if (isNaN(id)) {
       return NextResponse.json({ error: "Invalid sale ID" }, { status: 400 });
     }
@@ -1205,13 +1427,14 @@ export async function GET_SINGLE(req: NextRequest, { params }: { params: { id: s
       where: { id },
       include: {
         customer: true,
-        saleitem: { 
-          include: { 
+        saleitem: {
+          include: {
             product: true,
             staffInventory: { include: { staff: true } }
-          } 
+          }
         },
         payment: true,
+        tradeins: true,
         createdByStaff: true,
         assignedStaff: true,
         paymentschedule: true,
@@ -1239,22 +1462,21 @@ export async function PUT(req: NextRequest) {
   try {
     const data = await req.json();
     const id = Number(data.id);
-    
+
     if (!id) {
       return NextResponse.json({ error: "Sale ID is required" }, { status: 400 });
     }
 
-    // Get user info
     let userEmail = "";
     let userName = "";
     let userId = "";
-    
+
     if (data.authInfo) {
       userId = data.authInfo.userId || data.authInfo.uid || "";
       userEmail = data.authInfo.email || "";
       userName = data.authInfo.name || data.authInfo.displayName || "";
     }
-    
+
     if (!userEmail) {
       const possibleEmailFields = ['email', 'userEmail', 'createdBy', 'userName', 'user'];
       for (const field of possibleEmailFields) {
@@ -1264,26 +1486,26 @@ export async function PUT(req: NextRequest) {
         }
       }
     }
-    
+
     if (!userName && userEmail) {
       userName = userEmail.split('@')[0]
         .replace(/[._-]/g, ' ')
         .replace(/\b\w/g, (l: string) => l.toUpperCase());
     }
-    
+
     if (!userEmail) {
       userEmail = "unknown@example.com";
     }
-    
+
     const normalizedUserEmail = normalizeEmail(userEmail);
     const saleDate = data.date ? new Date(data.date) : new Date();
-    
-    // Get existing sale
+
     const existingSale = await prisma.sale.findUnique({
       where: { id },
-      include: { 
-        saleitem: { include: { staffInventory: true } }, 
-        payment: true, 
+      include: {
+        saleitem: { include: { staffInventory: true } },
+        payment: true,
+        tradeins: true,
         createdByStaff: true,
         assignedStaff: true
       },
@@ -1293,10 +1515,9 @@ export async function PUT(req: NextRequest) {
       return NextResponse.json({ error: "Sale not found" }, { status: 404 });
     }
 
-    // Link to staff if not already linked
     let staffId = existingSale.createdById;
     let staffRecord: StaffRecord | null = existingSale.createdByStaff as StaffRecord | null;
-    
+
     if (!staffId && isValidEmail(normalizedUserEmail)) {
       staffRecord = await findOrCreateStaff(normalizedUserEmail, userName);
       if (staffRecord) {
@@ -1305,21 +1526,42 @@ export async function PUT(req: NextRequest) {
       }
     }
 
-    // Restore inventory from old sale items first
+    const allIncomingPayments: any[] = Array.isArray(data.newPayments) ? data.newPayments : [];
+    const tradeInPaymentIncoming = allIncomingPayments.find(p => p.method === "TRADE_IN");
+    const tradeInExtract = tradeInPaymentIncoming ? extractTradeInFromPayment(tradeInPaymentIncoming) : null;
+
+    if (tradeInExtract) {
+      for (const [idx, it] of tradeInExtract.items.entries()) {
+        if (!it.itemName || String(it.itemName).trim() === "") {
+          return NextResponse.json({ error: `Trade-in item ${idx + 1} is missing a name` }, { status: 400 });
+        }
+        const qty = Number(it.quantity);
+        const unit = Number(it.unitValue);
+        if (!qty || qty <= 0) {
+          return NextResponse.json({ error: `Trade-in item ${idx + 1} has invalid quantity` }, { status: 400 });
+        }
+        if (!unit || unit <= 0) {
+          return NextResponse.json({ error: `Trade-in item ${idx + 1} has invalid unit value` }, { status: 400 });
+        }
+      }
+      console.log(`🎁 Trade-in detected in update: ${tradeInExtract.items.length} item(s)`);
+    }
+
     console.log(`🔄 Restoring inventory for sale update ${id}...`);
     await restoreInventoryForSale(existingSale);
+
+    await deleteTradeInForSale(id);
 
     const newItems = data.saleItems || existingSale.saleitem;
     const recalculatedAmount = newItems.reduce((sum: number, item: any) => sum + item.price * item.quantity, 0);
     let totalCostAtSale = 0;
 
-    // Recalculate costs for items
     const updatedItems = [];
     for (const item of newItems) {
       const costAtSale = await getProductCostAtDate(item.productId, saleDate);
       const itemTotalCost = costAtSale * item.quantity;
       totalCostAtSale += itemTotalCost;
-      
+
       updatedItems.push({
         ...item,
         costAtSale,
@@ -1335,10 +1577,9 @@ export async function PUT(req: NextRequest) {
       });
     }
 
-    // Check availability for updates
     const { weekStart, weekEnd } = getCurrentWeekRange();
     const validationErrors: string[] = [];
-    
+
     if (data.saleItems && staffId) {
       for (const item of data.saleItems) {
         const availabilityCheck = await checkProductAvailabilityForStaff(
@@ -1348,14 +1589,14 @@ export async function PUT(req: NextRequest) {
           weekStart,
           weekEnd
         );
-        
+
         if (!availabilityCheck.canSell) {
           validationErrors.push(
             `Product ID ${item.productId} (${availabilityCheck.productName}): ${availabilityCheck.message}`
           );
         }
       }
-      
+
       if (validationErrors.length > 0) {
         await restoreInventoryForSale({
           ...existingSale,
@@ -1364,8 +1605,8 @@ export async function PUT(req: NextRequest) {
             quantity: -item.quantity
           }))
         });
-        
-        return NextResponse.json({ 
+
+        return NextResponse.json({
           error: "Insufficient availability for update",
           details: validationErrors,
           staffAttemptingUpdate: {
@@ -1377,7 +1618,6 @@ export async function PUT(req: NextRequest) {
       }
     }
 
-    // Prepare update data
     const updateData: any = {
       customerId: data.customerId ?? existingSale.customerId,
       amount: recalculatedAmount,
@@ -1405,11 +1645,9 @@ export async function PUT(req: NextRequest) {
       data: updateData,
     });
 
-    // Replace saleitems if provided
     if (data.saleItems) {
       await prisma.saleitem.deleteMany({ where: { saleId: id } });
-      
-      // Create sale items with cost data
+
       for (const item of updatedItems) {
         await prisma.saleitem.create({
           data: {
@@ -1425,11 +1663,11 @@ export async function PUT(req: NextRequest) {
           },
         });
       }
-      
+
       if (staffId) {
         await processInventoryForStaffSale(
-          id, 
-          staffId, 
+          id,
+          staffId,
           data.saleItems.map((item: any) => ({ productId: item.productId, quantity: item.quantity })),
           saleDate
         );
@@ -1441,17 +1679,37 @@ export async function PUT(req: NextRequest) {
       }
     }
 
+    let tradeInResult = null;
+    if (tradeInExtract && tradeInPaymentIncoming) {
+      try {
+        tradeInResult = await persistTradeIn({
+          saleId: id,
+          customerId: data.customerId ?? existingSale.customerId,
+          saleAmount: recalculatedAmount,
+          tradeInPayment: tradeInPaymentIncoming,
+          recordedBy: normalizedUserEmail,
+        });
+      } catch (tradeInErr: any) {
+        console.error("❌ Trade-in persistence failed during update:", tradeInErr);
+        return NextResponse.json({
+          error: "FAILED TO RECORD TRADE-IN",
+          details: tradeInErr.message,
+        }, { status: 500 });
+      }
+    }
+
     const updated = await prisma.sale.findUnique({
       where: { id },
       include: {
         customer: true,
-        saleitem: { 
-          include: { 
-            product: true, 
+        saleitem: {
+          include: {
+            product: true,
             staffInventory: { include: { staff: true } }
-          } 
+          }
         },
         payment: true,
+        tradeins: true,
         createdByStaff: true,
         assignedStaff: true,
         paymentschedule: true,
@@ -1466,24 +1724,25 @@ export async function PUT(req: NextRequest) {
       createdBy: updated?.createdBy,
       createdById: updated?.createdById,
       assignedStaffId: updated?.assignedStaffId,
-      staffLinked: updated?.createdByStaff?.name || 'None',
-      assignedStaffName: updated?.assignedStaff?.name || 'None',
       totalCostAtSale: totalCostAtSale,
-      grossProfit: updated?.amount - totalCostAtSale
+      tradeIn: tradeInResult
     });
 
-    return NextResponse.json(processSale(updated));
-    
+    return NextResponse.json({
+      ...processSale(updated),
+      tradeIn: tradeInResult,
+    });
+
   } catch (err: any) {
     console.error("❌ Sale update error:", err);
-    return NextResponse.json({ 
+    return NextResponse.json({
       error: "Failed to update sale",
-      details: err.message 
+      details: err.message
     }, { status: 500 });
   }
 }
 
-// ================== DELETE SALE ==================
+// ================== DELETE SALE (ASSIGNMENT-AWARE, ATOMIC) ==================
 
 export async function DELETE(req: NextRequest) {
   try {
@@ -1496,10 +1755,11 @@ export async function DELETE(req: NextRequest) {
 
     const sale = await prisma.sale.findUnique({
       where: { id },
-      include: { 
+      include: {
         saleitem: { include: { staffInventory: { include: { staff: true } } } },
+        tradeins: true,
         createdByStaff: true,
-        assignedStaff: true
+        assignedStaff: true,
       },
     });
 
@@ -1507,17 +1767,26 @@ export async function DELETE(req: NextRequest) {
       return NextResponse.json({ error: "Sale not found" }, { status: 404 });
     }
 
-    // Extract user info
+    if (sale.isDeleted) {
+      return NextResponse.json(
+        {
+          error: "SALE_ALREADY_DELETED",
+          message: `Sale ${id} was already deleted at ${sale.deletedAt?.toISOString()}. No further restore performed.`,
+        },
+        { status: 409 }
+      );
+    }
+
     let userEmail = "";
     let userId = "";
-    
+
     if (data.authInfo) {
       userId = data.authInfo.userId || data.authInfo.uid || "";
       userEmail = data.authInfo.email || "";
     }
-    
+
     if (!userEmail) {
-      const possibleEmailFields = ['email', 'userEmail', 'createdBy', 'userName'];
+      const possibleEmailFields = ["email", "userEmail", "createdBy", "userName"];
       for (const field of possibleEmailFields) {
         if (data[field] && isValidEmail(data[field])) {
           userEmail = data[field];
@@ -1525,36 +1794,75 @@ export async function DELETE(req: NextRequest) {
         }
       }
     }
-    
-    if (!userEmail) {
-      userEmail = "unknown@example.com";
-    }
-    
-    const normalizedUserEmail = normalizeEmail(userEmail);
-    
-    console.log(`🗑️ Sale ${id} deleted by: ${normalizedUserEmail}`);
-    console.log(`   Sale was linked to staff (creator): ${sale.createdByStaff?.name || 'None'} (ID: ${sale.createdById || 'None'})`);
-    console.log(`   Sale assigned to staff (follow-up): ${sale.assignedStaff?.name || 'None'} (ID: ${sale.assignedStaffId || 'None'})`);
 
-    await restoreInventoryForSale(sale);
-    await prisma.sale.delete({ where: { id } });
-    
-    return NextResponse.json({ 
+    if (!userEmail) userEmail = "unknown@example.com";
+
+    const normalizedUserEmail = normalizeEmail(userEmail);
+
+    console.log(`🗑️ Deleting sale ${id} by ${normalizedUserEmail}`);
+    console.log(`   Items: ${sale.saleitem.length}, Trade-ins: ${sale.tradeins?.length || 0}`);
+
+    const result = await prisma.$transaction(async (tx) => {
+      const fresh = await tx.sale.findUnique({
+        where: { id },
+        select: { isDeleted: true },
+      });
+
+      if (!fresh) throw new Error("SALE_DISAPPEARED");
+      if (fresh.isDeleted) throw new Error("SALE_ALREADY_DELETED_IN_TX");
+
+      await tx.sale.update({
+        where: { id },
+        data: {
+          isDeleted: true,
+          deletedAt: new Date(),
+          deletedBy: normalizedUserEmail,
+          deletionReason: data.deletionReason || null,
+        },
+      });
+
+      const inventoryRestore = await restoreInventoryForSale(sale);
+      const tradeInDeleteInfo = await deleteTradeInForSale(id);
+
+      await tx.saleitem.deleteMany({ where: { saleId: id } });
+      await tx.payment.deleteMany({ where: { saleId: id, method: { not: "TRADE_IN" } } });
+      await tx.sale.delete({ where: { id } });
+
+      return { inventoryRestore, tradeInDeleteInfo };
+    });
+
+    return NextResponse.json({
       success: true,
-      message: `Sale deleted successfully`,
+      message: `Sale deleted successfully and stock restored to original sources`,
       deletedBy: normalizedUserEmail,
       creatorStaff: sale.createdByStaff?.name || null,
       creatorStaffId: sale.createdById,
       assignedStaff: sale.assignedStaff?.name || null,
       assignedStaffId: sale.assignedStaffId,
-      itemsRestored: sale.saleitem.length
+      itemsRestored: sale.saleitem.length,
+      tradeInsDeleted: sale.tradeins?.length || 0,
+      restoreDetail: result.inventoryRestore,
     });
   } catch (err: any) {
     console.error("❌ Sale delete error:", err);
-    return NextResponse.json({ 
-      error: "Failed to delete sale",
-      details: err.message 
-    }, { status: 500 });
+
+    if (err.message === "SALE_ALREADY_DELETED_IN_TX") {
+      return NextResponse.json(
+        {
+          error: "SALE_ALREADY_DELETED",
+          message: `Sale ${id} was deleted by another request. No further restore was performed.`,
+        },
+        { status: 409 }
+      );
+    }
+
+    return NextResponse.json(
+      {
+        error: "Failed to delete sale",
+        details: err.message,
+      },
+      { status: 500 }
+    );
   }
 }
 
@@ -1564,7 +1872,7 @@ export async function PATCH(req: NextRequest) {
   try {
     const data = await req.json();
     const id = Number(data.id);
-    
+
     if (!id) {
       return NextResponse.json({ error: "Sale ID is required" }, { status: 400 });
     }
@@ -1577,7 +1885,7 @@ export async function PATCH(req: NextRequest) {
     } else if (data.userEmail && isValidEmail(data.userEmail)) {
       userEmail = data.userEmail;
     }
-    
+
     const normalizedUserEmail = normalizeEmail(userEmail || "unknown@example.com");
 
     const updateData: any = {
@@ -1597,13 +1905,14 @@ export async function PATCH(req: NextRequest) {
       data: updateData,
       include: {
         customer: true,
-        saleitem: { 
-          include: { 
-            product: true, 
+        saleitem: {
+          include: {
+            product: true,
             staffInventory: { include: { staff: true } }
-          } 
+          }
         },
         payment: true,
+        tradeins: true,
         createdByStaff: true,
         assignedStaff: true,
         paymentschedule: true,
@@ -1617,9 +1926,9 @@ export async function PATCH(req: NextRequest) {
     return NextResponse.json(processSale(updated));
   } catch (err: any) {
     console.error("❌ Sale patch error:", err);
-    return NextResponse.json({ 
+    return NextResponse.json({
       error: "Failed to update sale",
-      details: err.message 
+      details: err.message
     }, { status: 500 });
   }
 }

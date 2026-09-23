@@ -9,6 +9,48 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+// =====================================
+// ENUMS
+// =====================================
+
+enum payment_status {
+  PENDING
+  CLEARED
+  BOUNCED
+  COMPLETED
+  APPLIED
+}
+
+enum tradein_status {
+  PENDING
+  APPROVED
+  REJECTED
+  APPLIED
+  RETURNED
+}
+
+enum tradein_condition {
+  EXCELLENT
+  GOOD
+  FAIR
+  POOR
+  DAMAGED
+}
+
+enum payment_method {
+  CASH
+  MPESA
+  BANK
+  CHECK
+  CARD
+  CREDIT
+  TRADE_IN
+}
+
+// =====================================
+// MODELS
+// =====================================
+
 model catalogproduct {
   id          Int      @id @default(autoincrement())
   name        String
@@ -34,7 +76,8 @@ model customer {
   sale              sale[]
   smsreminder       smsreminder[]
   deletedsale       deletedsale[]
-  tradeins          tradein[]   
+  tradeins          tradein[]
+  tradeinPayments   tradeinPayment[]
 }
 
 model expense {
@@ -143,10 +186,17 @@ model payment {
   paymentDate      DateTime?
 
   // =====================================
+  // TRADE-IN PAYMENT SUPPORT
+  // =====================================
+
+  tradeInPaymentId Int?            @unique
+  tradeInPayment   tradeinPayment? @relation(fields: [tradeInPaymentId], references: [id])
+
+  // =====================================
   // CREDITOR PAYMENT DETAILS RELATION
   // =====================================
-  
-  creditorPaymentDetails creditorPaymentDetail[] // Relation for payment details
+
+  creditorPaymentDetails creditorPaymentDetail[]
 
   @@index([isVerified])
   @@index([method])
@@ -154,33 +204,84 @@ model payment {
   @@index([status])
   @@index([creditorId])
   @@index([paymentType])
+  @@index([tradeInPaymentId])
+}
+
+// =====================================
+// TRADE-IN PAYMENT MODEL
+// =====================================
+// This model tracks when a trade-in is applied as a payment to a sale.
+// Each trade-in can be applied to exactly one sale as payment.
+// =====================================
+model tradeinPayment {
+  id               Int      @id @default(autoincrement())
+
+  // Core references
+  tradeinId        Int      @unique  // The trade-in being applied
+  saleId           Int                // The sale this trade-in is paying for
+  customerId       Int                // The customer
+
+  // Financial details
+  amount           Float              // Amount credited to the sale (usually = agreedValue)
+  tradeinValue     Float              // Total agreed value of the trade-in
+  remainingBalance Float              // Remaining balance on the sale after applying trade-in
+
+  // Snapshot of trade-in details (denormalized for historical record)
+  itemName         String
+  itemDescription  String?
+  itemCategory     String?
+  itemCondition    String
+  quantity         Int      @default(1)
+
+  // Status tracking
+  status           String   @default("PENDING") // PENDING, APPLIED, VOIDED
+  appliedAt        DateTime?
+  voidedAt         DateTime?
+  voidReason       String?
+
+  // Metadata
+  notes            String?
+
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  // Relations
+  tradein          tradein  @relation(fields: [tradeinId], references: [id], onDelete: Cascade)
+  sale             sale     @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  customer         customer @relation(fields: [customerId], references: [id])
+  payment          payment? // One-to-one back-relation
+
+  @@index([tradeinId])
+  @@index([saleId])
+  @@index([customerId])
+  @@index([status])
 }
 
 // =====================================
 // CREDITOR PAYMENT DETAILS MODEL
 // =====================================
 model creditorPaymentDetail {
-  id                    Int      @id @default(autoincrement())
-  paymentId             Int
-  creditorId            Int
-  amount                Float
-  description           String?
-  invoiceNumber         String?
-  paymentReference      String?
-  dueDate               DateTime?
-  bankName              String?
-  accountNumber         String?
-  checkNumber           String?
-  checkDate             DateTime?
-  transactionId         String?
-  notes                 String?
-  attachments           String?
-  createdAt             DateTime  @default(now())
-  updatedAt             DateTime  @updatedAt
-  
-  payment               payment   @relation(fields: [paymentId], references: [id], onDelete: Cascade)
-  creditor              creditor  @relation(fields: [creditorId], references: [id])
-  
+  id               Int      @id @default(autoincrement())
+  paymentId        Int
+  creditorId       Int
+  amount           Float
+  description      String?
+  invoiceNumber    String?
+  paymentReference String?
+  dueDate          DateTime?
+  bankName         String?
+  accountNumber    String?
+  checkNumber      String?
+  checkDate        DateTime?
+  transactionId    String?
+  notes            String?
+  attachments      String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  payment          payment  @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  creditor         creditor @relation(fields: [creditorId], references: [id])
+
   @@index([paymentId])
   @@index([creditorId])
   @@index([paymentReference])
@@ -191,33 +292,33 @@ model creditorPaymentDetail {
 // CREDITOR PAYMENT TEMPLATES MODEL
 // =====================================
 model creditorPaymentTemplate {
-  id                    Int      @id @default(autoincrement())
-  creditorId            Int
-  name                  String   // Template name e.g., "Standard Payment", "Bank Transfer"
-  description           String?
-  
+  id                   Int      @id @default(autoincrement())
+  creditorId           Int
+  name                 String
+  description          String?
+
   // Payment details that can be reused
-  bankName              String?
-  accountNumber         String?
-  accountName           String?
-  bankBranch            String?
-  swiftCode             String?
-  
+  bankName             String?
+  accountNumber        String?
+  accountName          String?
+  bankBranch           String?
+  swiftCode            String?
+
   // Default payment method
-  defaultPaymentMethod  String?  // "bank", "cash", "mobile", "cheque"
-  
+  defaultPaymentMethod String?
+
   // Additional details
-  notes                 String?
-  isDefault             Boolean  @default(false)
-  
-  createdAt             DateTime @default(now())
-  updatedAt             DateTime @updatedAt
-  
-  creditor              creditor @relation(fields: [creditorId], references: [id], onDelete: Cascade)
-  
+  notes                String?
+  isDefault            Boolean  @default(false)
+
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  creditor             creditor @relation(fields: [creditorId], references: [id], onDelete: Cascade)
+
   @@index([creditorId])
   @@index([isDefault])
-  @@unique([creditorId, name]) // One template name per creditor
+  @@unique([creditorId, name])
 }
 
 model paymentschedule {
@@ -284,49 +385,49 @@ model stock {
 }
 
 model restock {
-  id              Int       @id @default(autoincrement())
-  productId       Int
-  quantity        Int
-  costPrice       Float
-  totalCost       Float
-  paymentSource   String
-  creditorId      Int?
-  creditor        creditor? @relation(fields: [creditorId], references: [id])
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
-  product         product   @relation(fields: [productId], references: [id])
+  id            Int          @id @default(autoincrement())
+  productId     Int
+  quantity      Int
+  costPrice     Float
+  totalCost     Float
+  paymentSource String
+  creditorId    Int?
+  creditor      creditor?    @relation(fields: [creditorId], references: [id])
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+  product       product      @relation(fields: [productId], references: [id])
 
-  cashledger      cashledger[] @relation("RestockToLedger")
+  cashledger    cashledger[] @relation("RestockToLedger")
 
   @@index([productId])
   @@index([creditorId])
 }
 
 model cashledger {
-  id                   Int       @id @default(autoincrement())
-  date                 DateTime  @default(now())
-  description          String
-  type                 String
-  category             String
-  amount               Float
-  runningBalance       Float?
-  relatedTo            String?
-  affectedAccounts     String?
-  referenceId          Int?
-  referenceType        String?
-  createdAt            DateTime  @default(now())
-  updatedAt            DateTime  @updatedAt
-  email                String?
-  token                String?
+  id                    Int                   @id @default(autoincrement())
+  date                  DateTime              @default(now())
+  description           String
+  type                  String
+  category              String
+  amount                Float
+  runningBalance        Float?
+  relatedTo             String?
+  affectedAccounts      String?
+  referenceId           Int?
+  referenceType         String?
+  createdAt             DateTime              @default(now())
+  updatedAt             DateTime              @updatedAt
+  email                 String?
+  token                 String?
 
-  saleId     Int?
-  sale       sale?       @relation(fields: [saleId], references: [id])
-  expenseId  Int?
-  expense    expense?    @relation(fields: [expenseId], references: [id])
-  restockId  Int?
-  restock    restock?    @relation("RestockToLedger", fields: [restockId], references: [id])
+  saleId                Int?
+  sale                  sale?                 @relation(fields: [saleId], references: [id])
+  expenseId             Int?
+  expense               expense?              @relation(fields: [expenseId], references: [id])
+  restockId             Int?
+  restock               restock?              @relation("RestockToLedger", fields: [restockId], references: [id])
   dailyOpeningBalanceId Int?
-  dailyOpeningBalance   dailyopeningbalance? @relation(fields: [dailyOpeningBalanceId], references: [id])
+  dailyOpeningBalance   dailyopeningbalance?  @relation(fields: [dailyOpeningBalanceId], references: [id])
 
   @@index([date])
   @@index([type])
@@ -335,14 +436,14 @@ model cashledger {
 }
 
 model dailyopeningbalance {
-  id          Int       @id @default(autoincrement())
-  date        DateTime  @default(now())
+  id          Int          @id @default(autoincrement())
+  date        DateTime     @default(now())
   amount      Float
   description String?
   recordedBy  String?
   cashledgers cashledger[]
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
 }
 
 model sale {
@@ -399,6 +500,7 @@ model sale {
   assignedStaffId  Int?
   assignedStaff    staff? @relation("AssignedSales", fields: [assignedStaffId], references: [id])
   tradeins         tradein[]
+  tradeinPayments  tradeinPayment[]
 
   @@index([assignedStaffId])
   @@index([createdById])
@@ -412,22 +514,22 @@ model sale {
 }
 
 model saleitem {
-  id               Int            @id @default(autoincrement())
+  id               Int             @id @default(autoincrement())
   quantity         Int
   productId        Int
   saleId           Int
   price            Float
   total            Float
-  
+
   costAtSale       Float?
   totalCost        Float?
   profitMargin     Float?
   costSnapshot     Json?
-  
+
   staffInventoryId Int?
-  
-  product          product        @relation(fields: [productId], references: [id])
-  sale             sale           @relation(fields: [saleId], references: [id], onDelete: Cascade)
+
+  product          product         @relation(fields: [productId], references: [id])
+  sale             sale            @relation(fields: [saleId], references: [id], onDelete: Cascade)
   staffInventory   staffInventory? @relation(fields: [staffInventoryId], references: [id])
 
   @@index([staffInventoryId])
@@ -437,54 +539,54 @@ model saleitem {
 }
 
 model productCostHistory {
-  id          Int      @id @default(autoincrement())
-  productId   Int
-  costPrice   Float
+  id            Int      @id @default(autoincrement())
+  productId     Int
+  costPrice     Float
   effectiveDate DateTime @default(now())
-  notes       String?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-  
-  product     product  @relation(fields: [productId], references: [id], onDelete: Cascade)
-  
+  notes         String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  product       product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+
   @@index([productId])
   @@index([effectiveDate])
   @@unique([productId, effectiveDate])
 }
 
 model creditor {
-  id          Int       @id @default(autoincrement())
-  name        String    @unique
-  phone       String?
-  email       String?
-  totalOwed   Float     @default(0)
-  restocks    restock[]
-  payments    payment[] @relation("CreditorPayments")
-  
+  id                       Int                       @id @default(autoincrement())
+  name                     String                    @unique
+  phone                    String?
+  email                    String?
+  totalOwed                Float                     @default(0)
+  restocks                 restock[]
+  payments                 payment[]                 @relation("CreditorPayments")
+
   // Relations for payment details and templates
-  creditorPaymentDetails creditorPaymentDetail[]
+  creditorPaymentDetails   creditorPaymentDetail[]
   creditorPaymentTemplates creditorPaymentTemplate[]
-  
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+
+  createdAt                DateTime                  @default(now())
+  updatedAt                DateTime                  @updatedAt
 }
 
 model staff {
-  id               Int               @id @default(autoincrement())
+  id               Int             @id @default(autoincrement())
   name             String
   email            String?
   phone            String?
   staffInventories staffInventory[]
-  createdSales     sale[]            @relation("CreatedSales")
-  assignedSales    sale[]            @relation("AssignedSales")
-  createdExpenses  expense[]         @relation("ExpenseCreatedBy")
-  updatedExpenses  expense[]         @relation("ExpenseUpdatedBy")
-  createdAt        DateTime          @default(now())
-  updatedAt        DateTime          @updatedAt
+  createdSales     sale[]          @relation("CreatedSales")
+  assignedSales    sale[]          @relation("AssignedSales")
+  createdExpenses  expense[]       @relation("ExpenseCreatedBy")
+  updatedExpenses  expense[]       @relation("ExpenseUpdatedBy")
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
 }
 
 model staffInventory {
-  id               Int       @id @default(autoincrement())
+  id               Int         @id @default(autoincrement())
   staffId          Int
   productId        Int
 
@@ -492,15 +594,15 @@ model staffInventory {
   weekEndDate      DateTime?
 
   quantityGiven    Int
-  quantitySold     Int       @default(0)
-  quantityReturned Int       @default(0)
+  quantitySold     Int         @default(0)
+  quantityReturned Int         @default(0)
 
-  staff            staff     @relation(fields: [staffId], references: [id])
-  product          product   @relation(fields: [productId], references: [id])
+  staff            staff       @relation(fields: [staffId], references: [id])
+  product          product     @relation(fields: [productId], references: [id])
   saleItems        saleitem[]
 
-  createdAt        DateTime  @default(now())
-  updatedAt        DateTime  @updatedAt
+  createdAt        DateTime    @default(now())
+  updatedAt        DateTime    @updatedAt
 
   @@index([staffId])
   @@index([productId])
@@ -535,56 +637,72 @@ model systemsetting {
   @@index([key])
 }
 
+// =====================================
+// TRADE-IN MODEL (Enhanced)
+// =====================================
+// This model represents a physical item taken in as trade-in.
+// It can optionally be linked to a payment record.
+// The tradeinPayment model tracks when it's applied as payment.
+// =====================================
 model tradein {
-  id              Int      @id @default(autoincrement())
+  id              Int              @id @default(autoincrement())
 
-  saleId          Int
-  paymentId       Int?
-  customerId      Int
+  // Core references
+  saleId          Int              // Sale this trade-in is associated with
+  paymentId       Int?             // Optional: Legacy payment link
+  customerId      Int              // Customer trading in the item
 
+  // Item details
   itemName        String
   description     String?
   category        String?
 
-  quantity        Int      @default(1)
+  // Quantity and value
+  quantity        Int              @default(1)
+  estimatedValue  Float            // What customer thinks it's worth
+  agreedValue     Float            // What we agree to credit
 
-  estimatedValue  Float
-  agreedValue     Float
+  // Condition and status
+  condition       String           // EXCELLENT, GOOD, FAIR, POOR, DAMAGED
+  status          String           @default("PENDING") // PENDING, APPROVED, REJECTED, APPLIED, RETURNED
 
-  condition       String
-  status          String   @default("PENDING")
-
+  // Additional info
   notes           String?
+  images          String?          // JSON array of image URLs
 
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  // Timestamps
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
 
-  sale            sale     @relation(fields: [saleId], references: [id], onDelete: Cascade)
-  payment         payment? @relation(fields: [paymentId], references: [id])
-  customer        customer @relation(fields: [customerId], references: [id])
+  // Relations
+  sale            sale             @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  payment         payment?         @relation(fields: [paymentId], references: [id])
+  customer        customer         @relation(fields: [customerId], references: [id])
+  tradeinPayment  tradeinPayment?
 
   @@index([saleId])
   @@index([customerId])
   @@index([status])
+  @@index([condition])
 }
 
 model saleauditlog {
-  id              Int      @id @default(autoincrement())
-  saleId          Int
-  action          String
-  fieldName       String?
-  oldValue        String?
-  newValue        String?
-  difference      String?
-  changedBy       String
-  changedByEmail  String?
-  changedAt       DateTime @default(now())
-  ipAddress       String?
-  userAgent       String?
-  snapshot        Json?
-  notes           String?
+  id             Int      @id @default(autoincrement())
+  saleId         Int
+  action         String
+  fieldName      String?
+  oldValue       String?
+  newValue       String?
+  difference     String?
+  changedBy      String
+  changedByEmail String?
+  changedAt      DateTime @default(now())
+  ipAddress      String?
+  userAgent      String?
+  snapshot       Json?
+  notes          String?
 
-  sale            sale     @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  sale           sale     @relation(fields: [saleId], references: [id], onDelete: Cascade)
 
   @@index([saleId])
   @@index([action])
@@ -593,30 +711,30 @@ model saleauditlog {
 }
 
 model deletedsale {
-  id                Int      @id @default(autoincrement())
-  originalSaleId    Int      @unique
-  saleData          Json
-  customerName      String
-  customerPhone     String?
-  customerId        Int?
-  totalAmount       Float
-  saleDate          DateTime
-  statusAtDeletion  String
-  dueDate           DateTime?
-  deletedAt         DateTime @default(now())
-  deletedBy         String
-  deletedByEmail    String?
-  deletionReason    String?
-  ipAddress         String?
-  restoredAt        DateTime?
-  restoredBy        String?
-  restoredByEmail   String?
-  saleItemsSummary  String
-  paymentsSummary   String?
-  restockedItems    Boolean  @default(false)
-  expiresAt         DateTime
+  id               Int       @id @default(autoincrement())
+  originalSaleId   Int       @unique
+  saleData         Json
+  customerName     String
+  customerPhone    String?
+  customerId       Int?
+  totalAmount      Float
+  saleDate         DateTime
+  statusAtDeletion String
+  dueDate          DateTime?
+  deletedAt        DateTime  @default(now())
+  deletedBy        String
+  deletedByEmail   String?
+  deletionReason   String?
+  ipAddress        String?
+  restoredAt       DateTime?
+  restoredBy       String?
+  restoredByEmail  String?
+  saleItemsSummary String
+  paymentsSummary  String?
+  restockedItems   Boolean   @default(false)
+  expiresAt        DateTime
 
-  customer          customer? @relation(fields: [customerId], references: [id])
+  customer         customer? @relation(fields: [customerId], references: [id])
 
   @@index([deletedAt])
   @@index([expiresAt])
@@ -626,11 +744,4 @@ model deletedsale {
   @@index([statusAtDeletion])
   @@index([customerId])
   @@index([restoredAt])
-}
-
-enum payment_status {
-  PENDING
-  CLEARED
-  BOUNCED
-  COMPLETED
 }

@@ -15,7 +15,7 @@ import {
   UserCheck, UserX, MessageSquare, Bell, MessageCircle,
   Send, FileDown, FileSpreadsheet, ReceiptText, Share2,
   Smartphone, Mail as MailIcon, CheckCircle2, XCircle,
-  AlertTriangle, Info, Copy, ExternalLink
+  AlertTriangle, Info, Copy, ExternalLink, Gift
 } from "lucide-react";
 
 // ============================================================================
@@ -36,6 +36,23 @@ export interface Customer {
   createdAt?: string;
 }
 
+/** Trade-in row (one per item received from a customer) */
+interface TradeInRow {
+  id: number;
+  saleId: number;
+  paymentId?: number | null;
+  customerId: number;
+  itemName: string;
+  description?: string | null;
+  category?: string | null;
+  quantity: number;
+  estimatedValue: number;
+  agreedValue: number;
+  condition: string;
+  status: string;
+  notes?: string | null;
+}
+
 /** Outstanding sale with remaining balance */
 interface OutstandingSale {
   id: number;
@@ -47,6 +64,7 @@ interface OutstandingSale {
   paymentMethod?: string;
   dueDate?: string;
   saleitem?: SaleItem[];
+  tradeins?: TradeInRow[];
 }
 
 /** Individual item in a sale */
@@ -96,6 +114,7 @@ interface ProcessedSale {
   paymentMethod?: string;
   dueDate?: string;
   saleitem?: SaleItem[];
+  tradeins?: TradeInRow[];
   paidThisTime?: number;
   fullyPaid?: boolean;
 }
@@ -119,19 +138,29 @@ interface PaymentResult {
 // HELPER FUNCTIONS
 // ============================================================================
 
+// ==================== TRADE-IN HELPERS ====================
+const tradeInUnitValue = (t: any): number =>
+  Number(t?.agreedValue ?? t?.unitValue ?? 0);
+
+const tradeInLineTotal = (t: any): number =>
+  (Number(t?.quantity) || 1) * tradeInUnitValue(t);
+
+const tradeInSaleTotal = (tradeins: any[] | undefined): number => {
+  if (!Array.isArray(tradeins)) return 0;
+  return tradeins.reduce((s, t) => s + tradeInLineTotal(t), 0);
+};
+
 /**
  * Normalize phone number for duplicate checking
- * Converts various formats to standard 254XXXXXXXXX format
  */
 const normalizePhoneNumber = (phone: string): string => {
   if (!phone) return '';
   let cleaned = phone.replace(/\D/g, '');
   
-  // Remove leading 0 and add 254
   if (cleaned.startsWith('0') && cleaned.length === 10) {
     cleaned = '254' + cleaned.slice(1);
   } else if (cleaned.startsWith('254') && cleaned.length === 12) {
-    // Already in correct format
+    // already ok
   } else if (cleaned.startsWith('254') && cleaned.length === 13) {
     cleaned = cleaned.slice(3);
     cleaned = '254' + cleaned;
@@ -152,7 +181,7 @@ const generateReceiptLink = (saleId: number): string => {
 };
 
 /**
- * Format phone number to Kenya international format for WhatsApp/SMS
+ * Format phone number to Kenya international format
  */
 const formatPhoneToKenyaCode = (phone: string): string => {
   if (!phone) return '';
@@ -180,7 +209,7 @@ const formatCurrency = (amount: number): string =>
   Number(amount || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 /**
- * Format date for display (short format)
+ * Format date for display
  */
 const formatDate = (dateString: string): string => {
   return new Date(dateString).toLocaleDateString("en-US", {
@@ -191,7 +220,7 @@ const formatDate = (dateString: string): string => {
 };
 
 /**
- * Format date with time for detailed display
+ * Format date with time
  */
 const formatDateTime = (dateString: string): string => {
   return new Date(dateString).toLocaleDateString("en-US", {
@@ -204,8 +233,7 @@ const formatDateTime = (dateString: string): string => {
 };
 
 /**
- * Generate detailed customer statement message for WhatsApp/SMS/Email
- * Includes payment allocation breakdown and receipt links
+ * Generate a concise, non-repetitive customer statement.
  */
 const generateCustomerStatement = (
   customer: Customer,
@@ -214,131 +242,174 @@ const generateCustomerStatement = (
   paymentAllocations?: PaymentAllocation[],
   paymentMethod?: string
 ): string => {
-  const date = new Date().toLocaleDateString('en-KE', {
-    year: 'numeric',
-    month: 'long',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit'
+  const now = new Date();
+  const dateLong = now.toLocaleDateString("en-KE", {
+    year: "numeric",
+    month: "long",
+    day: "numeric",
   });
-  
-  let message = `*🏢 SWIFT SUPPLIERS*\n`;
-  message += `*Customer Statement*\n`;
-  message += `📅 ${date}\n`;
+  const timeShort = now.toLocaleTimeString("en-KE", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+
+  const fmt = (n: number) => formatCurrency(Number(n) || 0);
+  const shortDate = (d: string) =>
+    new Date(d).toLocaleDateString("en-KE", {
+      day: "2-digit",
+      month: "short",
+      year: "numeric",
+    });
+
+  let message = "";
+
+  // ============ HEADER ============
+  message += `🏢 *SWIFT SUPPLIERS*\n`;
+  message += `Customer Statement\n`;
+  message += `📅 ${dateLong} at ${timeShort}\n`;
   message += `👤 ${customer.name}\n`;
-  
-  const totalOutstanding = outstandingSales.reduce((sum, sale) => sum + sale.remainingBalance, 0);
-  const totalPurchases = outstandingSales.reduce((sum, sale) => sum + sale.amount, 0);
-  const totalPaid = outstandingSales.reduce((sum, sale) => sum + sale.paidAmount, 0);
-  
-  // Section: Payment Received (if this is a payment notification)
-  if (paymentAmount && paymentAllocations && paymentAllocations.length > 0) {
-    message += `*✅ PAYMENT RECEIVED*\n`;
-    message += `Amount: KSh ${formatCurrency(paymentAmount)}\n`;
-    if (paymentMethod) message += `Method: ${paymentMethod}\n`;
-    message += `*📊 HOW YOUR PAYMENT WAS APPLIED:*\n`;
-    message += `─────────────────────\n\n`;
-    
-    paymentAllocations.forEach((alloc) => {
-      message += `*Sale #${alloc.saleId}* - ${alloc.saleDate}\n`;
-      message += `─────────────────────\n`;
-      
-      // List items in this sale
-      if (alloc.items && alloc.items.length > 0) {
-        alloc.items.forEach(item => {
-          if (item.product) {
-            message += `• ${item.quantity}x ${item.product.name}\n`;
-            message += `  @ KSh ${formatCurrency(item.price)} = KSh ${formatCurrency(item.price * item.quantity)}\n`;
-          }
-        });
-      }
-      
-      message += `\n`;
-      message += `Subtotal: KSh ${formatCurrency(alloc.originalAmount)}\n`;
-      message += `Previously Paid: KSh ${formatCurrency(alloc.paidAmount)}\n`;
-      message += `Paid Today: KSh ${formatCurrency(alloc.amount)}\n`;
-      
-      if (alloc.fullyPaid) {
-        message += `Status: *✅ FULLY PAID*\n`;
-      } else {
-        message += `Remaining: KSh ${formatCurrency(alloc.remainingAfter)}\n`;
-        message += `Status: *⏳ PARTIAL PAYMENT*\n`;
-      }
-      
-      message += `🔗 Receipt: ${generateReceiptLink(alloc.saleId)}\n`;
-      message += `─────────────────────\n\n`;
-    });
-  }
-  
-  // Section: Outstanding Sales Summary
-  if (outstandingSales.length > 0) {
-    message += `*📋 OUTSTANDING SALES SUMMARY*\n`;
-    message += `─────────────────────\n\n`;
-    
-    outstandingSales.forEach((sale) => {
-      message += `*Sale #${sale.id}* - ${new Date(sale.date).toLocaleDateString()}\n`;
-      message += `─────────────────────\n`;      
-      
-      // List items in this sale
-      if (sale.saleitem && sale.saleitem.length > 0) {
-        sale.saleitem.forEach(item => {
-          if (item.product) {
-            message += `• ${item.quantity}x ${item.product.name}\n`;
-            message += `  KSh ${formatCurrency(item.price)} each = KSh ${formatCurrency(item.price * item.quantity)}\n`;
-          }
-        });
-      }     
-      
-      message += `\n`;
-      message += `Total: KSh ${formatCurrency(sale.amount)}\n`;
-      message += `Paid: KSh ${formatCurrency(sale.paidAmount)}\n`;
-      message += `Balance: KSh ${formatCurrency(sale.remainingBalance)}\n`;    
-      
-      // Show due date and overdue status
-      if (sale.dueDate) {
-        const dueDate = new Date(sale.dueDate);
-        const today = new Date();
-        if (dueDate < today && sale.remainingBalance > 0) {
-          message += `⚠️ *OVERDUE* - Due: ${new Date(sale.dueDate).toLocaleDateString()}\n`;
-        } else {
-          message += `Due: ${new Date(sale.dueDate).toLocaleDateString()}\n`;
-        }
-      } 
-      
-      message += `🔗 View Receipt: ${generateReceiptLink(sale.id)}\n`;
-      message += `─────────────────────\n\n`;
-    });
-    
-    // Summary totals
-    message += `*💰 SUMMARY*\n`;
-    message += `─────────────────────\n`;
-    message += `Total Purchases: KSh ${formatCurrency(totalPurchases)}\n`;
-    message += `Total Paid: KSh ${formatCurrency(totalPaid)}\n`;   
-    
-    if (totalOutstanding > 0) {
-      message += `*Total Outstanding: KSh ${formatCurrency(totalOutstanding)}*\n`;     
-    } else {
-      message += `\n*✨ ACCOUNT FULLY PAID*\n`;
-      message += `Thank you for being a valued customer!\n`;
-    }
-    message += `─────────────────────\n\n`;
+
+  // ============ PAYMENT RECEIVED ============
+  const isPaymentEvent =
+    !!paymentAmount &&
+    paymentAmount > 0 &&
+    !!paymentAllocations &&
+    paymentAllocations.length > 0;
+
+  if (isPaymentEvent) {
+    message += `\n💳 *PAYMENT RECEIVED*\n`;
+    message += `KSh ${fmt(paymentAmount!)}${
+      paymentMethod ? ` via ${paymentMethod}` : ""
+    }\n`;
   }
 
-  // Thank you message
-  message += `*🙏 THANK YOU*\n`;
-  message += `─────────────────────\n`;
-  
-  if (totalOutstanding === 0) {
-    message += `Thank you for being an amazing customer!\n`;
+  // ============ IDENTIFY FEATURED SALE ============
+  let featuredSaleId: number | null = null;
+
+  if (isPaymentEvent && paymentAllocations!.length > 0) {
+    featuredSaleId = paymentAllocations![0].saleId;
+  } else if (outstandingSales.length > 0) {
+    const sorted = [...outstandingSales].sort(
+      (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
+    );
+    featuredSaleId = sorted[0].id;
+  }
+
+  const featuredSale = featuredSaleId
+    ? outstandingSales.find((s) => s.id === featuredSaleId) || null
+    : null;
+
+  const featuredAlloc = isPaymentEvent
+    ? paymentAllocations!.find((a) => a.saleId === featuredSaleId)
+    : undefined;
+
+  // ============ FEATURED SALE (DETAIL) ============
+  if (featuredSale) {
+    const isPaymentAppliedToIt = !!featuredAlloc;
+
+    message += `\n🧾 *${isPaymentAppliedToIt ? "PAYMENT APPLIED TO" : "RECENT SALE"}*\n`;
+    message += `Sale #${featuredSale.id} — ${shortDate(featuredSale.date)}\n\n`;
+
+    if (featuredSale.saleitem && featuredSale.saleitem.length > 0) {
+      featuredSale.saleitem.forEach((item: any) => {
+        const name = item.product?.name || item.productName || "Item";
+        const unit = Number(item.price) || 0;
+        const qty = Number(item.quantity) || 1;
+        message += `• ${qty}x ${name} @ KSh ${fmt(unit)}\n`;
+      });
+    }
+
+    message += `Total: KSh ${fmt(featuredSale.amount)}\n`;
+
+    const paidToday = featuredAlloc?.amount || 0;
+    const previouslyPaid = Number(featuredSale.paidAmount) || 0;
+
+    if (isPaymentAppliedToIt && paidToday > 0) {
+      if (previouslyPaid > 0) {
+        message += `Previously Paid: KSh ${fmt(previouslyPaid)}\n`;
+      }
+      message += `Paid Today: KSh ${fmt(paidToday)}\n`;
+    } else if (previouslyPaid > 0) {
+      message += `Paid: KSh ${fmt(previouslyPaid)}\n`;
+    }
+
+    const featuredBalance = featuredAlloc
+      ? featuredAlloc.remainingAfter
+      : Number(featuredSale.remainingBalance) || 0;
+
+    message += `Balance: KSh ${fmt(featuredBalance)}\n`;
+
+    // Trade-In items on the featured sale
+    if (featuredSale.tradeins && featuredSale.tradeins.length > 0) {
+      message += `\n🎁 *Trade-In Items Received*\n`;
+      featuredSale.tradeins.forEach((t) => {
+        const qty = Number(t.quantity) || 1;
+        const unit = Number(t.agreedValue) || 0;
+        const lineTotal = qty * unit;
+        message += `• ${qty}x ${t.itemName} @ KSh ${fmt(unit)} = KSh ${fmt(lineTotal)}\n`;
+        if (t.condition || t.category) {
+          const meta = [t.category, t.condition].filter(Boolean).join(" · ");
+          if (meta) message += `  ${meta}\n`;
+        }
+      });
+    }
+
+    message += `\n🔗 Receipt: ${generateReceiptLink(featuredSale.id)}\n`;
+  }
+
+  // ============ OTHER OUTSTANDING SALES (COMPACT) ============
+  const otherOutstanding = outstandingSales
+    .filter((s) => s.id !== featuredSaleId)
+    .filter((s) => (Number(s.remainingBalance) || 0) > 0.01)
+    .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+
+  if (otherOutstanding.length > 0) {
+    message += `\n📋 *OTHER OUTSTANDING SALES*\n`;
+    otherOutstanding.forEach((s) => {
+      message += `\nSale #${s.id} — ${shortDate(s.date)}\n`;
+      message += `Balance: KSh ${fmt(s.remainingBalance)}\n`;
+      message += `🔗 Receipt: ${generateReceiptLink(s.id)}\n`;
+    });
+  }
+
+  // ============ ACCOUNT SUMMARY ============
+  const allRelevant = [...outstandingSales];
+  const totalPurchases = allRelevant.reduce(
+    (sum, s) => sum + (Number(s.amount) || 0),
+    0
+  );
+  const totalPaid = allRelevant.reduce(
+    (sum, s) => sum + (Number(s.paidAmount) || 0),
+    0
+  );
+  const totalOutstanding = allRelevant.reduce(
+    (sum, s) => sum + (Number(s.remainingBalance) || 0),
+    0
+  );
+
+  const paidToday = isPaymentEvent ? paymentAmount || 0 : 0;
+  const effectiveTotalPaid = totalPaid + paidToday;
+  const effectiveOutstanding = Math.max(0, totalOutstanding - paidToday);
+
+  message += `\n💰 *ACCOUNT SUMMARY*\n`;
+  message += `Total Purchases: KSh ${fmt(totalPurchases)}\n`;
+  message += `Total Paid: KSh ${fmt(effectiveTotalPaid)}\n`;
+  message += `*Total Outstanding: KSh ${fmt(effectiveOutstanding)}*\n`;
+
+  // ============ CLOSING ============
+  if (effectiveOutstanding <= 0.01) {
+    message += `\n✅ *ACCOUNT FULLY PAID*\n`;
+    message += `Thank you for your business! 🙏\n`;
   } else {
-    message += `Thank you for your continued business!\n`;
+    message += `\nThank you for your business! 🙏\n`;
   }
 
   return message;
 };
 
 /**
- * Generate thank you message for customers with good standing
+ * Generate thank you message
  */
 const generateThankYouMessage = (
   customer: Customer, 
@@ -360,7 +431,6 @@ const generateThankYouMessage = (
   message += `*✨ Thank you for your purchase at SwiftMetals!! ✨*\n\n`; 
   
   if (hasOutstanding) {
-    // Account summary for customers with outstanding balance
     message += `*📊 ACCOUNT SUMMARY*\n`;
     message += `─────────────────────\n`;
     message += `*Outstanding Balance: KSh ${formatCurrency(totalOutstanding)}*\n\n`; 
@@ -383,7 +453,6 @@ const generateThankYouMessage = (
     }
     message += `\n`;
   } else {
-    // Account in good standing
     message += `*🎉 Account Status: GOOD STANDING*\n`;
     message += `• No outstanding balance\n`;
     message += `• Account fully paid up\n`;
@@ -414,7 +483,7 @@ const generateThankYouMessage = (
 // ============================================================================
 
 // ----------------------------------------------------------------------------
-// SearchBar Component - Global search and filter controls
+// SearchBar Component
 // ----------------------------------------------------------------------------
 const SearchBar = ({ onSearch, onFilter }: { onSearch: (query: string) => void; onFilter: () => void }) => {
   const [searchQuery, setSearchQuery] = useState("");
@@ -428,7 +497,6 @@ const SearchBar = ({ onSearch, onFilter }: { onSearch: (query: string) => void; 
   return (
     <div className="bg-white dark:bg-gray-800 p-4 rounded-xl shadow-sm border border-slate-100 dark:border-gray-700 mb-6">
       <div className="flex flex-col md:flex-row gap-4">
-        {/* Search Input */}
         <div className="flex-1 relative">
           <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-slate-400 w-5 h-5" />
           <input
@@ -440,7 +508,6 @@ const SearchBar = ({ onSearch, onFilter }: { onSearch: (query: string) => void; 
           />
         </div>
         
-        {/* Action Buttons */}
         <div className="flex gap-2">
           <button
             onClick={onFilter}
@@ -462,8 +529,7 @@ const SearchBar = ({ onSearch, onFilter }: { onSearch: (query: string) => void; 
 };
 
 // ----------------------------------------------------------------------------
-// MessagePreview Component - Preview and edit messages before sending
-// Supports WhatsApp, SMS, and Email delivery
+// MessagePreview Component
 // ----------------------------------------------------------------------------
 const MessagePreview = ({
   customer,
@@ -492,7 +558,6 @@ const MessagePreview = ({
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
       <div className="bg-white dark:bg-gray-800 rounded-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
-        {/* Modal Header */}
         <div className="p-6 border-b border-slate-200 dark:border-gray-700 sticky top-0 bg-white dark:bg-gray-800">
           <div className="flex justify-between items-center">
             <div>
@@ -509,7 +574,6 @@ const MessagePreview = ({
         </div>
 
         <div className="p-6 space-y-4">
-          {/* Message Type Selector */}
           <div className="flex gap-2">
             {customer.phone && (
               <>
@@ -552,7 +616,6 @@ const MessagePreview = ({
             )}
           </div>
 
-          {/* Message Editor */}
           <div>
             <label className="block text-sm font-medium text-black dark:text-white mb-2">
               Message Content:
@@ -560,12 +623,11 @@ const MessagePreview = ({
             <textarea
               value={editedMessage}
               onChange={(e) => setEditedMessage(e.target.value)}
-              rows={12}
+              rows={14}
               className="w-full p-3 border border-slate-200 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-black dark:focus:ring-blue-500 focus:border-black dark:focus:border-blue-500 text-black dark:text-white bg-white dark:bg-gray-700 font-mono text-sm"
             />
           </div>
 
-          {/* Character Count (especially important for SMS) */}
           <div className="flex justify-between items-center text-sm">
             <span className="text-slate-500 dark:text-gray-400">
               Characters: {editedMessage.length}
@@ -578,7 +640,6 @@ const MessagePreview = ({
             )}
           </div>
 
-          {/* Action Buttons */}
           <div className="flex gap-3 pt-4">
             <button
               onClick={handleCopy}
@@ -599,7 +660,6 @@ const MessagePreview = ({
             </button>
           </div>
 
-          {/* Delivery Information */}
           <div className="bg-slate-50 dark:bg-gray-700 rounded-lg p-4 text-sm">
             <p className="font-medium text-black dark:text-white mb-2">📱 Delivery Information:</p>
             {messageType === 'whatsapp' && customer.phone && (
@@ -619,8 +679,7 @@ const MessagePreview = ({
 };
 
 // ----------------------------------------------------------------------------
-// CreditManagement Component - Core payment processing
-// Features: View outstanding sales, process payments, allocate funds, send statements
+// CreditManagement Component
 // ----------------------------------------------------------------------------
 const CreditManagement = ({ 
   customer, 
@@ -629,7 +688,6 @@ const CreditManagement = ({
   customer: Customer | null;
   onPaymentComplete: () => void;
 }) => {
-  // State Management
   const [outstandingSales, setOutstandingSales] = useState<OutstandingSale[]>([]);
   const [allSales, setAllSales] = useState<OutstandingSale[]>([]);
   const [loading, setLoading] = useState(false);
@@ -641,14 +699,12 @@ const CreditManagement = ({
   const [processingSaleId, setProcessingSaleId] = useState<number | null>(null);
   const [expanded, setExpanded] = useState(true);
   
-  // Message flow states
   const [showMessagePreview, setShowMessagePreview] = useState(false);
   const [pendingPaymentResult, setPendingPaymentResult] = useState<PaymentResult | null>(null);
   const [messageType, setMessageType] = useState<'whatsapp' | 'sms' | 'email'>('whatsapp');
   const [processedSales, setProcessedSales] = useState<ProcessedSale[]>([]);
   const [generatedMessage, setGeneratedMessage] = useState<string>("");
 
-  // Fetch data when customer changes
   useEffect(() => {
     if (customer) {
       fetchOutstandingSales();
@@ -656,9 +712,6 @@ const CreditManagement = ({
     }
   }, [customer]);
 
-  /**
-   * Fetch sales with outstanding balances (not fully paid)
-   */
   const fetchOutstandingSales = async () => {
     if (!customer) return;
     
@@ -670,7 +723,6 @@ const CreditManagement = ({
       
       const sales = Array.isArray(data) ? data : (data.data || []);
       
-      // Process each sale to calculate paid amount and remaining balance
       const outstanding = sales
         .map((sale: any) => {
           const totalPaid = sale.payment?.reduce((sum: number, p: Payment) => 
@@ -688,17 +740,17 @@ const CreditManagement = ({
             saleitem: sale.saleitem?.map((item: any) => ({
               ...item,
               product: item.product
-            }))
+            })),
+            tradeins: Array.isArray(sale.tradeins) ? sale.tradeins : [],
           };
         })
-        .filter((sale: OutstandingSale) => sale.remainingBalance > 0) // Only unpaid/partial
+        .filter((sale: OutstandingSale) => sale.remainingBalance > 0)
         .sort((a: OutstandingSale, b: OutstandingSale) => 
-          new Date(a.date).getTime() - new Date(b.date).getTime() // Oldest first
+          new Date(a.date).getTime() - new Date(b.date).getTime()
         );
       
       setOutstandingSales(outstanding);
       
-      // Recalculate preview if payment amount exists
       if (paymentAmount && parseFloat(paymentAmount) > 0) {
         calculatePreview(parseFloat(paymentAmount), outstanding);
       }
@@ -709,9 +761,6 @@ const CreditManagement = ({
     }
   };
 
-  /**
-   * Fetch all sales for this customer (including paid ones)
-   */
   const fetchAllSales = async () => {
     if (!customer) return;
     
@@ -738,10 +787,11 @@ const CreditManagement = ({
           saleitem: sale.saleitem?.map((item: any) => ({
             ...item,
             product: item.product
-          }))
+          })),
+          tradeins: Array.isArray(sale.tradeins) ? sale.tradeins : [],
         };
       }).sort((a: OutstandingSale, b: OutstandingSale) => 
-        new Date(b.date).getTime() - new Date(a.date).getTime() // Newest first
+        new Date(b.date).getTime() - new Date(a.date).getTime()
       );
       
       setAllSales(all);
@@ -750,10 +800,6 @@ const CreditManagement = ({
     }
   };
 
-  /**
-   * Calculate how payment will be allocated across outstanding sales
-   * Uses oldest-first allocation strategy
-   */
   const calculatePreview = (amount: number, sales = outstandingSales) => {
     let remaining = amount;
     const preview: PaymentAllocation[] = [];
@@ -795,10 +841,6 @@ const CreditManagement = ({
     return outstandingSales.reduce((sum, sale) => sum + sale.remainingBalance, 0);
   };
 
-  /**
-   * Process payment - allocate to oldest sales first
-   * Updates each sale with the payment amount
-   */
   const processPayment = async () => {
     if (!customer) {
       alert("Please select a customer");
@@ -825,10 +867,8 @@ const CreditManagement = ({
       const failedSales: { saleId: number; reason: string }[] = [];
       const createdSaleIds: number[] = [];
 
-      // Calculate previous balance
       const previousBalance = outstandingSales.reduce((sum, sale) => sum + sale.remainingBalance, 0);
 
-      // Process each outstanding sale in order (oldest first)
       for (const sale of outstandingSales) {
         if (remainingAmount <= 0) break;
         
@@ -837,7 +877,6 @@ const CreditManagement = ({
 
         setProcessingSaleId(sale.id);
 
-        // Fetch current sale data
         const saleRes = await fetch(`/api/sales/${sale.id}`);
         if (!saleRes.ok) {
           failedSales.push({ saleId: sale.id, reason: "Failed to fetch sale" });
@@ -846,7 +885,6 @@ const CreditManagement = ({
         
         const saleData = await saleRes.json();
 
-        // Create payment record
         const newPayment = {
           amount: paymentForThisSale,
           method: paymentMethod,
@@ -854,7 +892,6 @@ const CreditManagement = ({
           note: paymentNote || `Payment of KSh ${paymentForThisSale} received`
         };
 
-        // Update sale with new payment
         const updateRes = await fetch(`/api/sales/${sale.id}`, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
@@ -888,7 +925,6 @@ const CreditManagement = ({
         remainingAmount -= paymentForThisSale;
       }
 
-      // Handle excess payment (adds to customer credit)
       let creditUpdate: { amount: number; newTotal: number } | null = null;
       
       if (remainingAmount > 0) {
@@ -909,10 +945,8 @@ const CreditManagement = ({
         }
       }
 
-      // Calculate new balance
       const newBalance = previousBalance - amount;
 
-      // Store processed sales for display
       setProcessedSales(paidSalesList);
 
       const result: PaymentResult = {
@@ -931,7 +965,6 @@ const CreditManagement = ({
       
       setPendingPaymentResult(result);
 
-      // Generate customer statement message
       const message = generateCustomerStatement(
         customer,
         outstandingSales.map(sale => {
@@ -950,11 +983,10 @@ const CreditManagement = ({
       setGeneratedMessage(message);
       setShowMessagePreview(true);
 
-      // Reset form      setPaymentAmount("");
+      setPaymentAmount("");
       setPaymentNote("");
       setAllocationPreview([]);
       
-      // Refresh data
       await fetchOutstandingSales();
       await fetchAllSales();
       
@@ -967,31 +999,20 @@ const CreditManagement = ({
     }
   };
 
-  /**
-   * Send thank you message to customer
-   */
   const sendThankYouMessage = () => {
     if (!customer) return;
-    
     const message = generateThankYouMessage(customer, outstandingSales);
     setGeneratedMessage(message);
     setShowMessagePreview(true);
   };
 
-  /**
-   * Send statement message to customer
-   */
   const sendStatementMessage = () => {
     if (!customer) return;
-    
     const message = generateCustomerStatement(customer, outstandingSales);
     setGeneratedMessage(message);
     setShowMessagePreview(true);
   };
 
-  /**
-   * Handle sending message via selected channel (WhatsApp/SMS/Email)
-   */
   const handleSendMessage = () => {
     if (!customer || !generatedMessage) return;
 
@@ -1026,13 +1047,9 @@ const CreditManagement = ({
   };
 
   const viewReceipt = (saleId: number) => {
-    const receiptLink = generateReceiptLink(saleId);
-    window.open(receiptLink, '_blank');
+    window.open(generateReceiptLink(saleId), '_blank');
   };
 
-  /**
-   * Download outstanding statement as CSV
-   */
   const downloadOutstandingStatement = () => {
     if (!customer) return;
     
@@ -1043,21 +1060,29 @@ const CreditManagement = ({
       return;
     }
 
-    let csvContent = "Sale ID,Date,Amount,Paid Amount,Remaining Balance,Status,Due Date,Items,Receipt Link\n";
+    let csvContent = "Sale ID,Date,Amount,Paid Amount,Remaining Balance,Status,Due Date,Items,Trade-In Items,Trade-In Total,Receipt Link\n";
     
     outstandingToExport.forEach((sale) => {
       const itemsList = sale.saleitem?.map((item: any) => 
         `${item.product?.name} x${item.quantity} @ KSh ${item.price}`
       ).join('; ') || 'No items';
+
+      const tradeInList = sale.tradeins && sale.tradeins.length > 0
+        ? sale.tradeins.map((t) => `${t.itemName} x${t.quantity} @ KSh ${t.agreedValue} (${t.condition})`).join('; ')
+        : 'None';
+      const tradeInTotal = tradeInSaleTotal(sale.tradeins);
       
       const receiptLink = generateReceiptLink(sale.id);
       
-      csvContent += `${sale.id},${new Date(sale.date).toLocaleDateString()},${sale.amount},${sale.paidAmount},${sale.remainingBalance},${sale.status},${sale.dueDate ? new Date(sale.dueDate).toLocaleDateString() : 'N/A'},"${itemsList}",${receiptLink}\n`;
+      csvContent += `${sale.id},${new Date(sale.date).toLocaleDateString()},${sale.amount},${sale.paidAmount},${sale.remainingBalance},${sale.status},${sale.dueDate ? new Date(sale.dueDate).toLocaleDateString() : 'N/A'},"${itemsList}","${tradeInList}",${tradeInTotal},${receiptLink}\n`;
     });
 
     csvContent += "\nOUTSTANDING SUMMARY\n";
     csvContent += `Total Outstanding,${outstandingToExport.reduce((sum, s) => sum + s.remainingBalance, 0)}\n`;
     csvContent += `Number of Outstanding Sales,${outstandingToExport.length}\n`;
+    if (customer.totalCredit && customer.totalCredit > 0) {
+      csvContent += `Customer Credit Balance,${customer.totalCredit}\n`;
+    }
     csvContent += `As of,${new Date().toLocaleString()}\n`;
 
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
@@ -1087,9 +1112,10 @@ const CreditManagement = ({
     );
   }
 
+  const customerCredit = Number(customer.totalCredit || 0);
+
   return (
     <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-slate-100 dark:border-gray-700 overflow-hidden mb-6">
-      {/* Expandable Header */}
       <div 
         className="p-6 cursor-pointer hover:bg-slate-50 dark:hover:bg-gray-700 transition-colors"
         onClick={() => setExpanded(!expanded)}
@@ -1114,11 +1140,22 @@ const CreditManagement = ({
             {expanded ? <ChevronUp className="w-5 h-5 text-slate-400" /> : <ChevronDown className="w-5 h-5 text-slate-400" />}
           </div>
         </div>
+
+        {customerCredit > 0 && (
+          <div className="mt-3 inline-flex items-center gap-2 bg-purple-50 dark:bg-purple-900/20 border border-purple-200 dark:border-purple-800 rounded-lg px-3 py-2">
+            <Wallet className="w-4 h-4 text-purple-600 dark:text-purple-400" />
+            <span className="text-sm font-medium text-purple-700 dark:text-purple-300">
+              Customer Credit Balance: KSh {formatCurrency(customerCredit)}
+            </span>
+            <span className="text-xs text-purple-500 dark:text-purple-400">
+              (available for future purchases)
+            </span>
+          </div>
+        )}
       </div>
 
       {expanded && (
         <div className="p-6 border-t border-slate-100 dark:border-gray-700">
-          {/* Message Preview Modal */}
           {showMessagePreview && customer && generatedMessage && (
             <MessagePreview
               customer={customer}
@@ -1130,7 +1167,6 @@ const CreditManagement = ({
             />
           )}
 
-          {/* Action Buttons Row */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-6">
             <button
               onClick={sendStatementMessage}
@@ -1164,7 +1200,6 @@ const CreditManagement = ({
             </div>
           ) : (
             <>
-              {/* Outstanding Sales List */}
               <div className="mb-8">
                 <div className="flex justify-between items-center mb-4">
                   <h3 className="font-semibold text-black dark:text-white flex items-center gap-2">
@@ -1188,7 +1223,6 @@ const CreditManagement = ({
                     <p className="text-slate-700 dark:text-gray-300 font-medium">No outstanding sales</p>
                     <p className="text-sm text-slate-500 dark:text-gray-400 mt-1">This customer has no pending payments.</p>
                     
-                    {/* Send Thank You Button for Clean Account */}
                     <button
                       onClick={sendThankYouMessage}
                       className="mt-4 px-6 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg transition-all flex items-center gap-2 mx-auto"
@@ -1210,7 +1244,6 @@ const CreditManagement = ({
                       >
                         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                           <div className="flex-1">
-                            {/* Sale Header */}
                             <div className="flex items-center gap-3 mb-2 flex-wrap">
                               <span className="text-sm font-medium text-black dark:text-white">Sale #{sale.id}</span>
                               <span className={`px-2 py-1 rounded-full text-xs font-medium ${
@@ -1220,6 +1253,12 @@ const CreditManagement = ({
                               }`}>
                                 {sale.status}
                               </span>
+                              {sale.tradeins && sale.tradeins.length > 0 && (
+                                <span className="px-2 py-1 rounded-full text-xs font-medium bg-purple-100 dark:bg-purple-900 text-purple-700 dark:text-purple-300 flex items-center gap-1">
+                                  <Gift className="w-3 h-3" />
+                                  Trade-In · {sale.tradeins.length}
+                                </span>
+                              )}
                               {sale.dueDate && new Date(sale.dueDate) < new Date() && sale.status !== 'PAID' && (
                                 <span className="px-2 py-1 rounded-full text-xs font-medium bg-red-100 dark:bg-red-900 text-red-700 dark:text-red-300 flex items-center gap-1">
                                   <AlertCircle className="w-3 h-3" />
@@ -1228,7 +1267,6 @@ const CreditManagement = ({
                               )}
                             </div>
                             
-                            {/* Sale Amounts Grid */}
                             <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-sm">
                               <div>
                                 <p className="text-xs text-slate-500 dark:text-gray-400">Date</p>
@@ -1248,7 +1286,6 @@ const CreditManagement = ({
                               </div>
                             </div>
 
-                            {/* Payment Progress Bar */}
                             <div className="mt-3">
                               <div className="flex justify-between text-xs mb-1">
                                 <span className="text-slate-500 dark:text-gray-400">Payment Progress</span>
@@ -1264,7 +1301,6 @@ const CreditManagement = ({
                               </div>
                             </div>
 
-                            {/* Sale Items with Receipt Link */}
                             {sale.saleitem && sale.saleitem.length > 0 && (
                               <div className="mt-3 pt-3 border-t border-slate-200 dark:border-gray-600">
                                 <div className="flex justify-between items-center mb-2">
@@ -1291,9 +1327,43 @@ const CreditManagement = ({
                                 </div>
                               </div>
                             )}
+
+                            {sale.tradeins && sale.tradeins.length > 0 && (
+                              <div className="mt-3 pt-3 border-t border-purple-200 dark:border-purple-800">
+                                <div className="flex justify-between items-center mb-2">
+                                  <p className="text-xs font-medium text-purple-700 dark:text-purple-300 flex items-center gap-1.5">
+                                    <ShoppingCart className="w-3 h-3" />
+                                    Trade-In Items Received ({sale.tradeins.length})
+                                  </p>
+                                  <span className="text-xs font-bold text-purple-700 dark:text-purple-300">
+                                    Total: KSh {formatCurrency(tradeInSaleTotal(sale.tradeins))}
+                                  </span>
+                                </div>
+                                <div className="space-y-1">
+                                  {sale.tradeins.map((t) => (
+                                    <div
+                                      key={t.id}
+                                      className="flex justify-between items-start text-xs bg-purple-50 dark:bg-purple-900/20 rounded-md px-2 py-1.5"
+                                    >
+                                      <div className="flex-1 min-w-0 pr-2">
+                                        <span className="font-medium text-purple-800 dark:text-purple-200 block truncate">
+                                          {t.itemName}
+                                        </span>
+                                        <span className="text-[10px] text-purple-600 dark:text-purple-400">
+                                          {t.condition} · {t.quantity} × KSh {formatCurrency(Number(t.agreedValue))}
+                                          {t.category ? ` · ${t.category}` : ""}
+                                        </span>
+                                      </div>
+                                      <span className="font-bold text-purple-800 dark:text-purple-200 flex-shrink-0">
+                                        KSh {formatCurrency(tradeInLineTotal(t))}
+                                      </span>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
                           </div>
 
-                          {/* Processing Indicator */}
                           {processingSaleId === sale.id && (
                             <div className="flex items-center gap-2 text-xs text-blue-600 dark:text-blue-400 bg-blue-100 dark:bg-blue-900/50 px-3 py-2 rounded-lg">
                               <div className="animate-spin rounded-full h-3 w-3 border-2 border-blue-600 border-t-transparent"></div>
@@ -1307,13 +1377,11 @@ const CreditManagement = ({
                 )}
               </div>
 
-              {/* Payment Form */}
               {outstandingSales.length > 0 && !showMessagePreview && (
                 <div className="border-t border-slate-200 dark:border-gray-700 pt-6">
                   <h3 className="font-semibold text-black dark:text-white mb-4">Process Payment</h3>
                   
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                    {/* Left Column - Payment Inputs */}
                     <div className="space-y-4">
                       <div>
                         <label className="block text-sm font-medium text-black dark:text-white mb-2">
@@ -1363,7 +1431,6 @@ const CreditManagement = ({
                       </div>
                     </div>
 
-                    {/* Right Column - Allocation Preview */}
                     <div>
                       {allocationPreview.length > 0 ? (
                         <div className="bg-blue-50 dark:bg-blue-900/20 rounded-lg p-4 border border-blue-100 dark:border-blue-800 h-full">
@@ -1386,7 +1453,6 @@ const CreditManagement = ({
                                   {alloc.saleDate}
                                 </div>
                                 
-                                {/* Items in this sale */}
                                 {alloc.items && alloc.items.length > 0 && (
                                   <div className="mb-2 text-xs">
                                     {alloc.items.slice(0, 2).map((item) => (
@@ -1402,7 +1468,6 @@ const CreditManagement = ({
                                   </div>
                                 )}
                                 
-                                {/* Payment Progress Bar */}
                                 <div className="flex items-center gap-2">
                                   <div className="flex-1 h-1.5 bg-blue-200 dark:bg-blue-700 rounded-full overflow-hidden">
                                     <div 
@@ -1426,7 +1491,6 @@ const CreditManagement = ({
                               </div>
                             ))}
                             
-                            {/* Excess Payment Notification */}
                             {parseFloat(paymentAmount) > getTotalOutstanding() && (
                               <div className="mt-4 pt-3 border-t border-blue-200 dark:border-blue-700">
                                 <p className="text-sm text-blue-700 dark:text-blue-300 flex items-center gap-1">
@@ -1448,7 +1512,6 @@ const CreditManagement = ({
                     </div>
                   </div>
 
-                  {/* Process Payment Button */}
                   <button
                     onClick={processPayment}
                     disabled={allocating || !paymentAmount || parseFloat(paymentAmount) <= 0}
@@ -1481,7 +1544,7 @@ const CreditManagement = ({
 };
 
 // ----------------------------------------------------------------------------
-// PaymentHistory Component - Display all past payments for a customer
+// PaymentHistory Component
 // ----------------------------------------------------------------------------
 const PaymentHistory = ({ customerId }: { customerId: number | null }) => {
   const [payments, setPayments] = useState<any[]>([]);
@@ -1505,14 +1568,14 @@ const PaymentHistory = ({ customerId }: { customerId: number | null }) => {
       
       const sales = Array.isArray(data) ? data : (data.data || []);
       
-      // Extract all payments from all sales
       const allPayments = sales.flatMap((sale: any) => 
         (sale.payment || []).map((p: any) => ({
           ...p,
           saleId: sale.id,
           saleDate: sale.date,
           saleAmount: sale.amount,
-          receiptLink: generateReceiptLink(sale.id)
+          receiptLink: generateReceiptLink(sale.id),
+          tradeins: Array.isArray(sale.tradeins) ? sale.tradeins : [],
         }))
       ).sort((a: any, b: any) => 
         new Date(b.paidAt).getTime() - new Date(a.paidAt).getTime()
@@ -1569,28 +1632,33 @@ const PaymentHistory = ({ customerId }: { customerId: number | null }) => {
                 <div key={payment.id} className="bg-slate-50 dark:bg-gray-700 rounded-lg p-4 border border-slate-200 dark:border-gray-600 hover:border-slate-300 dark:hover:border-gray-500 transition-colors">
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                     <div className="flex items-start gap-3">
-                      {/* Payment Status Icon */}
                       <div className={`p-2 rounded-lg ${
+                        payment.method === 'TRADE_IN' ? 'bg-purple-100 dark:bg-purple-900' :
                         payment.status === 'CLEARED' ? 'bg-green-100 dark:bg-green-900' : 
                         payment.status === 'PENDING' ? 'bg-yellow-100 dark:bg-yellow-900' : 'bg-red-100 dark:bg-red-900'
                       }`}>
-                        <DollarSign className={`w-4 h-4 ${
-                          payment.status === 'CLEARED' ? 'text-green-600 dark:text-green-400' : 
-                          payment.status === 'PENDING' ? 'text-yellow-600 dark:text-yellow-400' : 'text-red-600 dark:text-red-400'
-                        }`} />
+                        {payment.method === 'TRADE_IN' ? (
+                          <Gift className="w-4 h-4 text-purple-600 dark:text-purple-400" />
+                        ) : (
+                          <DollarSign className={`w-4 h-4 ${
+                            payment.status === 'CLEARED' ? 'text-green-600 dark:text-green-400' : 
+                            payment.status === 'PENDING' ? 'text-yellow-600 dark:text-yellow-400' : 'text-red-600 dark:text-red-400'
+                          }`} />
+                        )}
                       </div>
                       <div className="flex-1">
                         <div className="flex items-center gap-2 mb-1 flex-wrap">
                           <span className="text-sm font-medium text-black dark:text-white">Sale #{payment.saleId}</span>
                           <span className={`text-xs px-2 py-0.5 rounded-full ${
+                            payment.method === 'TRADE_IN' ? 'bg-purple-100 dark:bg-purple-900 text-purple-700 dark:text-purple-300' :
                             payment.status === 'CLEARED' ? 'bg-green-100 dark:bg-green-900 text-green-700 dark:text-green-300' : 
                             payment.status === 'PENDING' ? 'bg-yellow-100 dark:bg-yellow-900 text-yellow-700 dark:text-yellow-300' : 'bg-red-100 dark:bg-red-900 text-red-700 dark:text-red-300'
                           }`}>
-                            {payment.status}
+                            {payment.method === 'TRADE_IN' ? 'TRADE-IN' : payment.status}
                           </span>
                         </div>
                         <p className="text-xs text-slate-500 dark:text-gray-400">
-                          {formatDateTime(payment.paidAt)} • {payment.method}
+                          {formatDateTime(payment.paidAt)} • {payment.method === 'TRADE_IN' ? 'Trade-In' : payment.method}
                         </p>
                         {payment.referenceId && (
                           <p className="text-xs text-slate-500 dark:text-gray-400 mt-1">Ref: {payment.referenceId}</p>
@@ -1598,11 +1666,33 @@ const PaymentHistory = ({ customerId }: { customerId: number | null }) => {
                         {payment.note && (
                           <p className="text-xs text-slate-500 dark:text-gray-400 mt-1">Note: {payment.note}</p>
                         )}
+
+                        {payment.method === "TRADE_IN" && payment.tradeins && payment.tradeins.length > 0 && (
+                          <div className="mt-2 pt-2 border-t border-purple-200 dark:border-purple-800">
+                            <p className="text-[10px] font-medium text-purple-700 dark:text-purple-300 mb-1">
+                              Trade-In Items ({payment.tradeins.length}):
+                            </p>
+                            <div className="space-y-0.5">
+                              {payment.tradeins.map((t: any) => (
+                                <div key={t.id} className="flex justify-between text-[10px] text-purple-700 dark:text-purple-300">
+                                  <span className="truncate pr-2">
+                                    {t.itemName} · {t.quantity} × KSh {formatCurrency(Number(t.agreedValue))}
+                                  </span>
+                                  <span className="font-medium flex-shrink-0">
+                                    KSh {formatCurrency(tradeInLineTotal(t))}
+                                  </span>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
                       </div>
                     </div>
                     <div className="flex items-center gap-4">
                       <div className="text-right">
-                        <p className="text-lg font-bold text-green-600 dark:text-green-400">
+                        <p className={`text-lg font-bold ${
+                          payment.method === 'TRADE_IN' ? 'text-purple-600 dark:text-purple-400' : 'text-green-600 dark:text-green-400'
+                        }`}>
                           KSh {formatCurrency(payment.amount)}
                         </p>
                         <p className="text-xs text-slate-500 dark:text-gray-400">
@@ -1629,8 +1719,7 @@ const PaymentHistory = ({ customerId }: { customerId: number | null }) => {
 };
 
 // ----------------------------------------------------------------------------
-// CustomerSelector Component - Dropdown to select a customer
-// Also supports importing from phone contacts
+// CustomerSelector Component
 // ----------------------------------------------------------------------------
 const CustomerSelector = ({ 
   customers, 
@@ -1666,9 +1755,6 @@ const CustomerSelector = ({
     }
   };
 
-  /**
-   * Use browser's Contact Picker API to import from phone contacts
-   */
   const handlePickContact = async () => {
     try {
       if (!('contacts' in navigator) || !('ContactsManager' in window)) {
@@ -1679,7 +1765,7 @@ const CustomerSelector = ({
       const props = ['name', 'tel', 'email'];
       const opts = { multiple: false };
 
-      // @ts-ignore - Contact Picker API
+      // @ts-ignore
       const contacts = await navigator.contacts.select(props, opts);
       
       if (contacts && contacts.length > 0) {
@@ -1701,7 +1787,6 @@ const CustomerSelector = ({
         <h2 className="text-lg font-semibold text-black dark:text-white mb-4">Select Customer</h2>
         
         <div className="space-y-4">
-          {/* Search input */}
           <div className="relative">
             <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-slate-400 w-5 h-5" />
             <input
@@ -1713,7 +1798,6 @@ const CustomerSelector = ({
             />
           </div>
 
-          {/* Customer select dropdown */}
           <select
             value={selectedId}
             onChange={handleSelect}
@@ -1755,7 +1839,7 @@ const CustomerSelector = ({
 };
 
 // ----------------------------------------------------------------------------
-// AddCustomerForm Component - Create new customers with duplicate prevention
+// AddCustomerForm Component
 // ----------------------------------------------------------------------------
 const AddCustomerForm = ({ 
   onAddCustomer,
@@ -1771,7 +1855,6 @@ const AddCustomerForm = ({
   const [duplicateError, setDuplicateError] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<{ phone?: string; email?: string }>({});
 
-  // Populate form when importing a contact
   useEffect(() => {
     if (initialData) {
       setName(initialData.name || "");
@@ -1780,20 +1863,18 @@ const AddCustomerForm = ({
     }
   }, [initialData]);
 
-  // Real-time validation functions
   const validatePhone = (value: string): boolean => {
-    if (!value) return true; // Optional field
+    if (!value) return true;
     const normalized = normalizePhoneNumber(value);
-    return normalized.length === 12; // 254XXXXXXXXX format
+    return normalized.length === 12;
   };
 
   const validateEmail = (value: string): boolean => {
-    if (!value) return true; // Optional field
+    if (!value) return true;
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     return emailRegex.test(value);
   };
 
-  // Input handlers with real-time validation
   const handlePhoneChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const value = e.target.value;
     setPhone(value);
@@ -1821,9 +1902,6 @@ const AddCustomerForm = ({
     setDuplicateError(null);
   };
 
-  /**
-   * Submit new customer to API with duplicate checking
-   */
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     
@@ -1861,7 +1939,6 @@ const AddCustomerForm = ({
       const response = await res.json();
 
       if (!res.ok) {
-        // Check for duplicate error from API
         if (response.error && (
           response.error.includes("duplicate") || 
           response.error.includes("already exists") ||
@@ -1877,7 +1954,6 @@ const AddCustomerForm = ({
       const newCustomer: Customer = response.data || response;
       onAddCustomer(newCustomer);
 
-      // Reset form
       setName("");
       setPhone("");
       setEmail("");
@@ -1897,7 +1973,6 @@ const AddCustomerForm = ({
       <div className="p-6">
         <h2 className="text-lg font-semibold text-black dark:text-white mb-4">Add New Customer</h2>
         
-        {/* Duplicate Error Display */}
         {duplicateError && (
           <div className="mb-4 p-3 bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 rounded-lg flex items-start gap-2">
             <AlertTriangle className="w-5 h-5 text-red-600 dark:text-red-400 flex-shrink-0 mt-0.5" />
@@ -1911,7 +1986,6 @@ const AddCustomerForm = ({
         )}
         
         <div className="space-y-4">
-          {/* Name Field */}
           <div>
             <label className="block text-sm font-medium text-black dark:text-white mb-2">
               Customer Name <span className="text-red-500">*</span>
@@ -1928,7 +2002,6 @@ const AddCustomerForm = ({
             />
           </div>
 
-          {/* Phone Field */}
           <div>
             <label className="text-sm font-medium text-black dark:text-white mb-2 flex items-center gap-2">
               <Phone className="w-4 h-4" /> Phone (Optional)
@@ -1950,7 +2023,6 @@ const AddCustomerForm = ({
             </p>
           </div>
 
-          {/* Email Field */}
           <div>
             <label className="text-sm font-medium text-black dark:text-white mb-2 flex items-center gap-2">
               <Mail className="w-4 h-4" /> Email (Optional)
@@ -1969,7 +2041,6 @@ const AddCustomerForm = ({
             )}
           </div>
 
-          {/* Submit Button */}
           <button
             onClick={handleSubmit}
             disabled={isSubmitting}
@@ -1993,7 +2064,7 @@ const AddCustomerForm = ({
 };
 
 // ----------------------------------------------------------------------------
-// CustomerList Component - Display customers in a grid with edit/delete options
+// CustomerList Component
 // ----------------------------------------------------------------------------
 const CustomerList = ({
   customers,
@@ -2073,7 +2144,6 @@ const CustomerList = ({
 
   return (
     <div className="space-y-4">
-      {/* Search Input */}
       <div className="relative">
         <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-slate-400 w-5 h-5" />
         <input
@@ -2085,14 +2155,12 @@ const CustomerList = ({
         />
       </div>
 
-      {/* Customer Count */}
       <div className="flex items-center justify-between">
         <p className="text-sm text-slate-500 dark:text-gray-400">
           Showing {filteredCustomers.length} of {customers.length} customers
         </p>
       </div>
 
-      {/* Customer Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         {filteredCustomers.map((customer) => (
           <div
@@ -2100,7 +2168,6 @@ const CustomerList = ({
             className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-slate-100 dark:border-gray-700 overflow-hidden hover:shadow-md transition-all duration-200"
           >
             {editingId === customer.id ? (
-              // Edit Mode
               <div className="p-4 space-y-3">
                 <input
                   type="text"
@@ -2139,7 +2206,6 @@ const CustomerList = ({
                 </div>
               </div>
             ) : (
-              // View Mode
               <>
                 <div 
                   className="p-4 cursor-pointer"
@@ -2183,7 +2249,6 @@ const CustomerList = ({
                     </div>
                   </div>
 
-                  {/* Sales Stats */}
                   {customer.totalSales !== undefined && (
                     <div className="mt-3 pt-3 border-t border-slate-100 dark:border-gray-700">
                       <div className="flex justify-between items-center text-sm">
@@ -2195,7 +2260,7 @@ const CustomerList = ({
                       {customer.totalCredit !== undefined && customer.totalCredit > 0 && (
                         <div className="flex justify-between items-center text-sm mt-1">
                           <span className="text-slate-500 dark:text-gray-400">Credit Balance</span>
-                          <span className="font-medium text-red-600 dark:text-red-400">
+                          <span className="font-medium text-purple-600 dark:text-purple-400">
                             KSh {formatCurrency(customer.totalCredit)}
                           </span>
                         </div>
@@ -2204,7 +2269,6 @@ const CustomerList = ({
                   )}
                 </div>
 
-                {/* Footer - Select Button */}
                 <div className="bg-slate-50 dark:bg-gray-700 px-4 py-2 border-t border-slate-100 dark:border-gray-600 flex justify-between items-center">
                   <span className="text-xs text-slate-500 dark:text-gray-400">
                     ID: #{customer.id}
@@ -2222,7 +2286,6 @@ const CustomerList = ({
         ))}
       </div>
 
-      {/* No Results */}
       {filteredCustomers.length === 0 && searchQuery && (
         <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-slate-100 dark:border-gray-700 p-8 text-center">
           <Search className="w-12 h-12 text-slate-300 dark:text-gray-600 mx-auto mb-3" />
@@ -2237,16 +2300,13 @@ const CustomerList = ({
 };
 
 // ----------------------------------------------------------------------------
-// CustomerReport Component - Generate and download outstanding reports
+// CustomerReport Component
 // ----------------------------------------------------------------------------
 const CustomerReport = ({ customer }: { customer: Customer | null }) => {
   const [loading, setLoading] = useState(false);
   const [reportData, setReportData] = useState<any>(null);
   const [showPreview, setShowPreview] = useState(false);
 
-  /**
-   * Generate outstanding sales report for selected customer
-   */
   const generateReport = async () => {
     if (!customer) {
       alert('Please select a customer first');
@@ -2264,7 +2324,6 @@ const CustomerReport = ({ customer }: { customer: Customer | null }) => {
       
       const sales = Array.isArray(salesData) ? salesData : (salesData.data || []);
       
-      // Process sales data for report
       const processedSales = sales.map((sale: any) => {
         const totalPaid = sale.payment?.reduce((sum: number, p: any) => 
           p.status === "CLEARED" ? sum + p.amount : sum, 0) || 0;
@@ -2283,11 +2342,11 @@ const CustomerReport = ({ customer }: { customer: Customer | null }) => {
             price: item.price,
             total: item.price * item.quantity
           })),
+          tradeins: Array.isArray(sale.tradeins) ? sale.tradeins : [],
           receiptLink: generateReceiptLink(sale.id)
         };
       });
 
-      // Filter only outstanding sales
       const outstandingSales = processedSales.filter((s: any) => s.status !== 'PAID');
       const totalOutstanding = outstandingSales.reduce((sum: number, s: any) => sum + s.remainingBalance, 0);
       const totalPurchases = outstandingSales.reduce((sum: number, s: any) => sum + s.amount, 0);
@@ -2319,9 +2378,6 @@ const CustomerReport = ({ customer }: { customer: Customer | null }) => {
     }
   };
 
-  /**
-   * Download report as CSV file
-   */
   const downloadCSV = () => {
     if (!reportData || !customer) return;
     
@@ -2332,19 +2388,29 @@ const CustomerReport = ({ customer }: { customer: Customer | null }) => {
       return;
     }
 
-    let csvContent = "Sale ID,Date,Amount,Paid Amount,Remaining Balance,Status,Due Date,Items,Receipt Link\n";
+    let csvContent = "Sale ID,Date,Amount,Paid Amount,Remaining Balance,Status,Due Date,Items,Trade-In Items,Trade-In Total,Receipt Link\n";
     
     salesToExport.forEach((sale: any) => {
       const itemsList = sale.items?.map((item: any) => 
         `${item.name} x${item.quantity} @ KSh ${item.price}`
       ).join('; ') || 'No items';
+
+      const tradeInList = sale.tradeins && sale.tradeins.length > 0
+        ? sale.tradeins.map((t: any) => `${t.itemName} x${t.quantity} @ KSh ${t.agreedValue} (${t.condition})`).join('; ')
+        : 'None';
+      const tradeInTotal = sale.tradeins && sale.tradeins.length > 0
+        ? sale.tradeins.reduce((s: number, t: any) => s + Number(t.agreedValue) * Number(t.quantity), 0)
+        : 0;
       
-      csvContent += `${sale.id},${new Date(sale.date).toLocaleDateString()},${sale.amount},${sale.paidAmount},${sale.remainingBalance},${sale.status},${sale.dueDate ? new Date(sale.dueDate).toLocaleDateString() : 'N/A'},"${itemsList}",${sale.receiptLink}\n`;
+      csvContent += `${sale.id},${new Date(sale.date).toLocaleDateString()},${sale.amount},${sale.paidAmount},${sale.remainingBalance},${sale.status},${sale.dueDate ? new Date(sale.dueDate).toLocaleDateString() : 'N/A'},"${itemsList}","${tradeInList}",${tradeInTotal},${sale.receiptLink}\n`;
     });
 
     csvContent += "\nOUTSTANDING SUMMARY\n";
     csvContent += `Total Outstanding,${reportData.totalOutstanding}\n`;
     csvContent += `Number of Outstanding Sales,${reportData.numberOfOutstanding}\n`;
+    if (customer.totalCredit && customer.totalCredit > 0) {
+      csvContent += `Customer Credit Balance,${customer.totalCredit}\n`;
+    }
     csvContent += `Generated on,${new Date(reportData.generatedAt).toLocaleString()}\n`;
 
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
@@ -2435,10 +2501,8 @@ const CustomerReport = ({ customer }: { customer: Customer | null }) => {
 
 // ============================================================================
 // MAIN COMPONENT: CustomerPage
-// This is the main exported component that orchestrates all customer management
 // ============================================================================
 const CustomerPage = () => {
-  // State Management
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
   const [importedContact, setImportedContact] = useState<{ name: string; phone: string; email: string } | null>(null);
@@ -2447,7 +2511,6 @@ const CustomerPage = () => {
   const [refreshKey, setRefreshKey] = useState(0);
   const [globalSearchQuery, setGlobalSearchQuery] = useState("");
 
-  // Fetch customers on component mount and when refreshKey changes
   useEffect(() => {
     const fetchCustomers = async () => {
       try {
@@ -2476,7 +2539,6 @@ const CustomerPage = () => {
     fetchCustomers();
   }, [refreshKey]);
 
-  // Handlers
   const handleAddCustomer = (customer: Customer) => {
     setCustomers(prev => [customer, ...prev]);
     setImportedContact(null);
@@ -2514,7 +2576,6 @@ const CustomerPage = () => {
   const handlePaymentComplete = () => {
     setRefreshKey(prev => prev + 1);
     
-    // Refresh selected customer data
     if (selectedCustomer) {
       fetch(`/api/customer?id=${selectedCustomer.id}`)
         .then(res => res.json())
@@ -2531,7 +2592,6 @@ const CustomerPage = () => {
     }
   };
 
-  // Loading State
   if (loading) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100 dark:from-gray-900 dark:to-gray-800 flex items-center justify-center">
@@ -2543,7 +2603,6 @@ const CustomerPage = () => {
     );
   }
 
-  // Error State
   if (error) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100 dark:from-gray-900 dark:to-gray-800 flex items-center justify-center p-4">
@@ -2562,25 +2621,20 @@ const CustomerPage = () => {
     );
   }
 
-  // Main Render
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100 dark:from-gray-900 dark:to-gray-800">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {/* Page Header */}
         <div className="mb-8">
           <h1 className="text-3xl font-bold text-black dark:text-white">Customer Management</h1>
           <p className="text-slate-500 dark:text-gray-400 mt-1">Manage customers, track credit, process payments, and send statements</p>
         </div>
 
-        {/* Search Bar */}
         <SearchBar 
           onSearch={setGlobalSearchQuery} 
           onFilter={() => {}}
         />
 
-        {/* Two-Column Layout */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* Left Column - Customer Selection & Add Form */}
           <div className="lg:col-span-1 space-y-6">
             <CustomerSelector 
               customers={customers} 
@@ -2588,7 +2642,6 @@ const CustomerPage = () => {
               onImportFromPhone={handleImportFromPhone}
             />
             
-            {/* Import Success Message */}
             {importedContact && (
               <div className="bg-blue-50 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-800 text-blue-700 dark:text-blue-300 p-4 rounded-lg">
                 <p className="font-medium mb-1">Contact imported!</p>
@@ -2602,11 +2655,9 @@ const CustomerPage = () => {
             />
           </div>
 
-          {/* Right Column - Customer Details & Actions */}
           <div className="lg:col-span-2 space-y-6">
             {selectedCustomer && (
               <>
-                {/* Selected Customer Banner */}
                 <div className="bg-gradient-to-r from-black to-slate-800 dark:from-gray-800 dark:to-gray-900 text-white rounded-xl p-6">
                   <div className="flex items-start justify-between">
                     <div>
@@ -2630,25 +2681,29 @@ const CustomerPage = () => {
                     <div className="text-right">
                       <p className="text-sm opacity-75">Customer ID</p>
                       <p className="text-2xl font-mono">#{selectedCustomer.id}</p>
+                      {Number(selectedCustomer.totalCredit || 0) > 0 && (
+                        <div className="mt-2 inline-flex items-center gap-1 bg-purple-500/20 border border-purple-300/30 rounded-full px-2.5 py-1">
+                          <Wallet className="w-3 h-3" />
+                          <span className="text-xs font-medium">
+                            Credit: KSh {formatCurrency(Number(selectedCustomer.totalCredit))}
+                          </span>
+                        </div>
+                      )}
                     </div>
                   </div>
                 </div>
 
-                {/* Credit Management Component */}
                 <CreditManagement 
                   customer={selectedCustomer} 
                   onPaymentComplete={handlePaymentComplete}
                 />
 
-                {/* Payment History Component */}
                 <PaymentHistory customerId={selectedCustomer.id} />
 
-                {/* Customer Report Component */}
                 <CustomerReport customer={selectedCustomer} />
               </>
             )}
 
-            {/* Customer List Component */}
             <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-slate-100 dark:border-gray-700 overflow-hidden">
               <div className="p-6">
                 <h2 className="text-lg font-semibold text-black dark:text-white mb-4">All Customers</h2>

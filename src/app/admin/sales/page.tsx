@@ -6,7 +6,7 @@ import {
   Calculator, Save, ChevronDown, ChevronUp, Filter, Calendar, Search, XCircle, 
   User, DollarSign, Banknote, Smartphone, Landmark, CreditCard as CardIcon, 
   Archive, RotateCcw, Info, History, TrendingUp, TrendingDown, Clock as ClockIcon, 
-  Users, Receipt, FileSpreadsheet, Moon, Sun, Menu, UserCheck 
+  Users, Receipt, FileSpreadsheet, Moon, Sun, Menu, UserCheck, Gift
 } from "lucide-react";
 import { auth } from "@/lib/firebase";
 import { onAuthStateChanged } from "firebase/auth";
@@ -38,7 +38,7 @@ interface SaleItem {
 interface Payment {
   id?: number;
   amount: number;
-  method: "CASH" | "MPESA" | "BANK" | "CHECK" | "CARD" | "CREDIT";
+  method: "CASH" | "MPESA" | "BANK" | "CHECK" | "CARD" | "CREDIT" | "TRADE_IN";
   date: string;
   referenceId?: string | null;
   checkDepositDate?: string | null;
@@ -47,10 +47,41 @@ interface Payment {
   bankName?: string | null;
 }
 
+// Trade-In item — one line item the customer is giving us
+interface TradeInItem {
+  id?: number;
+  itemName: string;
+  description?: string;
+  category?: string;
+  condition: "EXCELLENT" | "GOOD" | "FAIR" | "POOR";
+  quantity: number;
+  unitValue: number;
+  totalValue: number;
+}
+
+// Trade-In row as returned by the API (one row per item in DB)
+interface TradeInRow {
+  id: number;
+  saleId: number;
+  paymentId?: number | null;
+  customerId: number;
+  itemName: string;
+  description?: string | null;
+  category?: string | null;
+  quantity: number;
+  estimatedValue: number;
+  agreedValue: number;
+  condition: string;
+  status: string;
+  notes?: string | null;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
 interface NewPayment {
   id?: number;
   amount: string;
-  method: "CASH" | "MPESA" | "BANK" | "CHECK" | "CARD" | "CREDIT";
+  method: "CASH" | "MPESA" | "BANK" | "CHECK" | "CARD" | "CREDIT" | "TRADE_IN";
   referenceId?: string;
   checkDepositDate?: string;
   checkNumber?: string;
@@ -59,6 +90,7 @@ interface NewPayment {
   checkDate?: string;
   isVerified?: boolean;
   status?: "PENDING" | "CLEARED" | "BOUNCED";
+  tradeInItems?: TradeInItem[];
 }
 
 interface Staff {
@@ -78,7 +110,7 @@ interface Sale {
   customer: Customer;
   payments: Payment[];
   remainingAmount: number;
-  paymentMethod?: "CASH" | "MPESA" | "BANK" | "CHECK" | "CARD" | "CREDIT" | "MULTIPLE";
+  paymentMethod?: "CASH" | "MPESA" | "BANK" | "CHECK" | "CARD" | "CREDIT" | "TRADE_IN" | "MULTIPLE";
   checkDepositDate?: string | null;
   createdBy?: string;
   updatedBy?: string;
@@ -88,6 +120,7 @@ interface Sale {
   deletedAt?: string;
   assignedStaff?: Staff | null;
   assignedStaffId?: number | null;
+  tradeins?: TradeInRow[];
 }
 
 interface NewSaleItem {
@@ -158,6 +191,14 @@ interface RecentlyClearedDebt {
   paymentMethod: string;
 }
 
+// ==================== TRADE-IN HELPERS ====================
+const tradeInUnitValue = (t: any): number => Number(t?.agreedValue ?? t?.unitValue ?? 0);
+const tradeInLineTotal = (t: any): number => (Number(t?.quantity) || 1) * tradeInUnitValue(t);
+const tradeInSaleTotal = (tradeins: any[] | undefined): number => {
+  if (!Array.isArray(tradeins)) return 0;
+  return tradeins.reduce((s, t) => s + tradeInLineTotal(t), 0);
+};
+
 // ==================== THEME CONTEXT ====================
 const ThemeContext = React.createContext({ theme: 'light', toggleTheme: () => {} });
 function useTheme() { return React.useContext(ThemeContext); }
@@ -165,7 +206,9 @@ function useTheme() { return React.useContext(ThemeContext); }
 // ==================== MOBILE SALE CARD ====================
 const MobileSaleCard = ({ sale, expandedSaleId, setExpandedSaleId, formatCurrency, formatDate, formatDateTime, getUserDisplayName, paymentMethods, isRecentlyUpdated, isSaleModified, handleViewAuditLog, handleEditSale, showDeleteConfirmationWithReason, loading }: any) => {
   const isExpanded = expandedSaleId === sale.id;
-  
+  const tradeInCount = Array.isArray(sale.tradeins) ? sale.tradeins.length : 0;
+  const tradeInTotal = tradeInSaleTotal(sale.tradeins);
+
   const statusColors: Record<string, string> = {
     PAID: "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300",
     PARTIAL: "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300",
@@ -214,6 +257,12 @@ const MobileSaleCard = ({ sale, expandedSaleId, setExpandedSaleId, formatCurrenc
               {sale.assignedStaff.name.split(' ')[0]}
             </span>
           )}
+          {tradeInCount > 0 && (
+            <span className="px-1.5 py-0.5 rounded-full text-[10px] bg-purple-100 dark:bg-purple-900/40 text-purple-700 dark:text-purple-300 flex items-center gap-1">
+              <Gift size={9} />
+              Trade-In · {tradeInCount}
+            </span>
+          )}
           {isRecentlyUpdated(sale) && isSaleModified(sale) && (
             <span className="px-1.5 py-0.5 rounded-full text-[10px] bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300">
               Updated
@@ -225,7 +274,7 @@ const MobileSaleCard = ({ sale, expandedSaleId, setExpandedSaleId, formatCurrenc
             return (
               <span key={i} className={`px-1.5 py-0.5 rounded-full text-[10px] flex items-center gap-1 ${m?.color || "bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300"}`}>
                 <Icon size={9} />
-                {p.method}
+                {p.method === "TRADE_IN" ? "Trade-In" : p.method}
               </span>
             );
           })}
@@ -319,12 +368,62 @@ const MobileSaleCard = ({ sale, expandedSaleId, setExpandedSaleId, formatCurrenc
                     return (
                       <div key={i} className={`flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-medium ${m?.color || "bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-300"}`}>
                         <Icon size={9} />
-                        <span>{p.method}</span>
+                        <span>{p.method === "TRADE_IN" ? "Trade-In" : p.method}</span>
                         {p.amount > 0 && <span className="opacity-80">· Ksh {formatCurrency(p.amount)}</span>}
                         {p.referenceId && <span className="text-[8px] opacity-70">({p.referenceId})</span>}
                       </div>
                     );
                   })}
+                </div>
+              </div>
+            )}
+
+            {/* Trade-In Items */}
+            {tradeInCount > 0 && (
+              <div>
+                <p className="text-[10px] font-semibold text-purple-600 dark:text-purple-400 uppercase tracking-wide mb-2 flex items-center gap-1">
+                  <Gift size={10} /> Trade-In Items ({tradeInCount})
+                </p>
+                <div className="space-y-1">
+                  {sale.tradeins.map((t: any, i: number) => {
+                    const qty = Number(t.quantity) || 1;
+                    const unit = tradeInUnitValue(t);
+                    const lineTotal = tradeInLineTotal(t);
+                    return (
+                      <div key={t.id ?? i} className="bg-purple-50 dark:bg-purple-900/20 border border-purple-100 dark:border-purple-800 rounded-lg px-2.5 py-2">
+                        <div className="flex justify-between items-start gap-2">
+                          <div className="flex-1 min-w-0">
+                            <p className="text-[11px] font-medium text-purple-800 dark:text-purple-200 truncate">
+                              {t.itemName || "Trade-In Item"}
+                            </p>
+                            <p className="text-[9px] text-purple-600 dark:text-purple-400 mt-0.5">
+                              {t.category ? `${t.category} · ` : ""}
+                              {t.condition ? <span className="font-semibold">{t.condition}</span> : null}
+                              {t.condition ? " · " : ""}
+                              {qty} × Ksh {formatCurrency(unit)}
+                            </p>
+                            {t.description && (
+                              <p className="text-[9px] text-purple-500 dark:text-purple-400 mt-0.5 italic truncate">
+                                {t.description}
+                              </p>
+                            )}
+                          </div>
+                          <div className="text-right flex-shrink-0">
+                            <p className="text-[11px] font-bold text-purple-800 dark:text-purple-200">
+                              Ksh {formatCurrency(lineTotal)}
+                            </p>
+                            {t.status && (
+                              <span className="text-[8px] text-purple-500 dark:text-purple-400">{t.status}</span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                  <div className="flex justify-between text-[10px] font-bold text-purple-800 dark:text-purple-200 bg-purple-100 dark:bg-purple-900/40 rounded-lg px-2.5 py-1.5 mt-1">
+                    <span>Trade-In Total</span>
+                    <span>Ksh {formatCurrency(tradeInTotal)}</span>
+                  </div>
                 </div>
               </div>
             )}
@@ -812,13 +911,17 @@ function AccountingPage({ sales, getUserDisplayName }: { sales: Sale[], getUserD
 function EnhancedAuditLogModal({ isOpen, onClose, auditLogs, loading, sale, getUserDisplayName, formatDateTime }: { isOpen: boolean; onClose: () => void; auditLogs: AuditLog[]; loading: boolean; sale: Sale | null; getUserDisplayName: (email: string | null | undefined) => { name: string, email: string }; formatDateTime: (date: string | null | undefined) => string; }) {
   if (!isOpen || !sale) return null;
 
+  const formatCurrency = (amount: number): string => {
+    return new Intl.NumberFormat('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(amount);
+  };
+
   const getActionColor = (action: string) => {
     switch (action) {
-      case "CREATE": return "bg-green-100 text-green-800 border-green-200 dark:bg-green-900/30 dark:text-green-300";
-      case "UPDATE": return "bg-blue-100 text-blue-800 border-blue-200 dark:bg-blue-900/30 dark:text-blue-300";
-      case "DELETE": return "bg-red-100 text-red-800 border-red-200 dark:bg-red-900/30 dark:text-red-300";
-      case "RESTORE": return "bg-purple-100 text-purple-800 border-purple-200 dark:bg-purple-900/30 dark:text-purple-300";
-      default: return "bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300";
+      case "CREATE": return "bg-green-100 text-green-800 border-green-200 dark:bg-green-900/30 dark:text-green-300 dark:border-green-800";
+      case "UPDATE": return "bg-blue-100 text-blue-800 border-blue-200 dark:bg-blue-900/30 dark:text-blue-300 dark:border-blue-800";
+      case "DELETE": return "bg-red-100 text-red-800 border-red-200 dark:bg-red-900/30 dark:text-red-300 dark:border-red-800";
+      case "RESTORE": return "bg-purple-100 text-purple-800 border-purple-200 dark:bg-purple-900/30 dark:text-purple-300 dark:border-purple-800";
+      default: return "bg-gray-100 text-gray-800 border-gray-200 dark:bg-gray-700 dark:text-gray-300 dark:border-gray-600";
     }
   };
 
@@ -832,34 +935,290 @@ function EnhancedAuditLogModal({ isOpen, onClose, auditLogs, loading, sale, getU
     }
   };
 
+  const getActionLabel = (action: string) => {
+    switch (action) {
+      case "CREATE": return "Created";
+      case "UPDATE": return "Updated";
+      case "DELETE": return "Deleted";
+      case "RESTORE": return "Restored";
+      default: return action;
+    }
+  };
+
+  // Try to parse a value that might be JSON, a number, or a plain string
+  const renderValue = (value: any): { text: string; isNumeric: boolean } => {
+    if (value === null || value === undefined || value === "") {
+      return { text: "—", isNumeric: false };
+    }
+    const str = String(value);
+    const num = Number(str);
+    if (!isNaN(num) && str.trim() !== "") {
+      return { text: `Ksh ${formatCurrency(num)}`, isNumeric: true };
+    }
+    return { text: str, isNumeric: false };
+  };
+
+  // Humanise field names: "paymentMethod" -> "Payment Method"
+  const humanizeField = (fieldName: string | undefined): string => {
+    if (!fieldName) return "Field";
+    return fieldName
+      .replace(/([A-Z])/g, " $1")
+      .replace(/^./, (c) => c.toUpperCase())
+      .replace(/_/g, " ");
+  };
+
+  // Categorise the change for a colour-coded badge
+  const getChangeCategory = (log: AuditLog): { label: string; color: string; icon: any } => {
+    const f = (log.fieldName || "").toLowerCase();
+    const d = (log.difference || "").toLowerCase();
+    if (log.action === "CREATE") return { label: "Creation", color: "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300", icon: <Plus size={9} /> };
+    if (log.action === "DELETE") return { label: "Deletion", color: "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300", icon: <Trash2 size={9} /> };
+    if (log.action === "RESTORE") return { label: "Restoration", color: "bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-300", icon: <RotateCcw size={9} /> };
+    if (f.includes("payment") || d.includes("payment")) return { label: "Payment", color: "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300", icon: <DollarSign size={9} /> };
+    if (f.includes("item") || f.includes("product") || d.includes("item")) return { label: "Product", color: "bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-300", icon: <Receipt size={9} /> };
+    if (f.includes("status")) return { label: "Status", color: "bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-300", icon: <Info size={9} /> };
+    if (f.includes("amount") || f.includes("price") || f.includes("total") || f.includes("balance")) return { label: "Amount", color: "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300", icon: <Calculator size={9} /> };
+    if (f.includes("customer") || f.includes("phone") || f.includes("email")) return { label: "Customer", color: "bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300", icon: <User size={9} /> };
+    if (f.includes("staff") || f.includes("assigned")) return { label: "Staff", color: "bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-300", icon: <Users size={9} /> };
+    if (f.includes("trade")) return { label: "Trade-In", color: "bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-300", icon: <Gift size={9} /> };
+    return { label: "General", color: "bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-300", icon: <Edit size={9} /> };
+  };
+
+  // Build a rich description of what happened
+  const buildChangeDescription = (log: AuditLog): string => {
+    if (log.action === "CREATE") return "This sale was first created in the system.";
+    if (log.action === "DELETE") return "This sale was removed from active records.";
+    if (log.action === "RESTORE") return "This sale was restored from the deleted archive.";
+    if (log.fieldName && (log.oldValue || log.newValue)) {
+      const field = humanizeField(log.fieldName);
+      return `The ${field.toLowerCase()} was modified.`;
+    }
+    if (log.difference) return log.difference;
+    return "Details of this sale were updated.";
+  };
+
+  // Check whether we can show a side-by-side before/after diff
+  const hasFieldDiff = (log: AuditLog): boolean => {
+    return !!(log.fieldName && (log.oldValue !== undefined || log.newValue !== undefined));
+  };
+
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-2 z-[70]">
-      <div className="bg-white dark:bg-gray-800 rounded-lg max-w-3xl w-full max-h-[85vh] overflow-y-auto shadow-2xl">
+      <div className="bg-white dark:bg-gray-800 rounded-lg max-w-3xl w-full max-h-[90vh] overflow-y-auto shadow-2xl">
+        {/* Header */}
         <div className="p-3 border-b dark:border-gray-700 sticky top-0 bg-white dark:bg-gray-800 rounded-t-lg z-10">
-          <div className="flex justify-between items-center">
-            <div><h3 className="text-base font-bold text-black dark:text-white flex items-center gap-1.5"><History size={16} className="text-blue-600" />Audit</h3><p className="text-[10px] text-gray-500 mt-0.5">Sale #{sale.id} - {sale.customer?.name}</p></div>
-            <button onClick={onClose} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors"><X size={18} /></button>
+          <div className="flex justify-between items-start">
+            <div className="flex items-start gap-3">
+              <div className="w-10 h-10 rounded-full bg-blue-100 dark:bg-blue-900/30 flex items-center justify-center flex-shrink-0">
+                <History size={18} className="text-blue-600 dark:text-blue-400" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-black dark:text-white">Audit Trail</h3>
+                <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-0.5">
+                  Sale <span className="font-mono font-semibold">#{sale.id}</span> · {sale.customer?.name || "Unknown"}
+                </p>
+                <p className="text-[10px] text-gray-400 dark:text-gray-500 mt-0.5">
+                  {auditLogs.length} {auditLogs.length === 1 ? "record" : "records"} found
+                </p>
+              </div>
+            </div>
+            <button onClick={onClose} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors p-1">
+              <X size={18} />
+            </button>
           </div>
         </div>
+
+        {/* Body */}
         <div className="p-3">
-          {loading ? (<div className="text-center py-8"><div className="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-600 mx-auto"></div><p className="text-gray-500 mt-2 text-xs">Loading...</p></div>) : auditLogs.length === 0 ? (
-            <div className="text-center py-8 text-gray-500"><History size={32} className="mx-auto text-gray-300 mb-2" /><p className="text-xs">No audit records</p></div>
+          {loading ? (
+            <div className="text-center py-12">
+              <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-600 mx-auto"></div>
+              <p className="text-gray-500 mt-3 text-xs">Loading audit trail...</p>
+            </div>
+          ) : auditLogs.length === 0 ? (
+            <div className="text-center py-12 text-gray-500">
+              <History size={40} className="mx-auto text-gray-300 dark:text-gray-600 mb-3" />
+              <p className="text-sm font-medium">No audit records found</p>
+              <p className="text-[11px] text-gray-400 mt-1">This sale has no recorded changes yet.</p>
+            </div>
           ) : (
-            <div className="space-y-2">
-              {auditLogs.map((log, index) => (
-                <div key={log.id} className={`border dark:border-gray-700 rounded-lg p-2.5 transition-all hover:shadow-md ${index === 0 ? 'border-blue-300 bg-blue-50/30 dark:bg-blue-900/10' : 'dark:bg-gray-800/50'}`}>
-                  <div className="flex items-start gap-2">
-                    <div className="flex-shrink-0"><div className={`w-6 h-6 rounded-full flex items-center justify-center ${getActionColor(log.action)}`}>{getActionIcon(log.action)}</div></div>
-                    <div className="flex-1">
-                      <div className="flex flex-wrap justify-between items-start gap-1">
-                        <div><span className={`inline-block px-1.5 py-0.5 rounded-full text-[9px] font-semibold ${getActionColor(log.action)} border`}>{log.action}</span></div>
-                        <div className="text-right"><div className="font-medium text-[10px] text-gray-700 dark:text-gray-300">{getUserDisplayName(log.changedBy).name}</div><div className="text-[8px] text-gray-400">{formatDateTime(log.changedAt)}</div></div>
+            <div className="space-y-3">
+              {auditLogs.map((log, index) => {
+                const category = getChangeCategory(log);
+                const user = getUserDisplayName(log.changedBy);
+                const isLatest = index === 0;
+                const showDiff = hasFieldDiff(log);
+                const oldRendered = renderValue(log.oldValue);
+                const newRendered = renderValue(log.newValue);
+
+                return (
+                  <div
+                    key={log.id}
+                    className={`border rounded-lg overflow-hidden transition-all ${
+                      isLatest
+                        ? "border-blue-300 dark:border-blue-700 bg-blue-50/30 dark:bg-blue-900/10"
+                        : "border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800"
+                    }`}
+                  >
+                    {/* Card header — WHO + WHEN + ACTION */}
+                    <div className="p-3 border-b border-gray-100 dark:border-gray-700 bg-gray-50/50 dark:bg-gray-900/20">
+                      <div className="flex flex-wrap justify-between items-start gap-2">
+                        <div className="flex items-start gap-2.5 flex-1 min-w-0">
+                          <div className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 border ${getActionColor(log.action)}`}>
+                            {getActionIcon(log.action)}
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold border ${getActionColor(log.action)}`}>
+                                {getActionIcon(log.action)}
+                                {getActionLabel(log.action)}
+                              </span>
+                              <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium ${category.color}`}>
+                                {category.icon}
+                                {category.label}
+                              </span>
+                              {isLatest && (
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300">
+                                  Latest
+                                </span>
+                              )}
+                            </div>
+                            <p className="text-[11px] text-gray-600 dark:text-gray-400 mt-1.5">
+                              {buildChangeDescription(log)}
+                            </p>
+                          </div>
+                        </div>
                       </div>
-                      {log.changeSummary && <div className="mt-1.5 text-xs text-gray-700 dark:text-gray-300 bg-white/50 dark:bg-gray-900/50 p-1.5 rounded-md">{log.changeSummary}</div>}
                     </div>
+
+                    {/* Field-level diff */}
+                    {showDiff && (
+                      <div className="p-3 bg-white dark:bg-gray-800 border-b border-gray-100 dark:border-gray-700">
+                        <p className="text-[10px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-2">
+                          Field: {humanizeField(log.fieldName || undefined)}
+                        </p>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                          {/* Old */}
+                          <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-2.5">
+                            <div className="flex items-center gap-1.5 mb-1">
+                              <span className="w-1.5 h-1.5 rounded-full bg-red-500"></span>
+                              <span className="text-[9px] font-semibold text-red-700 dark:text-red-300 uppercase tracking-wide">Before</span>
+                            </div>
+                            <p className={`text-sm font-mono break-all ${oldRendered.isNumeric ? "text-red-800 dark:text-red-200 font-semibold" : "text-gray-800 dark:text-gray-200"}`}>
+                              {oldRendered.text}
+                            </p>
+                          </div>
+                          {/* New */}
+                          <div className="bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg p-2.5">
+                            <div className="flex items-center gap-1.5 mb-1">
+                              <span className="w-1.5 h-1.5 rounded-full bg-green-500"></span>
+                              <span className="text-[9px] font-semibold text-green-700 dark:text-green-300 uppercase tracking-wide">After</span>
+                            </div>
+                            <p className={`text-sm font-mono break-all ${newRendered.isNumeric ? "text-green-800 dark:text-green-200 font-semibold" : "text-gray-800 dark:text-gray-200"}`}>
+                              {newRendered.text}
+                            </p>
+                          </div>
+                        </div>
+                        {log.difference && (
+                          <div className="mt-2 flex items-start gap-1.5 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg px-2.5 py-2">
+                            <Info size={11} className="text-amber-600 dark:text-amber-400 flex-shrink-0 mt-0.5" />
+                            <div>
+                              <p className="text-[9px] font-semibold text-amber-700 dark:text-amber-300 uppercase tracking-wide">Difference</p>
+                              <p className="text-[11px] text-amber-800 dark:text-amber-200 mt-0.5">{log.difference}</p>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Notes / reason */}
+                    {log.notes && (
+                      <div className="p-3 bg-amber-50/50 dark:bg-amber-900/10 border-b border-amber-100 dark:border-amber-900/30">
+                        <div className="flex items-start gap-2">
+                          <FileSpreadsheet size={12} className="text-amber-600 dark:text-amber-400 flex-shrink-0 mt-0.5" />
+                          <div className="flex-1 min-w-0">
+                            <p className="text-[9px] font-semibold text-amber-700 dark:text-amber-300 uppercase tracking-wide mb-0.5">Note / Reason</p>
+                            <p className="text-[11px] text-amber-800 dark:text-amber-200">{log.notes}</p>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* WHO / WHEN / WHERE footer */}
+                    <div className="p-3 bg-gray-50/50 dark:bg-gray-900/20">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[10px]">
+                        {/* User */}
+                        <div className="flex items-center gap-2">
+                          <div className="w-6 h-6 rounded-full bg-blue-100 dark:bg-blue-900/30 flex items-center justify-center flex-shrink-0">
+                            <User size={11} className="text-blue-600 dark:text-blue-400" />
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <p className="text-gray-500 dark:text-gray-400 text-[9px] uppercase tracking-wide">Changed by</p>
+                            <p className="text-gray-800 dark:text-gray-200 font-medium truncate">{user.name}</p>
+                            {log.changedByEmail && (
+                              <p className="text-gray-400 dark:text-gray-500 text-[9px] truncate">{log.changedByEmail}</p>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Timestamp */}
+                        <div className="flex items-center gap-2">
+                          <div className="w-6 h-6 rounded-full bg-teal-100 dark:bg-teal-900/30 flex items-center justify-center flex-shrink-0">
+                            <ClockIcon size={11} className="text-teal-600 dark:text-teal-400" />
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <p className="text-gray-500 dark:text-gray-400 text-[9px] uppercase tracking-wide">When</p>
+                            <p className="text-gray-800 dark:text-gray-200 font-medium">{formatDateTime(log.changedAt)}</p>
+                          </div>
+                        </div>
+
+                        {/* IP */}
+                        {log.ipAddress && (
+                          <div className="flex items-center gap-2">
+                            <div className="w-6 h-6 rounded-full bg-purple-100 dark:bg-purple-900/30 flex items-center justify-center flex-shrink-0">
+                              <Info size={11} className="text-purple-600 dark:text-purple-400" />
+                            </div>
+                            <div className="min-w-0 flex-1">
+                              <p className="text-gray-500 dark:text-gray-400 text-[9px] uppercase tracking-wide">IP Address</p>
+                              <p className="text-gray-800 dark:text-gray-200 font-mono text-[10px]">{log.ipAddress}</p>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* User agent */}
+                        {log.userAgent && (
+                          <div className="flex items-start gap-2 sm:col-span-2">
+                            <div className="w-6 h-6 rounded-full bg-gray-100 dark:bg-gray-700 flex items-center justify-center flex-shrink-0">
+                              <Smartphone size={11} className="text-gray-600 dark:text-gray-400" />
+                            </div>
+                            <div className="min-w-0 flex-1">
+                              <p className="text-gray-500 dark:text-gray-400 text-[9px] uppercase tracking-wide">Device / Browser</p>
+                              <p className="text-gray-700 dark:text-gray-300 text-[10px] break-all">{log.userAgent}</p>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Snapshot (collapsible) */}
+                    {log.snapshot && (
+                      <details className="border-t border-gray-100 dark:border-gray-700">
+                        <summary className="px-3 py-2 cursor-pointer text-[10px] font-semibold text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700/30 transition-colors select-none">
+                          <span className="inline-flex items-center gap-1.5">
+                            <FileSpreadsheet size={11} />
+                            Full snapshot at this point in time
+                          </span>
+                        </summary>
+                        <div className="px-3 pb-3">
+                          <pre className="text-[10px] bg-gray-900 dark:bg-black text-green-300 p-2.5 rounded-lg overflow-x-auto max-h-64 leading-relaxed">
+{JSON.stringify(log.snapshot, null, 2)}
+                          </pre>
+                        </div>
+                      </details>
+                    )}
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>
@@ -871,8 +1230,8 @@ function EnhancedAuditLogModal({ isOpen, onClose, auditLogs, loading, sale, getU
 // ==================== PAYMENT BREAKDOWN COMPONENT ====================
 interface PaymentBreakdownProps {
   stats: {
-    cashAmount: number; mpesaAmount: number; bankAmount: number; checkAmount: number; cardAmount: number; creditAmount: number;
-    todayCash: number; todayMpesa: number; todayBank: number; todayCheck: number; todayCard: number; todayCredit: number;
+    cashAmount: number; mpesaAmount: number; bankAmount: number; checkAmount: number; cardAmount: number; creditAmount: number; tradeInAmount: number;
+    todayCash: number; todayMpesa: number; todayBank: number; todayCheck: number; todayCard: number; todayCredit: number; todayTradeIn: number;
   };
   dateFilter: string;
 }
@@ -889,6 +1248,7 @@ function PaymentBreakdown({ stats, dateFilter }: PaymentBreakdownProps) {
     { method: "Check", amount: dateFilter === "today" ? stats.todayCheck : stats.checkAmount, color: "orange", icon: DollarSign },
     { method: "Card", amount: dateFilter === "today" ? stats.todayCard : stats.cardAmount, color: "pink", icon: CardIcon },
     { method: "Credit", amount: dateFilter === "today" ? stats.todayCredit : stats.creditAmount, color: "yellow", icon: CreditCard },
+    { method: "Trade-In", amount: dateFilter === "today" ? stats.todayTradeIn : stats.tradeInAmount, color: "purple", icon: Gift },
   ];
 
   return (
@@ -906,9 +1266,362 @@ function PaymentBreakdown({ stats, dateFilter }: PaymentBreakdownProps) {
   );
 }
 
+// ==================== TRADE-IN MODAL ====================
+interface TradeInModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+  initialItems: TradeInItem[];
+  onSave: (items: TradeInItem[]) => void;
+  saleTotal: number;
+  formatCurrency: (n: number) => string;
+}
+
+function TradeInModal({ isOpen, onClose, initialItems, onSave, saleTotal, formatCurrency }: TradeInModalProps) {
+  const [items, setItems] = useState<TradeInItem[]>(initialItems || []);
+  const [draft, setDraft] = useState<TradeInItem>({
+    itemName: "",
+    description: "",
+    category: "",
+    condition: "GOOD",
+    quantity: 1,
+    unitValue: 0,
+    totalValue: 0,
+  });
+  const [editingIndex, setEditingIndex] = useState<number | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (isOpen) {
+      setItems(initialItems || []);
+      setDraft({
+        itemName: "",
+        description: "",
+        category: "",
+        condition: "GOOD",
+        quantity: 1,
+        unitValue: 0,
+        totalValue: 0,
+      });
+      setEditingIndex(null);
+      setError(null);
+    }
+  }, [isOpen, initialItems]);
+
+  const tradeInTotal = useMemo(
+    () => items.reduce((sum, it) => sum + (it.totalValue || 0), 0),
+    [items]
+  );
+
+  const difference = saleTotal - tradeInTotal;
+
+  const balanceState = useMemo(() => {
+    if (Math.abs(difference) < 0.01) {
+      return { kind: "EVEN" as const, amount: 0, label: "Fully settled — No balance", color: "emerald" };
+    }
+    if (difference > 0) {
+      return { kind: "CUSTOMER_OWES" as const, amount: difference, label: "Customer owes", color: "rose" };
+    }
+    return { kind: "WE_OWE" as const, amount: Math.abs(difference), label: "We owe customer", color: "blue" };
+  }, [difference]);
+
+  const resetDraft = () => {
+    setDraft({
+      itemName: "",
+      description: "",
+      category: "",
+      condition: "GOOD",
+      quantity: 1,
+      unitValue: 0,
+      totalValue: 0,
+    });
+    setEditingIndex(null);
+    setError(null);
+  };
+
+  const handleAddOrUpdate = () => {
+    if (!draft.itemName.trim()) {
+      setError("Please enter an item name");
+      return;
+    }
+    if (!draft.quantity || draft.quantity <= 0) {
+      setError("Quantity must be at least 1");
+      return;
+    }
+    if (!draft.unitValue || draft.unitValue <= 0) {
+      setError("Unit value must be greater than 0");
+      return;
+    }
+
+    const computed: TradeInItem = {
+      ...draft,
+      itemName: draft.itemName.trim(),
+      totalValue: Number((draft.quantity * draft.unitValue).toFixed(2)),
+    };
+
+    if (editingIndex !== null) {
+      const next = [...items];
+      next[editingIndex] = computed;
+      setItems(next);
+    } else {
+      setItems([...items, computed]);
+    }
+    resetDraft();
+  };
+
+  const handleEdit = (index: number) => {
+    setDraft({ ...items[index] });
+    setEditingIndex(index);
+    setError(null);
+  };
+
+  const handleRemove = (index: number) => {
+    setItems(items.filter((_, i) => i !== index));
+    if (editingIndex === index) resetDraft();
+  };
+
+  const handleSave = () => {
+    if (items.length === 0) {
+      setError("Add at least one trade-in item before saving");
+      return;
+    }
+    onSave(items);
+    onClose();
+  };
+
+  if (!isOpen) return null;
+
+  const conditionOptions: TradeInItem["condition"][] = ["EXCELLENT", "GOOD", "FAIR", "POOR"];
+
+  return (
+    <div className="fixed inset-0 bg-black/60 flex items-end sm:items-center justify-center p-0 sm:p-4 z-[80]">
+      <div className="bg-white dark:bg-gray-800 rounded-t-2xl sm:rounded-2xl w-full sm:max-w-lg max-h-[92vh] overflow-y-auto shadow-2xl">
+        <div className="flex justify-center pt-2 pb-1 sm:hidden">
+          <div className="w-10 h-1 rounded-full bg-gray-300 dark:bg-gray-600" />
+        </div>
+
+        <div className="p-4 border-b dark:border-gray-700 sticky top-0 bg-white dark:bg-gray-800 rounded-t-2xl sm:rounded-t-2xl z-10">
+          <div className="flex justify-between items-center">
+            <h3 className="text-sm font-bold text-gray-900 dark:text-white flex items-center gap-2">
+              <Gift size={16} className="text-purple-500" />
+              Trade-In Items
+            </h3>
+            <button onClick={onClose} className="w-7 h-7 flex items-center justify-center rounded-full bg-gray-100 dark:bg-gray-700 text-gray-500 hover:text-gray-700 dark:hover:text-gray-300">
+              <X size={14} />
+            </button>
+          </div>
+        </div>
+
+        <div className="p-4 space-y-3">
+          {error && (
+            <div className="bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-300 p-2.5 rounded-lg text-[11px] flex items-start gap-2">
+              <AlertTriangle size={12} className="mt-0.5 flex-shrink-0" />
+              {error}
+            </div>
+          )}
+
+          <div className="bg-gray-50 dark:bg-gray-700/50 p-3 rounded-lg space-y-2">
+            <p className="text-[10px] font-semibold text-gray-600 dark:text-gray-300 uppercase tracking-wide">
+              {editingIndex !== null ? "Edit Item" : "Add Item"}
+            </p>
+
+            <div>
+              <label className="text-[9px] text-gray-500 dark:text-gray-400">Item name *</label>
+              <input
+                type="text"
+                value={draft.itemName}
+                onChange={(e) => setDraft({ ...draft, itemName: e.target.value })}
+                placeholder="e.g., Copper Wire, Old Motor"
+                className="w-full mt-0.5 p-2 border border-gray-200 dark:border-gray-600 rounded-lg text-xs bg-white dark:bg-gray-700 text-black dark:text-white"
+              />
+            </div>
+
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <label className="text-[9px] text-gray-500 dark:text-gray-400">Category</label>
+                <input
+                  type="text"
+                  value={draft.category || ""}
+                  onChange={(e) => setDraft({ ...draft, category: e.target.value })}
+                  placeholder="Optional"
+                  className="w-full mt-0.5 p-2 border border-gray-200 dark:border-gray-600 rounded-lg text-xs bg-white dark:bg-gray-700 text-black dark:text-white"
+                />
+              </div>
+              <div>
+                <label className="text-[9px] text-gray-500 dark:text-gray-400">Condition</label>
+                <select
+                  value={draft.condition}
+                  onChange={(e) => setDraft({ ...draft, condition: e.target.value as TradeInItem["condition"] })}
+                  className="w-full mt-0.5 p-2 border border-gray-200 dark:border-gray-600 rounded-lg text-xs bg-white dark:bg-gray-700 text-black dark:text-white"
+                >
+                  {conditionOptions.map(c => <option key={c} value={c}>{c}</option>)}
+                </select>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-3 gap-2">
+              <div>
+                <label className="text-[9px] text-gray-500 dark:text-gray-400">Qty *</label>
+                <input
+                  type="number"
+                  min="1"
+                  value={draft.quantity}
+                  onChange={(e) => setDraft({ ...draft, quantity: parseInt(e.target.value) || 1 })}
+                  className="w-full mt-0.5 p-2 border border-gray-200 dark:border-gray-600 rounded-lg text-xs bg-white dark:bg-gray-700 text-black dark:text-white"
+                />
+              </div>
+              <div>
+                <label className="text-[9px] text-gray-500 dark:text-gray-400">Unit value *</label>
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={draft.unitValue || ""}
+                  onChange={(e) => setDraft({ ...draft, unitValue: parseFloat(e.target.value) || 0 })}
+                  placeholder="0.00"
+                  className="w-full mt-0.5 p-2 border border-gray-200 dark:border-gray-600 rounded-lg text-xs bg-white dark:bg-gray-700 text-black dark:text-white"
+                />
+              </div>
+              <div>
+                <label className="text-[9px] text-gray-500 dark:text-gray-400">Line total</label>
+                <div className="mt-0.5 p-2 rounded-lg text-xs bg-purple-50 dark:bg-purple-900/20 text-purple-700 dark:text-purple-300 font-semibold">
+                  Ksh {formatCurrency((draft.quantity || 0) * (draft.unitValue || 0))}
+                </div>
+              </div>
+            </div>
+
+            <div>
+              <label className="text-[9px] text-gray-500 dark:text-gray-400">Description</label>
+              <textarea
+                value={draft.description || ""}
+                onChange={(e) => setDraft({ ...draft, description: e.target.value })}
+                rows={2}
+                placeholder="Optional notes about the item"
+                className="w-full mt-0.5 p-2 border border-gray-200 dark:border-gray-600 rounded-lg text-xs bg-white dark:bg-gray-700 text-black dark:text-white resize-none"
+              />
+            </div>
+
+            <div className="flex gap-2 pt-1">
+              {editingIndex !== null && (
+                <button
+                  onClick={resetDraft}
+                  className="flex-1 bg-gray-200 dark:bg-gray-600 text-gray-700 dark:text-gray-200 px-3 py-2 rounded-lg text-xs font-medium"
+                >
+                  Cancel edit
+                </button>
+              )}
+              <button
+                onClick={handleAddOrUpdate}
+                className="flex-1 bg-blue-600 text-white px-3 py-2 rounded-lg text-xs font-medium hover:bg-blue-700 transition-colors flex items-center justify-center gap-1"
+              >
+                <Plus size={12} />
+                {editingIndex !== null ? "Update Item" : "Add Item"}
+              </button>
+            </div>
+          </div>
+
+          <div>
+            <div className="flex items-center justify-between mb-1.5">
+              <p className="text-[10px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">
+                Trade-In Items ({items.length})
+              </p>
+              {items.length > 0 && (
+                <p className="text-[10px] text-purple-600 dark:text-purple-400 font-semibold">
+                  Total: Ksh {formatCurrency(tradeInTotal)}
+                </p>
+              )}
+            </div>
+
+            {items.length === 0 ? (
+              <div className="text-center py-6 text-gray-400 text-[11px] border border-dashed border-gray-200 dark:border-gray-700 rounded-lg">
+                No trade-in items yet
+              </div>
+            ) : (
+              <div className="space-y-1.5 max-h-48 overflow-y-auto">
+                {items.map((it, index) => (
+                  <div key={index} className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-2">
+                    <div className="flex justify-between items-start gap-2">
+                      <div className="flex-1 min-w-0">
+                        <p className="font-medium text-xs text-gray-900 dark:text-white truncate">{it.itemName}</p>
+                        <p className="text-[9px] text-gray-500 mt-0.5">
+                          {it.category ? `${it.category} · ` : ""}
+                          {it.condition}
+                        </p>
+                        <p className="text-[10px] text-purple-600 dark:text-purple-400 font-semibold mt-1">
+                          {it.quantity} × Ksh {formatCurrency(it.unitValue)} = Ksh {formatCurrency(it.totalValue)}
+                        </p>
+                      </div>
+                      <div className="flex gap-1 flex-shrink-0">
+                        <button onClick={() => handleEdit(index)} className="text-blue-600 hover:text-blue-800 p-1">
+                          <Edit size={12} />
+                        </button>
+                        <button onClick={() => handleRemove(index)} className="text-red-500 hover:text-red-700 p-1">
+                          <Trash2 size={12} />
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className={`p-3 rounded-lg border ${
+            balanceState.kind === "EVEN"
+              ? "bg-emerald-50 dark:bg-emerald-900/20 border-emerald-200 dark:border-emerald-800"
+              : balanceState.kind === "CUSTOMER_OWES"
+                ? "bg-rose-50 dark:bg-rose-900/20 border-rose-200 dark:border-rose-800"
+                : "bg-blue-50 dark:bg-blue-900/20 border-blue-200 dark:border-blue-800"
+          }`}>
+            <div className="space-y-1 text-xs">
+              <div className="flex justify-between">
+                <span className="text-gray-600 dark:text-gray-400">Sale total</span>
+                <span className="font-semibold text-gray-900 dark:text-white">Ksh {formatCurrency(saleTotal)}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-600 dark:text-gray-400">Trade-in total</span>
+                <span className="font-semibold text-purple-700 dark:text-purple-300">Ksh {formatCurrency(tradeInTotal)}</span>
+              </div>
+              <div className="border-t border-gray-200 dark:border-gray-700 my-1" />
+              {balanceState.kind === "EVEN" ? (
+                <div className="flex items-center justify-center gap-1 text-emerald-700 dark:text-emerald-400 font-bold">
+                  <CheckCircle size={12} /> {balanceState.label}
+                </div>
+              ) : (
+                <div className={`flex justify-between font-bold ${
+                  balanceState.kind === "CUSTOMER_OWES"
+                    ? "text-rose-700 dark:text-rose-400"
+                    : "text-blue-700 dark:text-blue-400"
+                }`}>
+                  <span>{balanceState.label}:</span>
+                  <span>Ksh {formatCurrency(balanceState.amount)}</span>
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="flex gap-2 pt-1">
+            <button
+              onClick={onClose}
+              className="flex-1 bg-gray-200 dark:bg-gray-600 text-gray-700 dark:text-gray-200 px-3 py-2.5 rounded-lg text-xs font-medium"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={handleSave}
+              disabled={items.length === 0}
+              className="flex-1 bg-purple-600 text-white px-3 py-2.5 rounded-lg text-xs font-medium hover:bg-purple-700 disabled:opacity-50 transition-colors flex items-center justify-center gap-1.5"
+            >
+              <CheckCircle size={12} /> Save Trade-In
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ==================== MAIN COMPONENT ====================
 export default function EnhancedSalesPage() {
-  // ==================== THEME STATE ====================
   const [theme, setTheme] = useState<'light' | 'dark'>('light');
   
   useEffect(() => {
@@ -929,8 +1642,6 @@ export default function EnhancedSalesPage() {
     document.documentElement.classList.toggle('dark', newTheme === 'dark');
   };
 
-  // ==================== STATE VARIABLES ====================
-  
   const [sales, setSales] = useState<Sale[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
@@ -950,6 +1661,9 @@ export default function EnhancedSalesPage() {
   const [editPayments, setEditPayments] = useState<NewPayment[]>([]);
   const [currentPayment, setCurrentPayment] = useState<NewPayment>({ amount: "", method: "CASH", referenceId: "", checkDepositDate: "", dueDate: "", bankName: "" });
   
+  // ---- TRADE-IN STATE ----
+  const [showTradeInModal, setShowTradeInModal] = useState(false);
+
   const [editingSale, setEditingSale] = useState<Sale | null>(null);
   const [deletingPaymentId, setDeletingPaymentId] = useState<number | null>(null);
   const [currentUser, setCurrentUser] = useState<string>("");
@@ -998,7 +1712,6 @@ export default function EnhancedSalesPage() {
 
   const [debugInfo, setDebugInfo] = useState<string>("");
   
-  // Detect mobile view
   const [isMobile, setIsMobile] = useState(false);
   
   useEffect(() => {
@@ -1252,6 +1965,7 @@ export default function EnhancedSalesPage() {
         total + (item.quantity * item.price), 0);
 
       const updateData = {
+        id: editingSale.id,
         saleItems: editSaleItems.map(item => ({
           id: item.id,
           productId: item.productId,
@@ -1266,16 +1980,40 @@ export default function EnhancedSalesPage() {
           checkDepositDate: p.checkDepositDate || null,
           bankName: p.bankName || null,
         })),
-        newPayments: editPayments.filter(p => !p.id && p.amount && Number(p.amount) > 0).map(p => ({
-          amount: Number(p.amount),
-          method: p.method,
-          referenceId: p.referenceId?.trim() || null,
-          checkDepositDate: p.checkDepositDate || null,
-          dueDate: p.dueDate || null,
-          bankName: p.bankName || null,
-          date: new Date().toISOString(),
-          status: p.method === "CHECK" ? "PENDING" : "COMPLETED",
-        })),
+        newPayments: editPayments
+          .filter(p => {
+            if (p.method === "TRADE_IN") return Array.isArray(p.tradeInItems) && p.tradeInItems.length > 0;
+            return !p.id && p.amount && Number(p.amount) > 0;
+          })
+          .map(p => {
+            if (p.method === "TRADE_IN") {
+              return {
+                method: "TRADE_IN",
+                amount: Number(p.amount) || 0,
+                tradeInItems: (p.tradeInItems || []).map(it => ({
+                  itemName: it.itemName,
+                  description: it.description || null,
+                  category: it.category || null,
+                  condition: it.condition,
+                  quantity: Number(it.quantity),
+                  unitValue: Number(it.unitValue),
+                  totalValue: Number(it.totalValue),
+                })),
+                date: new Date().toISOString(),
+                status: "COMPLETED",
+              };
+            }
+            return {
+              amount: Number(p.amount),
+              method: p.method,
+              referenceId: p.referenceId?.trim() || null,
+              checkDepositDate: p.checkDepositDate || null,
+              dueDate: p.dueDate || null,
+              bankName: p.bankName || null,
+              date: new Date().toISOString(),
+              status: p.method === "CHECK" ? "PENDING" : "COMPLETED",
+            };
+          }),
         amount: newTotalAmount,
         dueDate: editingSale.dueDate || null,
         updatedBy: currentUser,
@@ -1335,7 +2073,6 @@ export default function EnhancedSalesPage() {
   };
 
   const handleSelectProduct = (product: Product) => {
-    console.log("Selected product:", product);
     setCurrentEditItem({ 
       ...currentEditItem, 
       productId: product.id, 
@@ -1347,8 +2084,6 @@ export default function EnhancedSalesPage() {
   };
 
   const handleAddItemToEditSale = () => {
-    console.log("Add item clicked, currentEditItem:", currentEditItem);
-    
     if (stockValidationTimeout) clearTimeout(stockValidationTimeout);
     
     if (!currentEditItem.productId || currentEditItem.quantity <= 0 || currentEditItem.price <= 0) {
@@ -1362,7 +2097,6 @@ export default function EnhancedSalesPage() {
       return;
     }
     
-    // Get correct product stock
     let productStock = 0;
     if (Array.isArray(product.stock)) {
       productStock = product.stock.reduce((total: number, s: any) => total + (s.quantity || 0), 0);
@@ -1378,7 +2112,6 @@ export default function EnhancedSalesPage() {
     const existingQuantity = existingItem ? existingItem.quantity : 0;
     const totalQuantity = existingQuantity + currentEditItem.quantity;
     
-    // Only check stock if product has stock > 0 (skip for services or items without stock)
     if (productStock > 0 && totalQuantity > productStock) {
       const errorMsg = `Insufficient stock for ${product.name}. Available: ${productStock}, Requested: ${totalQuantity}`;
       setStockError(errorMsg);
@@ -1410,7 +2143,6 @@ export default function EnhancedSalesPage() {
       setSuccess(`Added ${product.name} to sale`);
     }
     
-    // Reset form
     setCurrentEditItem({
       productId: 0,
       quantity: 0,
@@ -1423,18 +2155,59 @@ export default function EnhancedSalesPage() {
     setTimeout(() => setSuccess(null), 2000);
   };
 
+  // FIXED: no duplicate declarations, only one clean version
   const handleEditSale = (sale: Sale) => {
-    console.log("Editing sale:", sale);
     setEditingSale(sale);
-    setEditPayments(sale.payments.map(p => ({ 
-      id: p.id, 
-      amount: p.amount.toString(), 
-      method: p.method, 
-      referenceId: p.referenceId || "", 
-      checkDepositDate: p.checkDepositDate || "",
-      bankName: p.bankName || "",
-      dueDate: p.dueDate || ""
-    })));
+
+    // Build trade-in items from sale.tradeins (server-provided relation)
+    const tradeInItemsFromServer: TradeInItem[] = (sale.tradeins || []).map((t: TradeInRow) => ({
+      id: t.id,
+      itemName: t.itemName,
+      description: t.description || "",
+      category: t.category || "",
+      condition: (t.condition as TradeInItem["condition"]) || "GOOD",
+      quantity: Number(t.quantity) || 1,
+      unitValue: Number(t.agreedValue) || 0,
+      totalValue: (Number(t.quantity) || 1) * (Number(t.agreedValue) || 0),
+    }));
+
+    const tradeInTotal = tradeInItemsFromServer.reduce((s, it) => s + it.totalValue, 0);
+    const hasTradeInPayment = sale.payments.some(p => p.method === "TRADE_IN");
+
+    // Build the payments array:
+    //  - all NON-TRADE_IN payments go in as-is
+    //  - if there's a TRADE_IN payment OR trade-in rows exist,
+    //    add ONE TRADE_IN entry with all the items attached
+    const builtPayments: NewPayment[] = sale.payments
+      .filter(p => p.method !== "TRADE_IN")
+      .map(p => ({
+        id: p.id,
+        amount: p.amount.toString(),
+        method: p.method,
+        referenceId: p.referenceId || "",
+        checkDepositDate: p.checkDepositDate || "",
+        bankName: p.bankName || "",
+        dueDate: p.dueDate || "",
+      }));
+
+    if (hasTradeInPayment || tradeInItemsFromServer.length > 0) {
+      const existingTradeInPayment = sale.payments.find(p => p.method === "TRADE_IN");
+      builtPayments.push({
+        id: existingTradeInPayment?.id,
+        amount: existingTradeInPayment
+          ? Number(existingTradeInPayment.amount).toString()
+          : tradeInTotal.toFixed(2),
+        method: "TRADE_IN" as const,
+        referenceId: existingTradeInPayment?.referenceId || "",
+        checkDepositDate: existingTradeInPayment?.checkDepositDate || "",
+        bankName: existingTradeInPayment?.bankName || "",
+        dueDate: existingTradeInPayment?.dueDate || "",
+        tradeInItems: tradeInItemsFromServer,
+      });
+    }
+
+    setEditPayments(builtPayments);
+
     setEditSaleItems(sale.saleitems.map(item => ({ 
       id: item.id,
       productId: item.product.id, 
@@ -1501,10 +2274,42 @@ export default function EnhancedSalesPage() {
     }
   };
 
+  // ---- TRADE-IN HANDLERS ----
+  const currentTradeInItems: TradeInItem[] = useMemo(() => {
+    const tradeInPayment = editPayments.find(p => p.method === "TRADE_IN");
+    return tradeInPayment?.tradeInItems || [];
+  }, [editPayments]);
+
+  const handleSaveTradeInItems = (items: TradeInItem[]) => {
+    const otherPayments = editPayments.filter(p => p.method !== "TRADE_IN");
+    const totalValue = items.reduce((sum, it) => sum + (it.totalValue || 0), 0);
+    const tradeInPayment: NewPayment = {
+      amount: totalValue.toFixed(2),
+      method: "TRADE_IN",
+      referenceId: "",
+      checkDepositDate: "",
+      dueDate: "",
+      bankName: "",
+      status: "COMPLETED",
+      tradeInItems: items,
+    };
+    setEditPayments([...otherPayments, tradeInPayment]);
+    setSuccess(`Trade-In updated: ${items.length} item${items.length === 1 ? "" : "s"}, Ksh ${formatCurrency(totalValue)}`);
+    setTimeout(() => setSuccess(null), 2500);
+  };
+
+  const removeTradeInPayment = () => {
+    setEditPayments(editPayments.filter(p => p.method !== "TRADE_IN"));
+    setSuccess("Trade-In removed");
+    setTimeout(() => setSuccess(null), 2000);
+  };
+
   const addEditPayment = () => {
-    console.log("Adding payment:", currentPayment);
-    
-    // For CREDIT payments
+    if (currentPayment.method === "TRADE_IN") {
+      setShowTradeInModal(true);
+      return;
+    }
+
     if (currentPayment.method === "CREDIT") {
       if (!currentPayment.dueDate) {
         setError("Due date is required for credit/pay later");
@@ -1524,7 +2329,6 @@ export default function EnhancedSalesPage() {
       setSuccess("Credit payment added");
       setTimeout(() => setSuccess(null), 2000);
       
-      // Reset form
       setCurrentPayment({
         amount: "",
         method: "CASH",
@@ -1537,14 +2341,12 @@ export default function EnhancedSalesPage() {
       return;
     }
     
-    // For regular payments
     const amount = parseFloat(currentPayment.amount);
     if (!amount || amount <= 0) {
       setError("Please enter a valid payment amount");
       return;
     }
 
-    // Calculate remaining amount
     const currentTotal = editSaleItems.reduce((sum, item) => sum + (item.quantity * item.price), 0);
     const currentPayments = editPayments.reduce((sum, p) => sum + Number(p.amount), 0);
     const remainingAmount = currentTotal - currentPayments;
@@ -1554,7 +2356,6 @@ export default function EnhancedSalesPage() {
       return;
     }
     
-    // Validate based on payment method
     if (currentPayment.method === "MPESA" && !currentPayment.referenceId?.trim()) {
       setError("Please enter M-Pesa transaction ID");
       return;
@@ -1590,7 +2391,6 @@ export default function EnhancedSalesPage() {
     setSuccess("Payment added successfully");
     setTimeout(() => setSuccess(null), 2000);
     
-    // Reset form
     setCurrentPayment({
       amount: "",
       method: "CASH",
@@ -1629,7 +2429,6 @@ export default function EnhancedSalesPage() {
     setAvailableUsers(users);
   };
 
-  // Fetch staff list
   useEffect(() => {
     const fetchStaff = async () => {
       try {
@@ -1642,8 +2441,6 @@ export default function EnhancedSalesPage() {
     };
     fetchStaff();
   }, []);
-
-  // ==================== DATA FETCHING ====================
 
   useEffect(() => {
     const fetchData = async () => {
@@ -1660,7 +2457,6 @@ export default function EnhancedSalesPage() {
           if (sessionRes.ok) { const sessionData = await sessionRes.json(); setCurrentUser(sessionData?.user?.email || sessionData?.email || ""); }
         }
         
-        // Fetch products with stock
         const [salesRes, customersRes, productsRes] = await Promise.all([
           fetch("/api/sales").catch(err => { console.error("Sales fetch failed:", err); return null; }),
           fetch("/api/customers").catch(err => { console.error("Customers fetch failed:", err); return null; }),
@@ -1682,7 +2478,6 @@ export default function EnhancedSalesPage() {
         
         const [salesData, productsData] = await Promise.all([salesRes.json(), productsRes.json()]);
         
-        // Calculate total stock for each product
         const productsWithStock = productsData.map((product: any) => {
           let totalStock = 0;
           if (Array.isArray(product.stock)) {
@@ -1702,8 +2497,6 @@ export default function EnhancedSalesPage() {
         setCustomers(validCustomers);
         setProducts(productsWithStock);
         extractAvailableUsers(processedSales);
-        console.log("Total sales loaded:", processedSales.length);
-        setDebugInfo(`Total: ${processedSales.length}`);
         if (validCustomers.length === 0) { console.warn("No customers found"); setError("No customers found. Please add customers first."); }
       } catch (err: any) { 
         const errorMsg = err.message || "Failed to load data"; 
@@ -1730,15 +2523,14 @@ export default function EnhancedSalesPage() {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  // ==================== MEMOIZED VALUES ====================
-
   const paymentMethods = [
     { value: "CASH", label: "Cash", color: "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300", icon: Banknote },
     { value: "MPESA", label: "M-Pesa", color: "bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300", icon: Smartphone },
     { value: "BANK", label: "Bank", color: "bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-300", icon: Landmark },
     { value: "CHECK", label: "Check", color: "bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-300", icon: DollarSign },
     { value: "CARD", label: "Card", color: "bg-pink-100 text-pink-800 dark:bg-pink-900/30 dark:text-pink-300", icon: CardIcon },
-    { value: "CREDIT", label: "Credit", color: "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-300", icon: CreditCard }
+    { value: "CREDIT", label: "Credit", color: "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-300", icon: CreditCard },
+    { value: "TRADE_IN", label: "Trade-In", color: "bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-300", icon: Gift },
   ];
 
   const filteredProducts = useMemo(() => {
@@ -1759,7 +2551,7 @@ export default function EnhancedSalesPage() {
       return saleDate >= today && saleDate < tomorrow; 
     });
     
-    let cashAmount = 0, mpesaAmount = 0, bankAmount = 0, checkAmount = 0, cardAmount = 0, creditAmount = 0;
+    let cashAmount = 0, mpesaAmount = 0, bankAmount = 0, checkAmount = 0, cardAmount = 0, creditAmount = 0, tradeInAmount = 0;
     sales.forEach(sale => { 
       sale.payments?.forEach(payment => { 
         const amount = Number(payment.amount) || 0; 
@@ -1770,11 +2562,12 @@ export default function EnhancedSalesPage() {
           case "CHECK": checkAmount += amount; break; 
           case "CARD": cardAmount += amount; break; 
           case "CREDIT": creditAmount += amount; break; 
+          case "TRADE_IN": tradeInAmount += amount; break; 
         } 
       }); 
     });
     
-    let todayCash = 0, todayMpesa = 0, todayBank = 0, todayCheck = 0, todayCard = 0, todayCredit = 0;
+    let todayCash = 0, todayMpesa = 0, todayBank = 0, todayCheck = 0, todayCard = 0, todayCredit = 0, todayTradeIn = 0;
     todaySales.forEach(sale => { 
       sale.payments?.forEach(payment => { 
         const amount = Number(payment.amount) || 0; 
@@ -1785,6 +2578,7 @@ export default function EnhancedSalesPage() {
           case "CHECK": todayCheck += amount; break; 
           case "CARD": todayCard += amount; break; 
           case "CREDIT": todayCredit += amount; break; 
+          case "TRADE_IN": todayTradeIn += amount; break; 
         } 
       }); 
     });
@@ -1800,7 +2594,7 @@ export default function EnhancedSalesPage() {
       unpaidCount: sales.filter(s => s.status === "UNPAID").length, 
       recentlyUpdatedCount: recentlyUpdatedSales.length, 
       recentlyUpdatedAmount: recentlyUpdatedSales.reduce((acc, s) => acc + Number(s.amount), 0), 
-      cashAmount, mpesaAmount, bankAmount, checkAmount, cardAmount, creditAmount,
+      cashAmount, mpesaAmount, bankAmount, checkAmount, cardAmount, creditAmount, tradeInAmount,
       todaySales: todaySales.reduce((acc, s) => acc + Number(s.amount), 0), 
       todayPaid: todaySales.filter(s => s.status === "PAID").reduce((acc, s) => acc + Number(s.amount), 0),
       todayPartial: todaySales.filter(s => s.status === "PARTIAL").reduce((acc, s) => acc + Number(s.amount), 0),
@@ -1810,7 +2604,7 @@ export default function EnhancedSalesPage() {
       todayPaidCount: todaySales.filter(s => s.status === "PAID").length,
       todayPartialCount: todaySales.filter(s => s.status === "PARTIAL").length,
       todayUnpaidCount: todaySales.filter(s => s.status === "UNPAID").length,
-      todayCash, todayMpesa, todayBank, todayCheck, todayCard, todayCredit
+      todayCash, todayMpesa, todayBank, todayCheck, todayCard, todayCredit, todayTradeIn
     }; 
   }, [sales, isRecentlyUpdated, isSaleModified]);
 
@@ -1920,7 +2714,10 @@ export default function EnhancedSalesPage() {
     return customers.filter(c => c.name.toLowerCase().includes(searchLower) || (c.phone && c.phone.includes(searchLower)));
   }, [customers, customerSearch]);
 
-  // ==================== RENDER ====================
+  const currentSaleTotal = useMemo(
+    () => editSaleItems.reduce((sum, item) => sum + (item.quantity * item.price), 0),
+    [editSaleItems]
+  );
 
   if (loading && sales.length === 0) return <div className="p-3 min-h-screen bg-gray-50 dark:bg-gray-900"><div className="text-center text-black dark:text-white text-xs">Loading...</div></div>;
 
@@ -1931,7 +2728,6 @@ export default function EnhancedSalesPage() {
           {theme === 'light' ? <Moon size={16} className="text-gray-700" /> : <Sun size={16} className="text-yellow-500" />}
         </button>
 
-        {/* Restock Confirmation Modal */}
         {showRestockConfirm && (
           <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-2 z-[60]">
             <div className="bg-white dark:bg-gray-800 rounded-lg max-w-sm w-full p-4 shadow-2xl">
@@ -1946,7 +2742,6 @@ export default function EnhancedSalesPage() {
           </div>
         )}
 
-        {/* Deletion Reason Modal */}
         {showDeletionReasonModal && (
           <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-2 z-[60]">
             <div className="bg-white dark:bg-gray-800 rounded-lg max-w-md w-full p-4 shadow-2xl">
@@ -1961,18 +2756,16 @@ export default function EnhancedSalesPage() {
           </div>
         )}
 
-        {/* Header Section */}
         <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-3 mb-3">
           <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
             <div><h1 className="text-base sm:text-xl font-bold bg-gradient-to-r from-blue-600 to-indigo-600 bg-clip-text text-transparent">Sales Management</h1><p className="text-[10px] text-gray-500 mt-0.5">Track and manage all sales</p></div>
             <div className="flex gap-2 w-full sm:w-auto">
               <button onClick={() => setShowAccountingModal(true)} className="flex-1 sm:flex-none bg-purple-600 text-white px-3 py-2 rounded-lg hover:bg-purple-700 flex items-center justify-center gap-1.5 text-xs shadow-md transition-all"><FileSpreadsheet size={12} />Reports</button>
-              <button onClick={() => { const csvData = sales.map(sale => ({ 'Sale ID': sale.id, 'Date': new Date(sale.date).toLocaleDateString(), 'Customer': sale.customer?.name || '-', 'Phone': sale.customer?.phone || '-', 'Amount': sale.amount.toFixed(2), 'Status': sale.status, 'Remaining': sale.remainingAmount.toFixed(2), 'Created By': sale.createdBy || '-', 'Updated By': sale.updatedBy || '-', 'Assigned Staff': sale.assignedStaff?.name || '-' })); const headers = Object.keys(csvData[0] || {}); const csvContent = [headers.join(','), ...csvData.map(row => headers.map(header => `"${String(row[header as keyof typeof row]).replace(/"/g, '""')}"`).join(','))].join('\n'); const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' }); const link = document.createElement('a'); const url = URL.createObjectURL(blob); link.setAttribute('href', url); link.setAttribute('download', `sales_${new Date().toISOString().split('T')[0]}.csv`); link.click(); URL.revokeObjectURL(url); }} className="flex-1 sm:flex-none bg-gradient-to-r from-green-600 to-emerald-600 text-white px-3 py-2 rounded-lg hover:from-green-700 hover:to-emerald-700 flex items-center justify-center gap-1.5 text-xs shadow-md transition-all"><Download size={12} />Export</button>
+              <button onClick={() => { const csvData = sales.map(sale => ({ 'Sale ID': sale.id, 'Date': new Date(sale.date).toLocaleDateString(), 'Customer': sale.customer?.name || '-', 'Phone': sale.customer?.phone || '-', 'Amount': sale.amount.toFixed(2), 'Status': sale.status, 'Remaining': sale.remainingAmount.toFixed(2), 'Trade-In Items': Array.isArray(sale.tradeins) ? sale.tradeins.length : 0, 'Trade-In Total': tradeInSaleTotal(sale.tradeins).toFixed(2), 'Created By': sale.createdBy || '-', 'Updated By': sale.updatedBy || '-', 'Assigned Staff': sale.assignedStaff?.name || '-' })); const headers = Object.keys(csvData[0] || {}); const csvContent = [headers.join(','), ...csvData.map(row => headers.map(header => `"${String(row[header as keyof typeof row]).replace(/"/g, '""')}"`).join(','))].join('\n'); const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' }); const link = document.createElement('a'); const url = URL.createObjectURL(blob); link.setAttribute('href', url); link.setAttribute('download', `sales_${new Date().toISOString().split('T')[0]}.csv`); link.click(); URL.revokeObjectURL(url); }} className="flex-1 sm:flex-none bg-gradient-to-r from-green-600 to-emerald-600 text-white px-3 py-2 rounded-lg hover:from-green-700 hover:to-emerald-700 flex items-center justify-center gap-1.5 text-xs shadow-md transition-all"><Download size={12} />Export</button>
             </div>
           </div>
         </div>
 
-        {/* Filter Section */}
         <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-3 mb-3">
           <div className="flex items-center justify-between mb-2">
             <div className="flex items-center gap-1.5">
@@ -2145,14 +2938,11 @@ export default function EnhancedSalesPage() {
           </div>
         </div>
 
-        {/* Error/Success Messages */}
         {error && <div className="bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-300 px-3 py-2 rounded-lg mb-3 flex justify-between items-start"><div className="flex items-start gap-1.5"><AlertTriangle size={12} className="flex-shrink-0 mt-0.5" /><span className="text-[11px]">{error}</span></div><button onClick={clearMessages} className="text-red-700 hover:text-red-900 dark:text-red-300 text-xs">×</button></div>}
         {success && <div className="bg-green-50 dark:bg-green-900/30 border border-green-200 dark:border-green-800 text-green-700 dark:text-green-300 px-3 py-2 rounded-lg mb-3 flex justify-between items-start"><div className="flex items-start gap-1.5"><CheckCircle size={12} className="flex-shrink-0 mt-0.5" /><span className="text-[11px]">{success}</span></div><button onClick={clearMessages} className="text-green-700 hover:text-green-900 dark:text-green-300 text-xs">×</button></div>}
 
-        {/* Payment Method Breakdown */}
         <PaymentBreakdown stats={stats} dateFilter={dateFilter} />
 
-        {/* Stats Cards */}
         <div className="grid grid-cols-2 gap-2 mb-3">
           <div className="bg-white dark:bg-gray-800 rounded-lg p-2 shadow-sm border-l-4 border-emerald-500"><div className="text-[9px] text-gray-500 dark:text-gray-400">Total Sales</div><div className="text-sm font-bold text-emerald-600 dark:text-emerald-400">Ksh {formatCurrency(stats.totalSales)}</div><div className="text-[8px] text-gray-400">{sales.length} orders</div></div>
           <div className="bg-white dark:bg-gray-800 rounded-lg p-2 shadow-sm border-l-4 border-blue-500"><div className="text-[9px] text-gray-500 dark:text-gray-400">Fully Paid</div><div className="text-sm font-bold text-blue-600 dark:text-blue-400">Ksh {formatCurrency(stats.paidSales)}</div><div className="text-[8px] text-gray-400">{stats.paidCount} orders</div></div>
@@ -2164,7 +2954,6 @@ export default function EnhancedSalesPage() {
           <div className="bg-white dark:bg-gray-800 rounded-lg p-2 shadow-sm border-l-4 border-teal-500"><div className="text-[9px] text-gray-500 dark:text-gray-400">Today's Outstanding</div><div className="text-sm font-bold text-teal-600 dark:text-teal-400">Ksh {formatCurrency(stats.todayOutstanding)}</div><div className="text-[8px] text-gray-400">remaining today</div></div>
         </div>
 
-        {/* Tabs Section */}
         <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 mb-3">
           <div className="flex overflow-x-auto scrollbar-thin border-b dark:border-gray-700">
             {[{ key: "overview", label: "All", count: sales.length }, { key: "paid", label: "Paid", count: stats.paidCount }, { key: "partial", label: "Partial", count: stats.partialCount }, { key: "unpaid", label: "Unpaid", count: stats.unpaidCount }, { key: "recentlyUpdated", label: "Updates", count: stats.recentlyUpdatedCount }, { key: "accounting", label: "Accounting", count: null, icon: TrendingUp }].map((tab) => (<button key={tab.key} onClick={() => setActiveTab(tab.key as any)} className={`flex-shrink-0 px-2.5 py-2 text-center transition-all whitespace-nowrap ${activeTab === tab.key ? "border-b-2 border-blue-500 text-blue-600 dark:text-blue-400 font-semibold bg-blue-50/30 dark:bg-blue-900/10" : "text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700/50"}`}><div className="flex items-center gap-1"><span className="text-[11px]">{tab.label}</span>{tab.count !== null && <span className="text-[9px] text-gray-400">({tab.count})</span>}</div></button>))}
@@ -2232,7 +3021,7 @@ export default function EnhancedSalesPage() {
                               )}
                             </div>
                           </div>
-                          <div className="flex items-center gap-1.5">
+                          <div className="flex items-center gap-1.5 flex-wrap justify-end">
                             <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-semibold ${
                               sale.status === "PAID" ? "bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300" : 
                               sale.status === "PARTIAL" ? "bg-orange-100 dark:bg-orange-900/30 text-orange-700 dark:text-orange-300" : 
@@ -2242,6 +3031,12 @@ export default function EnhancedSalesPage() {
                               <span className="px-1.5 py-0.5 rounded-full text-[10px] bg-indigo-100 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300 flex items-center gap-1">
                                 <UserCheck size={10} />
                                 {sale.assignedStaff.name}
+                              </span>
+                            )}
+                            {Array.isArray(sale.tradeins) && sale.tradeins.length > 0 && (
+                              <span className="px-1.5 py-0.5 rounded-full text-[10px] bg-purple-100 dark:bg-purple-900/40 text-purple-700 dark:text-purple-300 flex items-center gap-1">
+                                <Gift size={10} />
+                                Trade-In · {sale.tradeins.length}
                               </span>
                             )}
                             <button onClick={() => setExpandedSaleId(expandedSaleId === sale.id ? null : sale.id)} 
@@ -2278,7 +3073,48 @@ export default function EnhancedSalesPage() {
                         </div>
                         
                         {expandedSaleId === sale.id && (
-                          <div className="mt-2 pt-2 border-t border-gray-100 dark:border-gray-700">
+                          <div className="mt-2 pt-2 border-t border-gray-100 dark:border-gray-700 space-y-2">
+                            {Array.isArray(sale.tradeins) && sale.tradeins.length > 0 && (
+                              <div>
+                                <p className="text-[10px] font-semibold text-purple-600 dark:text-purple-400 uppercase tracking-wide mb-1.5 flex items-center gap-1">
+                                  <Gift size={10} /> Trade-In Items ({sale.tradeins.length})
+                                </p>
+                                <div className="space-y-1">
+                                  {sale.tradeins.map((t: any, i: number) => {
+                                    const qty = Number(t.quantity) || 1;
+                                    const unit = tradeInUnitValue(t);
+                                    const lineTotal = tradeInLineTotal(t);
+                                    return (
+                                      <div key={t.id ?? i} className="flex justify-between items-start bg-purple-50 dark:bg-purple-900/20 border border-purple-100 dark:border-purple-800 rounded-lg px-2 py-1.5 text-[11px]">
+                                        <div className="flex-1 min-w-0 pr-2">
+                                          <span className="font-medium text-purple-800 dark:text-purple-200 truncate block">
+                                            {t.itemName || "Trade-In Item"}
+                                          </span>
+                                          <span className="text-[9px] text-purple-600 dark:text-purple-400">
+                                            {t.condition ? `${t.condition} · ` : ""}
+                                            {qty} × Ksh {formatCurrency(unit)}
+                                            {t.category ? ` · ${t.category}` : ""}
+                                          </span>
+                                          {t.description && (
+                                            <span className="text-[9px] text-purple-500 dark:text-purple-400 italic block truncate">
+                                              {t.description}
+                                            </span>
+                                          )}
+                                        </div>
+                                        <span className="font-bold text-purple-800 dark:text-purple-200 flex-shrink-0">
+                                          Ksh {formatCurrency(lineTotal)}
+                                        </span>
+                                      </div>
+                                    );
+                                  })}
+                                  <div className="flex justify-between text-[10px] font-bold text-purple-800 dark:text-purple-200 bg-purple-100 dark:bg-purple-900/40 rounded-lg px-2 py-1">
+                                    <span>Trade-In Total</span>
+                                    <span>Ksh {formatCurrency(tradeInSaleTotal(sale.tradeins))}</span>
+                                  </div>
+                                </div>
+                              </div>
+                            )}
+
                             <button onClick={() => handleViewAuditLog(sale)} 
                                     className="w-full bg-gray-50 dark:bg-gray-700/50 hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300 px-2 py-1.5 rounded-lg text-[11px] flex items-center justify-center gap-1.5 transition-colors">
                               <History size={11} />View Audit History
@@ -2294,6 +3130,10 @@ export default function EnhancedSalesPage() {
                           <button onClick={() => handleEditSale(sale)} 
                                   className="flex-1 bg-blue-50 dark:bg-blue-900/20 hover:bg-blue-100 text-blue-700 px-2 py-1.5 rounded-lg text-[11px] flex items-center justify-center gap-1">
                             <Edit size={10} />Edit
+                          </button>
+                          <button onClick={() => handleViewAuditLog(sale)} 
+                                  className="flex-1 bg-gray-50 dark:bg-gray-700/50 hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300 px-2 py-1.5 rounded-lg text-[11px] flex items-center justify-center gap-1">
+                            <History size={10} />History
                           </button>
                           <button onClick={() => showDeleteConfirmationWithReason(sale.id)} disabled={loading} 
                                   className="flex-1 bg-red-50 dark:bg-red-900/20 hover:bg-red-100 text-red-700 px-2 py-1.5 rounded-lg text-[11px] flex items-center justify-center gap-1 disabled:opacity-50">
@@ -2315,7 +3155,6 @@ export default function EnhancedSalesPage() {
           </div>
         </div>
 
-        {/* Edit Sale Modal with Enhanced Product Stock and Payment Methods */}
         {editingSale && (
           <div className="fixed inset-0 bg-black bg-opacity-50 flex items-start justify-center p-2 z-50 overflow-y-auto">
             <div className="bg-white dark:bg-gray-800 rounded-lg w-full max-w-md max-h-[90vh] overflow-y-auto mt-4 shadow-2xl">
@@ -2329,7 +3168,6 @@ export default function EnhancedSalesPage() {
               </div>
               
               <div className="p-3 space-y-3">
-                {/* Sale Info */}
                 <div className="bg-gray-50 dark:bg-gray-700/50 p-2.5 rounded-lg">
                   <h3 className="font-semibold mb-1.5 text-xs text-black dark:text-white">Sale Information</h3>
                   <div className="grid grid-cols-2 gap-1.5 text-[11px]">
@@ -2347,18 +3185,15 @@ export default function EnhancedSalesPage() {
                   </div>
                 </div>
                 
-                {/* Items Section */}
                 <div>
                   <h3 className="text-xs font-semibold mb-1.5 text-black dark:text-white flex items-center justify-between">
                     <span>Products</span>
                     <span className="text-[10px] text-gray-500">{editSaleItems.length} items</span>
                   </h3>
                   
-                  {/* Add Item Form */}
                   <div className="space-y-1.5 mb-3 p-2.5 bg-gray-50 dark:bg-gray-700/50 rounded-lg">
                     <h4 className="font-medium text-[10px] text-gray-700 dark:text-gray-300">Add New Product</h4>
                     
-                    {/* Product Search with Dropdown and Stock Info */}
                     <div className="relative product-dropdown-container">
                       <div className="relative">
                         <Search className="absolute left-2 top-1/2 transform -translate-y-1/2 text-gray-400" size={12} />
@@ -2378,11 +3213,9 @@ export default function EnhancedSalesPage() {
                         />
                       </div>
                       
-                      {/* Product Dropdown with Stock Display */}
                       {showProductDropdown && filteredProducts.length > 0 && (
                         <div className="absolute z-20 w-full mt-1 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded-lg shadow-lg max-h-48 overflow-y-auto">
                           {filteredProducts.map(product => {
-                            // Get correct stock quantity
                             let stockQty = 0;
                             if (Array.isArray(product.stock)) {
                               stockQty = product.stock.reduce((sum: number, s: any) => sum + (s.quantity || 0), 0);
@@ -2392,7 +3225,6 @@ export default function EnhancedSalesPage() {
                               stockQty = product.stock;
                             }
                             
-                            // Get existing quantity in edit
                             const existingItem = editSaleItems.find(item => item.productId === product.id);
                             const existingQty = existingItem ? existingItem.quantity : 0;
                             const availableStock = stockQty - existingQty;
@@ -2417,7 +3249,6 @@ export default function EnhancedSalesPage() {
                         </div>
                       )}
                       
-                      {/* No products message */}
                       {showProductDropdown && productSearch.trim() !== "" && filteredProducts.length === 0 && (
                         <div className="absolute z-20 w-full mt-1 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded-lg shadow-lg p-3 text-center">
                           <p className="text-xs text-gray-500">No products found matching "{productSearch}"</p>
@@ -2426,7 +3257,6 @@ export default function EnhancedSalesPage() {
                       )}
                     </div>
                     
-                    {/* Quantity and Price inputs */}
                     <div className="grid grid-cols-2 gap-1.5">
                       <div>
                         <label className="text-[9px] text-gray-500">Quantity</label>
@@ -2454,10 +3284,7 @@ export default function EnhancedSalesPage() {
                     </div>
                     
                     <button 
-                      onClick={() => {
-                        console.log("Add Item button clicked");
-                        handleAddItemToEditSale();
-                      }} 
+                      onClick={handleAddItemToEditSale} 
                       disabled={!currentEditItem.productId || currentEditItem.quantity <= 0 || currentEditItem.price <= 0} 
                       className="w-full bg-blue-600 text-white px-2 py-2 rounded-lg text-xs hover:bg-blue-700 disabled:opacity-50 transition-colors flex items-center justify-center gap-1"
                     >
@@ -2465,7 +3292,6 @@ export default function EnhancedSalesPage() {
                     </button>
                   </div>
                   
-                  {/* Current Items List */}
                   <div className="space-y-1.5 max-h-40 overflow-y-auto">
                     {editSaleItems.length === 0 ? (
                       <div className="text-center py-6 text-gray-500 text-xs border border-dashed border-gray-200 dark:border-gray-700 rounded-lg">
@@ -2522,40 +3348,46 @@ export default function EnhancedSalesPage() {
                     )}
                   </div>
                   
-                  {/* Total Amount */}
                   <div className="bg-blue-50 dark:bg-blue-900/20 p-2 rounded-lg mt-3">
                     <div className="flex justify-between text-xs">
                       <span className="font-semibold text-black dark:text-white">Total Amount:</span>
                       <span className="font-bold text-blue-600 dark:text-blue-400">
-                        Ksh {formatCurrency(editSaleItems.reduce((sum, item) => sum + (item.quantity * item.price), 0))}
+                        Ksh {formatCurrency(currentSaleTotal)}
                       </span>
                     </div>
                   </div>
                 </div>
                 
-                {/* Enhanced Payments Section */}
                 <div>
                   <h3 className="text-xs font-semibold mb-1.5 text-black dark:text-white">Payments</h3>
                   
-                  {/* Existing Payments List */}
                   {editPayments.length > 0 && (
-                    <div className="space-y-1.5 mb-3 max-h-32 overflow-y-auto">
+                    <div className="space-y-1.5 mb-3 max-h-40 overflow-y-auto">
                       {editPayments.map((payment, index) => {
                         const paymentMethod = paymentMethods.find(m => m.value === payment.method);
                         const Icon = paymentMethod?.icon || Banknote;
+                        const isTradeIn = payment.method === "TRADE_IN";
+                        const tradeInCount = payment.tradeInItems?.length || 0;
+                        const tradeInTotal = (payment.tradeInItems || []).reduce((s, it) => s + (it.totalValue || 0), 0);
                         return (
                           <div key={index} className="flex justify-between items-center bg-gray-50 dark:bg-gray-700/50 p-2 rounded-lg border dark:border-gray-600 text-[11px]">
                             <div className="flex items-center gap-2 flex-wrap">
                               <Icon size={14} className={paymentMethod?.color?.split(' ')[0]?.replace('bg-', 'text-') || 'text-gray-500'} />
                               <div>
                                 <span className={`px-1.5 py-0.5 rounded-full text-[9px] font-medium ${paymentMethod?.color || "bg-gray-100 text-gray-700"}`}>
-                                  {payment.method}
+                                  {isTradeIn ? "Trade-In" : payment.method}
                                 </span>
                                 {payment.id !== undefined && (
                                   <span className="text-[9px] text-gray-400 ml-1">ID: {payment.id}</span>
                                 )}
                               </div>
-                              <span className="font-medium text-black dark:text-white">Ksh {formatCurrency(parseFloat(payment.amount))}</span>
+                              {isTradeIn ? (
+                                <span className="text-[10px] text-purple-700 dark:text-purple-300 font-medium">
+                                  {tradeInCount} item{tradeInCount === 1 ? "" : "s"} · Ksh {formatCurrency(tradeInTotal)}
+                                </span>
+                              ) : (
+                                <span className="font-medium text-black dark:text-white">Ksh {formatCurrency(parseFloat(payment.amount))}</span>
+                              )}
                               {payment.referenceId && (
                                 <span className="text-[9px] text-gray-400">Ref: {payment.referenceId}</span>
                               )}
@@ -2566,66 +3398,147 @@ export default function EnhancedSalesPage() {
                                 <span className="text-[9px] text-yellow-600">Due: {formatDate(payment.dueDate)}</span>
                               )}
                             </div>
-                            {payment.id !== undefined && (
-                              <button 
-                                onClick={() => handleDeletePayment(payment.id as number, editingSale.id)} 
-                                disabled={deletingPaymentId === payment.id} 
-                                className="text-red-500 hover:text-red-700 p-1"
-                              >
-                                <Trash2 size={12} />
-                              </button>
-                            )}
+                            <div className="flex items-center gap-1">
+                              {isTradeIn && !payment.id && (
+                                <button
+                                  onClick={() => setShowTradeInModal(true)}
+                                  className="text-purple-600 hover:text-purple-800 p-1"
+                                  title="Edit Trade-In items"
+                                >
+                                  <Edit size={12} />
+                                </button>
+                              )}
+                              {(payment.id !== undefined || isTradeIn) && (
+                                <button
+                                  onClick={() => {
+                                    if (isTradeIn && !payment.id) {
+                                      removeTradeInPayment();
+                                    } else if (payment.id !== undefined) {
+                                      handleDeletePayment(payment.id as number, editingSale.id);
+                                    }
+                                  }}
+                                  disabled={deletingPaymentId === payment.id}
+                                  className="text-red-500 hover:text-red-700 p-1"
+                                  title={isTradeIn ? "Remove Trade-In" : "Delete payment"}
+                                >
+                                  <Trash2 size={12} />
+                                </button>
+                              )}
+                            </div>
                           </div>
                         );
                       })}
                     </div>
                   )}
                   
-                  {/* Add New Payment Form */}
                   <div className="space-y-2 p-3 bg-gray-50 dark:bg-gray-700/50 rounded-lg">
                     <h4 className="font-medium text-[10px] text-gray-700 dark:text-gray-300">Add Payment</h4>
                     
-                    {/* Payment Method Selection - Cash, M-Pesa, Bank */}
-                    <div className="grid grid-cols-3 gap-1.5">
-                      {["CASH", "MPESA", "BANK"].map((method) => {
+                    {/* Payment Method Selection — INCLUDES TRADE-IN */}
+                    <div className="grid grid-cols-4 gap-1.5">
+                      {["CASH", "MPESA", "BANK", "TRADE_IN"].map((method) => {
                         const methodInfo = paymentMethods.find(m => m.value === method);
                         const Icon = methodInfo?.icon;
+                        const isSelected = currentPayment.method === method;
                         return (
                           <button
                             key={method}
                             type="button"
-                            onClick={() => setCurrentPayment({ ...currentPayment, method: method as any, referenceId: "", checkDepositDate: "", dueDate: "", bankName: "" })}
+                            onClick={() => {
+                              setCurrentPayment({ ...currentPayment, method: method as any, referenceId: "", checkDepositDate: "", dueDate: "", bankName: "" });
+                              if (method === "TRADE_IN") setShowTradeInModal(true);
+                            }}
                             className={`flex flex-col items-center gap-1 p-2 rounded-lg border transition-all ${
-                              currentPayment.method === method
-                                ? "border-blue-500 bg-blue-50 dark:bg-blue-900/20 text-blue-600"
+                              isSelected
+                                ? method === "TRADE_IN"
+                                  ? "border-purple-500 bg-purple-50 dark:bg-purple-900/20 text-purple-600"
+                                  : "border-blue-500 bg-blue-50 dark:bg-blue-900/20 text-blue-600"
                                 : "border-gray-200 dark:border-gray-600 hover:border-blue-300"
                             }`}
                           >
                             {Icon && <Icon size={16} />}
-                            <span className="text-[10px] font-medium">{methodInfo?.label || method}</span>
+                            <span className="text-[10px] font-medium">{method === "TRADE_IN" ? "Trade-In" : methodInfo?.label || method}</span>
                           </button>
                         );
                       })}
                     </div>
-                    
-                    {/* Amount Input */}
-                    <div>
-                      <label className="text-[9px] text-gray-500">Amount (Ksh)</label>
-                      <div className="relative mt-0.5">
-                        <span className="absolute left-2 top-1/2 transform -translate-y-1/2 text-gray-400 text-xs">Ksh</span>
-                        <input 
-                          type="number" 
-                          min="0" 
-                          step="0.01" 
-                          value={currentPayment.amount} 
-                          onChange={(e) => setCurrentPayment({...currentPayment, amount: e.target.value})} 
-                          placeholder="0.00" 
-                          className="w-full pl-10 pr-2 py-2 border border-gray-200 dark:border-gray-600 rounded-lg text-xs bg-white dark:bg-gray-700 text-black dark:text-white" 
-                        />
+
+                    {currentPayment.method === "TRADE_IN" && (
+                      <div className="space-y-2 bg-purple-50 dark:bg-purple-900/20 border border-purple-200 dark:border-purple-800 rounded-lg p-2.5">
+                        {(() => {
+                          const tradeInTotal = currentTradeInItems.reduce((s, it) => s + (it.totalValue || 0), 0);
+                          const diff = currentSaleTotal - tradeInTotal;
+                          const hasItems = currentTradeInItems.length > 0;
+                          return (
+                            <>
+                              <div className="flex items-center justify-between">
+                                <div className="flex items-center gap-1.5 text-purple-700 dark:text-purple-300">
+                                  <Gift size={12} />
+                                  <span className="text-[11px] font-semibold">
+                                    {hasItems ? `${currentTradeInItems.length} item${currentTradeInItems.length === 1 ? "" : "s"}` : "No items yet"}
+                                  </span>
+                                </div>
+                                <button
+                                  onClick={() => setShowTradeInModal(true)}
+                                  className="text-[10px] bg-purple-600 text-white px-2 py-1 rounded-md font-medium hover:bg-purple-700 transition-colors flex items-center gap-1"
+                                >
+                                  <Plus size={10} /> {hasItems ? "Edit" : "Add"} Items
+                                </button>
+                              </div>
+
+                              {hasItems && (
+                                <>
+                                  <div className="text-[10px] text-gray-600 dark:text-gray-400 space-y-0.5">
+                                    <div className="flex justify-between">
+                                      <span>Sale total</span>
+                                      <span className="font-semibold text-gray-800 dark:text-gray-200">Ksh {formatCurrency(currentSaleTotal)}</span>
+                                    </div>
+                                    <div className="flex justify-between">
+                                      <span>Trade-in total</span>
+                                      <span className="font-semibold text-purple-700 dark:text-purple-300">Ksh {formatCurrency(tradeInTotal)}</span>
+                                    </div>
+                                  </div>
+                                  {Math.abs(diff) < 0.01 ? (
+                                    <div className="text-[10px] font-bold text-emerald-700 dark:text-emerald-400 text-center py-1 flex items-center justify-center gap-1">
+                                      <CheckCircle size={11} /> Fully settled — No balance
+                                    </div>
+                                  ) : diff > 0 ? (
+                                    <div className="flex justify-between text-[10px] font-bold text-rose-700 dark:text-rose-400 border-t border-purple-200 dark:border-purple-800 pt-1">
+                                      <span>Customer owes:</span>
+                                      <span>Ksh {formatCurrency(diff)}</span>
+                                    </div>
+                                  ) : (
+                                    <div className="flex justify-between text-[10px] font-bold text-blue-700 dark:text-blue-400 border-t border-purple-200 dark:border-purple-800 pt-1">
+                                      <span>We owe customer:</span>
+                                      <span>Ksh {formatCurrency(Math.abs(diff))}</span>
+                                    </div>
+                                  )}
+                                </>
+                              )}
+                            </>
+                          );
+                        })()}
                       </div>
-                    </div>
+                    )}
                     
-                    {/* Conditional Fields based on Payment Method */}
+                    {currentPayment.method !== "TRADE_IN" && (
+                      <div>
+                        <label className="text-[9px] text-gray-500">Amount (Ksh)</label>
+                        <div className="relative mt-0.5">
+                          <span className="absolute left-2 top-1/2 transform -translate-y-1/2 text-gray-400 text-xs">Ksh</span>
+                          <input 
+                            type="number" 
+                            min="0" 
+                            step="0.01" 
+                            value={currentPayment.amount} 
+                            onChange={(e) => setCurrentPayment({...currentPayment, amount: e.target.value})} 
+                            placeholder="0.00" 
+                            className="w-full pl-10 pr-2 py-2 border border-gray-200 dark:border-gray-600 rounded-lg text-xs bg-white dark:bg-gray-700 text-black dark:text-white" 
+                          />
+                        </div>
+                      </div>
+                    )}
+                    
                     {currentPayment.method === "MPESA" && (
                       <div>
                         <label className="text-[9px] text-gray-500">M-Pesa Transaction ID</label>
@@ -2665,24 +3578,21 @@ export default function EnhancedSalesPage() {
                       </div>
                     )}
                     
-                    {/* Add Payment Button */}
-                    <button 
-                      onClick={() => {
-                        console.log("Add Payment button clicked");
-                        addEditPayment();
-                      }} 
-                      disabled={currentPayment.method !== "CREDIT" && (!currentPayment.amount || parseFloat(currentPayment.amount) <= 0)} 
-                      className="w-full bg-green-600 text-white px-3 py-2 rounded-lg text-xs hover:bg-green-700 disabled:opacity-50 transition-colors flex items-center justify-center gap-1"
-                    >
-                      <Plus size={12} /> Add Payment
-                    </button>
+                    {currentPayment.method !== "TRADE_IN" && (
+                      <button 
+                        onClick={addEditPayment} 
+                        disabled={currentPayment.method !== "CREDIT" && (!currentPayment.amount || parseFloat(currentPayment.amount) <= 0)} 
+                        className="w-full bg-green-600 text-white px-3 py-2 rounded-lg text-xs hover:bg-green-700 disabled:opacity-50 transition-colors flex items-center justify-center gap-1"
+                      >
+                        <Plus size={12} /> Add Payment
+                      </button>
+                    )}
                   </div>
                   
-                  {/* Payment Summary */}
                   <div className="bg-blue-50 dark:bg-blue-900/20 p-2 rounded-lg mt-3">
                     <div className="flex justify-between text-xs mb-1">
                       <span className="text-black dark:text-white">Total Sale:</span>
-                      <span className="font-bold text-black dark:text-white">Ksh {formatCurrency(editSaleItems.reduce((sum, item) => sum + (item.quantity * item.price), 0))}</span>
+                      <span className="font-bold text-black dark:text-white">Ksh {formatCurrency(currentSaleTotal)}</span>
                     </div>
                     <div className="flex justify-between text-xs mb-1">
                       <span className="text-black dark:text-white">Total Payments:</span>
@@ -2691,17 +3601,16 @@ export default function EnhancedSalesPage() {
                     <div className="flex justify-between text-xs pt-1 border-t border-blue-200 dark:border-blue-800">
                       <span className="text-black dark:text-white">Remaining:</span>
                       <span className={`font-bold ${
-                        Math.max(0, editSaleItems.reduce((sum, item) => sum + (item.quantity * item.price), 0) - editPayments.reduce((sum, p) => sum + Number(p.amount), 0)) > 0 
+                        Math.max(0, currentSaleTotal - editPayments.reduce((sum, p) => sum + Number(p.amount), 0)) > 0 
                           ? 'text-red-600' 
                           : 'text-green-600'
                       }`}>
-                        Ksh {formatCurrency(Math.max(0, editSaleItems.reduce((sum, item) => sum + (item.quantity * item.price), 0) - editPayments.reduce((sum, p) => sum + Number(p.amount), 0)))}
+                        Ksh {formatCurrency(Math.max(0, currentSaleTotal - editPayments.reduce((sum, p) => sum + Number(p.amount), 0)))}
                       </span>
                     </div>
                   </div>
                 </div>
                 
-                {/* Action Buttons */}
                 <div className="flex gap-2 pt-2 border-t border-gray-100 dark:border-gray-700 mt-2">
                   <button 
                     onClick={() => setEditingSale(null)} 
@@ -2727,7 +3636,15 @@ export default function EnhancedSalesPage() {
           </div>
         )}
 
-        {/* Deleted Sales Modal */}
+        <TradeInModal
+          isOpen={showTradeInModal}
+          onClose={() => setShowTradeInModal(false)}
+          initialItems={currentTradeInItems}
+          onSave={handleSaveTradeInItems}
+          saleTotal={currentSaleTotal}
+          formatCurrency={formatCurrency}
+        />
+
         {showDeletedModal && (
           <div className="fixed inset-0 bg-black bg-opacity-50 flex items-start justify-center p-2 z-50 overflow-y-auto">
             <div className="bg-white dark:bg-gray-800 rounded-lg w-full max-w-4xl max-h-[90vh] overflow-y-auto mt-4 shadow-2xl">
@@ -2740,7 +3657,6 @@ export default function EnhancedSalesPage() {
           </div>
         )}
 
-        {/* Deleted Sale Details Modal */}
         {showDeleteDetailsModal && (
           <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-2 z-[70]">
             <div className="bg-white dark:bg-gray-800 rounded-lg max-w-md w-full max-h-[80vh] overflow-y-auto shadow-2xl">
@@ -2755,10 +3671,8 @@ export default function EnhancedSalesPage() {
           </div>
         )}
 
-        {/* Accounting Reports Modal */}
         <AccountingReportsModal isOpen={showAccountingModal} onClose={() => setShowAccountingModal(false)} customers={customers} getUserDisplayName={getUserDisplayName} />
 
-        {/* Enhanced Audit Log Modal */}
         <EnhancedAuditLogModal isOpen={showAuditModal} onClose={() => { setShowAuditModal(false); setSelectedSaleForAudit(null); setAuditLogs([]); }} auditLogs={auditLogs} loading={auditLogsLoading} sale={selectedSaleForAudit} getUserDisplayName={getUserDisplayName} formatDateTime={formatDateTime} />
       </div>
     </ThemeContext.Provider>

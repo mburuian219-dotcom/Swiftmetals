@@ -114,7 +114,7 @@ function NavigationBar({ activePage }: { activePage: string }) {
     { id: 'products-sold', label: 'Products Sold', icon: Package, path: '/admin/productssoldreport' },
     { id: 'restock', label: 'Restock', icon: ShoppingCart, path: '/admin/restock' },
     { id: 'reconcilliation', label: 'Sales', icon: Receipt, path: '/admin/reconciliation' },
-    { id: 'assigned', label: 'Assigned History', icon: BarChart3, path: '/admin/assignhistory' }
+    { id: 'creditors', label: 'Creditors', icon: BarChart3, path: '/admin/Superadmincreditors' },
   ];
 
   return (
