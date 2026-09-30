@@ -188,7 +188,7 @@ export default function RestockPage() {
   const [showReconciliationModal, setShowReconciliationModal] = useState(false);
   const [selectedRestockGroup, setSelectedRestockGroup] = useState<RestockGroup | null>(null);
   
-  // ✨ ENHANCED: Filter states
+  // Filter states
   const [dateRangePreset, setDateRangePreset] = useState<"today" | "yesterday" | "week" | "month" | "custom" | "all">("week");
   const [customFromDate, setCustomFromDate] = useState<string>(() => {
     const d = new Date(); d.setDate(d.getDate() - 7);
@@ -216,6 +216,10 @@ export default function RestockPage() {
   const [showCreditorDropdown, setShowCreditorDropdown] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   
+  // ℹ️ SESSION-ONLY creditor descriptions (never saved to DB).
+  // Keyed by creditor ID. Used only in the current browser session for reports.
+  const [creditorDescriptions, setCreditorDescriptions] = useState<Record<number, string>>({});
+  
   // Reconciliation data
   const [reconciliationData, setReconciliationData] = useState({
     date: "",
@@ -241,7 +245,9 @@ export default function RestockPage() {
   });
   
   // New creditor form states
-  const [newCreditor, setNewCreditor] = useState({ name: "", phone: "", email: "" });
+  // ℹ️ `description` is a SESSION-ONLY note for the restock report.
+  // It is NOT saved to the database.
+  const [newCreditor, setNewCreditor] = useState({ name: "", phone: "", email: "", description: "" });
   const [isAddingCreditor, setIsAddingCreditor] = useState(false);
   
   // Refs
@@ -299,8 +305,15 @@ export default function RestockPage() {
     return product.stock?.quantity || 0;
   };
 
-  // ✨ ENHANCED: Restock number formatting
+  // Restock number formatting
   const formatRestockNumber = (id: number): string => `#${String(id).padStart(4, '0')}`;
+
+  // ✅ Helper: is a production cost valid?
+  const hasProductionCost = (p?: Product | null): boolean => {
+    if (!p) return false;
+    const v = p.productionCost;
+    return v !== undefined && v !== null && !isNaN(Number(v)) && Number(v) > 0;
+  };
 
   // ==================== DATA FETCHING ====================
   const fetchData = async () => {
@@ -341,7 +354,6 @@ export default function RestockPage() {
       });
       if (restockRes.ok) {
         const data = await restockRes.json();
-        // ✨ ENHANCED: Normalize records with safe fallbacks
         const raw = Array.isArray(data) ? data : (data.restocks || data.data || []);
         const normalized: RestockRecord[] = raw.map((r: any) => ({
           ...r,
@@ -375,7 +387,7 @@ export default function RestockPage() {
     return () => unsubscribe();
   }, []);
 
-  // ✨ ENHANCED: Derive date range from preset
+  // Derive date range from preset
   const getDateRange = useCallback(() => {
     const now = new Date();
     let startDate = new Date(0);
@@ -410,7 +422,7 @@ export default function RestockPage() {
     return { startDate, endDate };
   }, [dateRangePreset, customFromDate, customToDate]);
 
-  // ✨ ENHANCED: Get unique categories and restock-type labels
+  // Get unique categories
   const availableCategories = useMemo(() => {
     const set = new Set<string>();
     for (const r of restockRecords) {
@@ -419,7 +431,7 @@ export default function RestockPage() {
     return Array.from(set).sort();
   }, [restockRecords]);
 
-  // ✨ ENHANCED: Filtered restocks (flat list) — used by both summary and table
+  // Filtered restocks (flat list)
   const filteredFlatRestocks = useMemo(() => {
     let filtered = [...restockRecords];
 
@@ -440,27 +452,26 @@ export default function RestockPage() {
       filtered = filtered.filter(r => r.creditorId === Number(selectedCreditorId));
     }
 
-    // ✨ NEW: Product filter
+    // Product filter
     if (productFilter.trim()) {
       const term = productFilter.toLowerCase();
       filtered = filtered.filter(r => (r.product?.name || '').toLowerCase().includes(term));
     }
 
-    // ✨ NEW: Category filter
+    // Category filter
     if (categoryFilter) {
       filtered = filtered.filter(r => (r.product?.category || '') === categoryFilter);
     }
 
-    // ✨ NEW: Restock type filter (currently only "Normal" exists)
+    // Restock type filter (currently only "Normal Restock" exists)
     if (restockTypeFilter) {
       const typeLabel = 'Normal Restock';
       if (restockTypeFilter !== typeLabel) {
-        // No matching types in schema yet → filter everything out
         filtered = filtered.filter(() => false);
       }
     }
 
-    // ✨ NEW: Search across product name, restock number, creditor
+    // Search across product name, restock number, creditor
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
       filtered = filtered.filter(r => {
@@ -474,7 +485,7 @@ export default function RestockPage() {
     return filtered;
   }, [restockRecords, getDateRange, paymentFilter, selectedCreditorId, productFilter, categoryFilter, restockTypeFilter, searchQuery]);
 
-  // ✨ ENHANCED: Group filtered restocks by date
+  // Group filtered restocks by date
   const filteredGroups = useMemo<RestockGroup[]>(() => {
     const groupedMap = new Map<string, RestockGroup>();
     for (const record of filteredFlatRestocks) {
@@ -524,7 +535,7 @@ export default function RestockPage() {
     if (!selectedProduct) { setError("Please select a product"); setTimeout(() => setError(null), 3000); return; }
     if (quantity <= 0) { setError("Quantity must be greater than 0"); setTimeout(() => setError(null), 3000); return; }
     const cost = parseFloat(costPrice);
-    if (isNaN(cost) || cost <= 0) { setError("Please enter a valid cost price"); setTimeout(() => setError(null), 3000); return; }
+    if (isNaN(cost) || cost <= 0) { setError("Please enter a valid production cost"); setTimeout(() => setError(null), 3000); return; }
 
     const existingItem = restockItems.find(item => item.productId === selectedProduct.id);
     if (existingItem) {
@@ -552,6 +563,14 @@ export default function RestockPage() {
   };
 
   const clearRestockItems = () => { setRestockItems([]); };
+
+  const resetRestockForm = () => {
+    setRestockItems([]); setSelectedProduct(null);
+    setProductSearch(""); setQuantity(1); setCostPrice(""); setPaymentSource("cash");
+    setSelectedCreditor(null); setCreditorSearch(""); setError(null);
+    setCreditorDescriptions({});
+    setNewCreditor({ name: "", phone: "", email: "", description: "" });
+  };
 
   const submitRestock = async () => {
     if (restockItems.length === 0) { setError("Please add at least one item to restock"); setTimeout(() => setError(null), 3000); return; }
@@ -586,8 +605,7 @@ export default function RestockPage() {
       setSuccess(`✅ Successfully restocked ${restockItems.length} item(s)!`);
       setTimeout(() => setSuccess(null), 4000);
 
-      setRestockItems([]); setSelectedProduct(null); setProductSearch(""); setQuantity(1);
-      setCostPrice(""); setPaymentSource("cash"); setSelectedCreditor(null); setCreditorSearch("");
+      resetRestockForm();
       setShowRestockModal(false);
       await fetchData();
     } catch (err: any) {
@@ -609,6 +627,7 @@ export default function RestockPage() {
       const response = await fetch("/api/creditors", {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        // ℹ️ NOTE: `notes` is intentionally NOT sent — description is report-only.
         body: JSON.stringify({
           name: newCreditor.name.trim(),
           phone: newCreditor.phone.trim() || undefined,
@@ -622,8 +641,17 @@ export default function RestockPage() {
       const createdCreditor = await response.json();
       setCreditors(prev => [...prev, createdCreditor]);
       setSelectedCreditor(createdCreditor);
+
+      // 💾 Store the description only in session memory (NOT DB)
+      if (newCreditor.description.trim()) {
+        setCreditorDescriptions(prev => ({
+          ...prev,
+          [createdCreditor.id]: newCreditor.description.trim(),
+        }));
+      }
+
       setShowCreditorModal(false);
-      setNewCreditor({ name: "", phone: "", email: "" });
+      setNewCreditor({ name: "", phone: "", email: "", description: "" });
       setSuccess("Creditor created successfully!");
       setTimeout(() => setSuccess(null), 3000);
     } catch (err: any) {
@@ -696,9 +724,11 @@ export default function RestockPage() {
 Date: ${formatDate(reconciliationData.date)}
 
 ITEMS RESTOCKED:
-${reconciliationData.items.map(item => 
-  `- ${item.product?.name || `Product ID: ${item.productId}`}: ${item.quantity} units × KSh ${formatCurrency(item.costPrice)} = KSh ${formatCurrency(item.totalCost)} (${getPaymentLabel(item.paymentSource)})`
-).join('\n')}
+${reconciliationData.items.map(item => {
+  const desc = item.creditorId ? creditorDescriptions[item.creditorId] : "";
+  return `- ${item.product?.name || `Product ID: ${item.productId}`}: ${item.quantity} units × KSh ${formatCurrency(item.costPrice)} = KSh ${formatCurrency(item.totalCost)} (${getPaymentLabel(item.paymentSource)})` +
+    (desc ? `\n    Creditor note: ${desc}` : '');
+}).join('\n')}
 
 SUMMARY:
 Total Production Cost: KSh ${formatCurrency(reconciliationData.totalProductionCost)}
@@ -738,7 +768,7 @@ Generated: ${new Date().toLocaleString()}
     URL.revokeObjectURL(url);
   };
 
-  // ==================== ✨ ENHANCED EXPORT (uses flat filtered list) ====================
+  // ==================== EXPORT (with creditor description) ====================
   const exportToCSV = () => {
     if (filteredFlatRestocks.length === 0) return;
 
@@ -753,6 +783,7 @@ Generated: ${new Date().toLocaleString()}
       'Restock Type': 'Normal Restock',
       'Payment Method': getPaymentLabel(r.paymentSource),
       'Creditor': r.creditor?.name || '—',
+      'Creditor Description': (r.creditorId && creditorDescriptions[r.creditorId]) || '—',
     }));
 
     const headers = Object.keys(csvData[0]);
@@ -770,7 +801,7 @@ Generated: ${new Date().toLocaleString()}
     URL.revokeObjectURL(url);
   };
 
-  // ==================== ✨ ENHANCED SUMMARY STATS ====================
+  // ==================== SUMMARY STATS ====================
   const stats = useMemo(() => {
     let totalItems = 0;
     let totalCost = 0;
@@ -874,7 +905,7 @@ Generated: ${new Date().toLocaleString()}
             </div>
           )}
 
-          {/* ✨ ENHANCED: Summary Cards with reconciliation summary */}
+          {/* Summary Cards */}
           {!loading && (
             <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-3 mb-4">
               <div className="bg-white dark:bg-gray-800 rounded-xl p-3 shadow-sm border-l-4 border-blue-500">
@@ -904,7 +935,7 @@ Generated: ${new Date().toLocaleString()}
             </div>
           )}
 
-          {/* ✨ ENHANCED: Filters with date range presets, product, category, restock type */}
+          {/* Filters */}
           <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 mb-4">
             <div className="p-3 border-b dark:border-gray-700">
               <div className="flex items-center gap-2">
@@ -913,7 +944,7 @@ Generated: ${new Date().toLocaleString()}
               </div>
             </div>
             <div className="p-3 space-y-3">
-              {/* Row 1: Date presets + custom range */}
+              {/* Row 1: Date presets */}
               <div className="flex flex-wrap items-center gap-2">
                 <span className="text-xs font-medium text-gray-500">Date:</span>
                 {(["today","yesterday","week","month","all","custom"] as const).map(p => (
@@ -931,7 +962,7 @@ Generated: ${new Date().toLocaleString()}
                 ))}
               </div>
 
-              {/* Custom range inputs (only shown when custom) */}
+              {/* Custom range inputs */}
               {dateRangePreset === 'custom' && (
                 <div className="flex flex-wrap items-center gap-2 pl-10">
                   <label className="text-xs text-gray-500">From</label>
@@ -1051,10 +1082,9 @@ Generated: ${new Date().toLocaleString()}
             </div>
           </div>
 
-          {/* ✨ ENHANCED: Payment Breakdown & Credit Summary */}
+          {/* Payment Breakdown & Credit Summary */}
           {!loading && filteredFlatRestocks.length > 0 && (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
-              {/* Payment Breakdown */}
               <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-4">
                 <h3 className="font-semibold text-sm text-gray-800 dark:text-white mb-3 flex items-center gap-2">
                   <Wallet size={16} className="text-blue-600" />
@@ -1071,7 +1101,6 @@ Generated: ${new Date().toLocaleString()}
                 </div>
               </div>
 
-              {/* Credit Summary */}
               <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-4">
                 <h3 className="font-semibold text-sm text-gray-800 dark:text-white mb-3 flex items-center gap-2">
                   <CreditCard size={16} className="text-red-600" />
@@ -1101,7 +1130,7 @@ Generated: ${new Date().toLocaleString()}
             </div>
           )}
 
-          {/* ✨ ENHANCED: Restock Table (replaces card view) */}
+          {/* Restock Table */}
           {!loading && (
             <>
               {filteredFlatRestocks.length === 0 ? (
@@ -1193,7 +1222,7 @@ Generated: ${new Date().toLocaleString()}
         </div>
       </div>
 
-      {/* ==================== RESTOCK MODAL (unchanged) ==================== */}
+      {/* ==================== RESTOCK MODAL ==================== */}
       {showRestockModal && (
         <div className="fixed inset-0 bg-black/50 flex items-start justify-center p-2 sm:p-4 z-50 overflow-y-auto">
           <div className="bg-white dark:bg-gray-800 rounded-xl sm:rounded-2xl w-full max-w-3xl max-h-[90vh] overflow-y-auto shadow-2xl mt-4 sm:mt-0">
@@ -1207,11 +1236,7 @@ Generated: ${new Date().toLocaleString()}
                   </div>
                 </div>
                 <button
-                  onClick={() => {
-                    setShowRestockModal(false); setRestockItems([]); setSelectedProduct(null);
-                    setProductSearch(""); setQuantity(1); setCostPrice(""); setPaymentSource("cash");
-                    setSelectedCreditor(null); setCreditorSearch(""); setError(null);
-                  }}
+                  onClick={() => { setShowRestockModal(false); resetRestockForm(); }}
                   type="button"
                   className="text-white hover:bg-white/20 p-1.5 rounded-lg transition-colors"
                 >
@@ -1248,6 +1273,7 @@ Generated: ${new Date().toLocaleString()}
                       <div className="absolute z-20 w-full mt-1 bg-white dark:bg-gray-700 border rounded-lg shadow-xl max-h-48 overflow-y-auto">
                         {filteredProducts.map(product => {
                           const stock = getProductStock(product);
+                          const hasCost = hasProductionCost(product);
                           return (
                             <button
                               key={product.id}
@@ -1256,12 +1282,29 @@ Generated: ${new Date().toLocaleString()}
                                 setSelectedProduct(product);
                                 setProductSearch(product.name);
                                 setShowProductDropdown(false);
-                                if (!costPrice && product.productionCost) setCostPrice(product.productionCost.toString());
+                                // ✅ FIX: Always prefer productionCost. NEVER fall back to selling price.
+                                if (hasCost) {
+                                  setCostPrice(String(product.productionCost));
+                                } else {
+                                  setCostPrice(""); // Force manual entry when production cost is unknown
+                                }
                               }}
                               className="w-full text-left px-3 py-2 hover:bg-gray-100 dark:hover:bg-gray-600 border-b last:border-b-0 transition-colors text-sm"
                             >
                               <div className="font-medium">{product.name}</div>
-                              <div className="text-xs text-gray-500">Stock: {stock} | Cost: KSh {formatCurrency(product.productionCost || 0)}</div>
+                              <div className="text-xs text-gray-500 flex items-center gap-2 flex-wrap">
+                                <span>Stock: {stock}</span>
+                                <span className="text-gray-300">|</span>
+                                {hasCost ? (
+                                  <span className="text-emerald-600 dark:text-emerald-400 font-medium">
+                                    Production Cost: KSh {formatCurrency(Number(product.productionCost))}
+                                  </span>
+                                ) : (
+                                  <span className="text-amber-600 dark:text-amber-400 font-medium">
+                                    ⚠️ No production cost — enter manually
+                                  </span>
+                                )}
+                              </div>
                             </button>
                           );
                         })}
@@ -1279,16 +1322,34 @@ Generated: ${new Date().toLocaleString()}
                     />
                   </div>
                   <div>
-                    <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Cost Price (KSh) *</label>
+                    <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
+                      Production / Restock Cost (KSh) *
+                    </label>
                     <input
                       type="number"
                       min="0"
                       step="0.01"
                       value={costPrice}
                       onChange={(e) => setCostPrice(e.target.value)}
-                      placeholder="Enter cost price"
+                      placeholder={selectedProduct && hasProductionCost(selectedProduct) ? `Default: ${selectedProduct.productionCost}` : "Enter production cost"}
                       className="w-full p-1.5 text-sm border rounded-lg bg-white dark:bg-gray-600 dark:border-gray-600"
                     />
+                    {selectedProduct && (
+                      <div className="mt-1 text-[11px]">
+                        {hasProductionCost(selectedProduct) ? (
+                          <span className="text-emerald-600 dark:text-emerald-400">
+                            Production cost for <b>{selectedProduct.name}</b>: <b>KSh {formatCurrency(Number(selectedProduct.productionCost))}</b> — not the selling price.
+                          </span>
+                        ) : (
+                          <span className="text-amber-600 dark:text-amber-400">
+                            ⚠️ No production cost on file for <b>{selectedProduct.name}</b>. Please enter it manually.
+                          </span>
+                        )}
+                        <div className="text-gray-400 mt-0.5">
+                          Selling price (reference only): KSh {formatCurrency(Number(selectedProduct.price) || 0)}
+                        </div>
+                      </div>
+                    )}
                   </div>
                   <div className="flex items-end">
                     <button
@@ -1349,7 +1410,11 @@ Generated: ${new Date().toLocaleString()}
                         value={paymentSource}
                         onChange={(e) => {
                           setPaymentSource(e.target.value as "cash" | "credit");
-                          if (e.target.value === "cash") { setSelectedCreditor(null); setCreditorSearch(""); }
+                          if (e.target.value === "cash") {
+                            setSelectedCreditor(null);
+                            setCreditorSearch("");
+                            setNewCreditor(prev => ({ ...prev, description: "" }));
+                          }
                         }}
                         className="w-full p-1.5 text-sm border rounded-lg bg-white dark:bg-gray-600 dark:border-gray-600"
                       >
@@ -1385,40 +1450,76 @@ Generated: ${new Date().toLocaleString()}
                         </div>
                         {showCreditorDropdown && !selectedCreditor && filteredCreditors.length > 0 && (
                           <div className="absolute z-20 w-full mt-1 bg-white dark:bg-gray-700 border rounded-lg shadow-xl max-h-48 overflow-y-auto">
-                            {filteredCreditors.map(creditor => (
-                              <button
-                                key={creditor.id}
-                                type="button"
-                                onClick={() => {
-                                  setSelectedCreditor(creditor);
-                                  setCreditorSearch(creditor.name);
-                                  setShowCreditorDropdown(false);
-                                }}
-                                className="w-full text-left px-3 py-2 hover:bg-gray-100 dark:hover:bg-gray-600 border-b last:border-b-0 transition-colors text-sm"
-                              >
-                                <div className="font-medium">{creditor.name}</div>
-                                <div className="text-xs text-gray-500">
-                                  Owed: KSh {formatCurrency(creditor.totalOwed)}
-                                  {creditor.phone && ` | ${creditor.phone}`}
-                                </div>
-                              </button>
-                            ))}
+                            {filteredCreditors.map(creditor => {
+                              const desc = creditorDescriptions[creditor.id];
+                              return (
+                                <button
+                                  key={creditor.id}
+                                  type="button"
+                                  onClick={() => {
+                                    setSelectedCreditor(creditor);
+                                    setCreditorSearch(creditor.name);
+                                    setShowCreditorDropdown(false);
+                                    // Restore session description for this creditor
+                                    setNewCreditor(prev => ({ ...prev, description: desc || "" }));
+                                  }}
+                                  className="w-full text-left px-3 py-2 hover:bg-gray-100 dark:hover:bg-gray-600 border-b last:border-b-0 transition-colors text-sm"
+                                >
+                                  <div className="font-medium">{creditor.name}</div>
+                                  {desc && (
+                                    <div className="text-xs text-gray-600 dark:text-gray-400 italic truncate">
+                                      {desc}
+                                    </div>
+                                  )}
+                                  <div className="text-xs text-gray-500">
+                                    Owed: KSh {formatCurrency(creditor.totalOwed)}
+                                    {creditor.phone && ` | ${creditor.phone}`}
+                                  </div>
+                                </button>
+                              );
+                            })}
                           </div>
                         )}
                       </div>
                     )}
                   </div>
+
+                  {/* ✅ SESSION-ONLY description for existing creditors */}
+                  {paymentSource === "credit" && selectedCreditor && (
+                    <div>
+                      <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
+                        Description for this purchase (optional, report-only)
+                      </label>
+                      <input
+                        type="text"
+                        value={creditorDescriptions[selectedCreditor.id] || ""}
+                        onChange={(e) => {
+                          const value = e.target.value;
+                          setCreditorDescriptions(prev => ({ ...prev, [selectedCreditor.id]: value }));
+                          setNewCreditor(prev => ({ ...prev, description: value }));
+                        }}
+                        placeholder="e.g. Weekly hardware supplies"
+                        className="w-full p-1.5 text-sm border rounded-lg bg-white dark:bg-gray-600 dark:border-gray-600"
+                      />
+                      <p className="text-[11px] text-gray-400 mt-0.5">
+                        Shown on the restock report only. Not saved to the database.
+                      </p>
+                    </div>
+                  )}
+
+                  {paymentSource === "credit" && selectedCreditor && (
+                    <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg p-2 text-xs text-amber-700 dark:text-amber-300 flex items-center gap-2">
+                      <AlertCircle size={14} />
+                      Description is for this report only — it will <b>not</b> be saved to the creditor record.
+                    </div>
+                  )}
                 </div>
               )}
 
               {/* Actions */}
               <div className="flex gap-2 pt-3 border-t">
                 <button
-                  onClick={() => {
-                    setShowRestockModal(false); setRestockItems([]); setSelectedProduct(null);
-                    setProductSearch(""); setQuantity(1); setCostPrice(""); setPaymentSource("cash");
-                    setSelectedCreditor(null); setCreditorSearch(""); setError(null);
-                  }}
+                  onClick={() => { setShowRestockModal(false); resetRestockForm(); }}
                   type="button"
                   disabled={isSubmitting}
                   className="flex-1 px-3 py-2 border-2 border-slate-300 text-black rounded-lg hover:bg-slate-50 font-medium transition-colors disabled:opacity-50 text-sm"
@@ -1448,7 +1549,7 @@ Generated: ${new Date().toLocaleString()}
         </div>
       )}
 
-      {/* ==================== CREDITOR MODAL (unchanged) ==================== */}
+      {/* ==================== CREDITOR MODAL (with description field) ==================== */}
       {showCreditorModal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-[60]">
           <div className="bg-white dark:bg-gray-800 rounded-xl max-w-md w-full shadow-2xl">
@@ -1458,7 +1559,7 @@ Generated: ${new Date().toLocaleString()}
                 <p className="text-blue-100 text-sm">Create a new creditor</p>
               </div>
               <button
-                onClick={() => { setShowCreditorModal(false); setNewCreditor({ name: "", phone: "", email: "" }); setError(null); }}
+                onClick={() => { setShowCreditorModal(false); setNewCreditor({ name: "", phone: "", email: "", description: "" }); setError(null); }}
                 className="text-white hover:bg-white/20 p-1.5 rounded-lg transition-colors"
               >
                 <X size={20} />
@@ -1495,9 +1596,32 @@ Generated: ${new Date().toLocaleString()}
                   className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:border-gray-600"
                 />
               </div>
+              {/* ✅ SESSION-ONLY description field */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                  Description
+                </label>
+                <textarea
+                  value={newCreditor.description}
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    setNewCreditor({ ...newCreditor, description: value });
+                    // Keep session map in sync for this creditor (if editing an existing one)
+                    if (selectedCreditor) {
+                      setCreditorDescriptions(prev => ({ ...prev, [selectedCreditor.id]: value }));
+                    }
+                  }}
+                  placeholder="Optional — appears on the restock report only (not saved)"
+                  rows={2}
+                  className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:border-gray-600 resize-none"
+                />
+                <p className="text-xs text-gray-400 mt-1">
+                  Not saved to the database — used only for this report.
+                </p>
+              </div>
               <div className="flex gap-2 pt-2">
                 <button
-                  onClick={() => { setShowCreditorModal(false); setNewCreditor({ name: "", phone: "", email: "" }); setError(null); }}
+                  onClick={() => { setShowCreditorModal(false); setNewCreditor({ name: "", phone: "", email: "", description: "" }); setError(null); }}
                   className="flex-1 px-3 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
                 >
                   Cancel
@@ -1524,7 +1648,7 @@ Generated: ${new Date().toLocaleString()}
         </div>
       )}
 
-      {/* ==================== DETAIL MODAL (enhanced) ==================== */}
+      {/* ==================== DETAIL MODAL ==================== */}
       {showDetailModal && selectedRestockGroup && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-[60]">
           <div className="bg-white dark:bg-gray-800 rounded-xl max-w-3xl w-full max-h-[90vh] overflow-y-auto shadow-2xl">
@@ -1562,10 +1686,18 @@ Generated: ${new Date().toLocaleString()}
                 <div className="bg-gray-50 dark:bg-gray-700/50 rounded-lg p-3 text-center">
                   <div className="text-xs text-gray-500">Creditor</div>
                   <div className="text-sm font-medium text-gray-800 dark:text-white">{selectedRestockGroup.creditorName || '—'}</div>
+                  {selectedRestockGroup.creditorId && creditorDescriptions[selectedRestockGroup.creditorId] && (
+                    <div
+                      className="text-[10px] text-gray-500 italic mt-0.5 truncate"
+                      title={creditorDescriptions[selectedRestockGroup.creditorId]}
+                    >
+                      {creditorDescriptions[selectedRestockGroup.creditorId]}
+                    </div>
+                  )}
                 </div>
               </div>
 
-              {/* ✨ ENHANCED: Items Table with all required columns */}
+              {/* Items Table */}
               <div className="border rounded-lg overflow-hidden">
                 <div className="overflow-x-auto">
                   <table className="w-full text-sm">
@@ -1594,7 +1726,14 @@ Generated: ${new Date().toLocaleString()}
                           <td className="p-2 text-right font-semibold text-green-600">KSh {formatCurrency(item.totalCost)}</td>
                           <td className="p-2 text-center text-gray-600 dark:text-gray-400">Normal Restock</td>
                           <td className="p-2 text-center">{getPaymentLabel(item.paymentSource)}</td>
-                          <td className="p-2">{getPaymentLabel(item.paymentSource) === 'CREDIT' && item.creditor?.name ? item.creditor.name : '—'}</td>
+                          <td className="p-2">
+                            {getPaymentLabel(item.paymentSource) === 'CREDIT' && item.creditor?.name ? item.creditor.name : '—'}
+                            {getPaymentLabel(item.paymentSource) === 'CREDIT' && item.creditorId && creditorDescriptions[item.creditorId] && (
+                              <div className="text-[10px] text-gray-500 italic truncate" title={creditorDescriptions[item.creditorId]}>
+                                {creditorDescriptions[item.creditorId]}
+                              </div>
+                            )}
+                          </td>
                           <td className="p-2 text-gray-500 dark:text-gray-400">N/A</td>
                         </tr>
                       ))}
@@ -1627,7 +1766,7 @@ Generated: ${new Date().toLocaleString()}
         </div>
       )}
 
-      {/* ==================== RECONCILIATION MODAL (unchanged) ==================== */}
+      {/* ==================== RECONCILIATION MODAL ==================== */}
       {showReconciliationModal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-[60]">
           <div className="bg-white dark:bg-gray-800 rounded-xl max-w-6xl w-full max-h-[90vh] overflow-y-auto shadow-2xl">
@@ -1665,7 +1804,14 @@ Generated: ${new Date().toLocaleString()}
                       {reconciliationData.items.length > 0 ? (
                         reconciliationData.items.map((item, idx) => (
                           <tr key={idx} className="hover:bg-gray-50 dark:hover:bg-gray-700/50">
-                            <td className="p-2 font-medium">{item.product?.name || `Product ID: ${item.productId}`}</td>
+                            <td className="p-2 font-medium">
+                              {item.product?.name || `Product ID: ${item.productId}`}
+                              {item.creditorId && creditorDescriptions[item.creditorId] && (
+                                <div className="text-[10px] text-gray-500 italic" title={creditorDescriptions[item.creditorId]}>
+                                  {creditorDescriptions[item.creditorId]}
+                                </div>
+                              )}
+                            </td>
                             <td className="p-2 text-center">{item.quantity}</td>
                             <td className="p-2 text-right">KSh {formatCurrency(item.costPrice)}</td>
                             <td className="p-2 text-right font-semibold">KSh {formatCurrency(item.totalCost)}</td>

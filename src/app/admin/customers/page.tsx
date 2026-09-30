@@ -235,6 +235,10 @@ const formatDateTime = (dateString: string): string => {
 /**
  * Generate a concise, non-repetitive customer statement.
  */
+/**
+ * Generate a concise, non-repetitive customer statement.
+ * (Account Summary block removed — ends with balance + thank-you.)
+ */
 const generateCustomerStatement = (
   customer: Customer,
   outstandingSales: OutstandingSale[],
@@ -373,36 +377,22 @@ const generateCustomerStatement = (
     });
   }
 
-  // ============ ACCOUNT SUMMARY ============
-  const allRelevant = [...outstandingSales];
-  const totalPurchases = allRelevant.reduce(
-    (sum, s) => sum + (Number(s.amount) || 0),
-    0
-  );
-  const totalPaid = allRelevant.reduce(
-    (sum, s) => sum + (Number(s.paidAmount) || 0),
-    0
-  );
-  const totalOutstanding = allRelevant.reduce(
+  // ============ CLOSING BALANCE ============
+  const totalOutstanding = outstandingSales.reduce(
     (sum, s) => sum + (Number(s.remainingBalance) || 0),
     0
   );
-
   const paidToday = isPaymentEvent ? paymentAmount || 0 : 0;
-  const effectiveTotalPaid = totalPaid + paidToday;
   const effectiveOutstanding = Math.max(0, totalOutstanding - paidToday);
 
-  message += `\n💰 *ACCOUNT SUMMARY*\n`;
-  message += `Total Purchases: KSh ${fmt(totalPurchases)}\n`;
-  message += `Total Paid: KSh ${fmt(effectiveTotalPaid)}\n`;
-  message += `*Total Outstanding: KSh ${fmt(effectiveOutstanding)}*\n`;
+  message += `\n💰 *BALANCE DUE*\n`;
+  message += `KSh ${fmt(effectiveOutstanding)}\n`;
 
-  // ============ CLOSING ============
+  // ============ THANK YOU ============
+  message += `\nThank you for your business! 🙏\n`;
+
   if (effectiveOutstanding <= 0.01) {
-    message += `\n✅ *ACCOUNT FULLY PAID*\n`;
-    message += `Thank you for your business! 🙏\n`;
-  } else {
-    message += `\nThank you for your business! 🙏\n`;
+    message += `✅ Your account is fully paid up.\n`;
   }
 
   return message;
