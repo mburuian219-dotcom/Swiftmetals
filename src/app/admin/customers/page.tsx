@@ -234,10 +234,12 @@ const formatDateTime = (dateString: string): string => {
 
 /**
  * Generate a concise, non-repetitive customer statement.
- */
-/**
- * Generate a concise, non-repetitive customer statement.
  * (Account Summary block removed — ends with balance + thank-you.)
+ *
+ * ⚠️ IMPORTANT: The `outstandingSales` array passed in MUST already
+ * reflect the effect of the payment (i.e. `remainingBalance` and
+ * `paidAmount` must already be updated). We do NOT re-subtract
+ * `paymentAmount` from the balance — that would double-count it.
  */
 const generateCustomerStatement = (
   customer: Customer,
@@ -326,16 +328,21 @@ const generateCustomerStatement = (
 
     message += `Total: KSh ${fmt(featuredSale.amount)}\n`;
 
+    // ✅ FIX #2: `paidAmount` in the incoming array is the CURRENT total
+    // (already includes any payment applied this session). We show
+    // "Previously Paid" = current - today, and "Total Paid" = current.
     const paidToday = featuredAlloc?.amount || 0;
-    const previouslyPaid = Number(featuredSale.paidAmount) || 0;
+    const currentPaidTotal = Number(featuredSale.paidAmount) || 0;
+    const paidBeforeToday = Math.max(0, currentPaidTotal - paidToday);
 
     if (isPaymentAppliedToIt && paidToday > 0) {
-      if (previouslyPaid > 0) {
-        message += `Previously Paid: KSh ${fmt(previouslyPaid)}\n`;
+      if (paidBeforeToday > 0) {
+        message += `Previously Paid: KSh ${fmt(paidBeforeToday)}\n`;
       }
       message += `Paid Today: KSh ${fmt(paidToday)}\n`;
-    } else if (previouslyPaid > 0) {
-      message += `Paid: KSh ${fmt(previouslyPaid)}\n`;
+      message += `Total Paid: KSh ${fmt(currentPaidTotal)}\n`;
+    } else if (currentPaidTotal > 0) {
+      message += `Paid: KSh ${fmt(currentPaidTotal)}\n`;
     }
 
     const featuredBalance = featuredAlloc
@@ -363,6 +370,8 @@ const generateCustomerStatement = (
   }
 
   // ============ OTHER OUTSTANDING SALES (COMPACT) ============
+  // ✅ Only include sales that STILL have a positive balance
+  // after the payment has been applied to the incoming array.
   const otherOutstanding = outstandingSales
     .filter((s) => s.id !== featuredSaleId)
     .filter((s) => (Number(s.remainingBalance) || 0) > 0.01)
@@ -378,12 +387,13 @@ const generateCustomerStatement = (
   }
 
   // ============ CLOSING BALANCE ============
-  const totalOutstanding = outstandingSales.reduce(
+  // ✅ FIX #1: DO NOT subtract `paidToday` again.
+  // The incoming `outstandingSales` array has already had the payment
+  // applied to each sale's `remainingBalance`. Just sum them.
+  const effectiveOutstanding = outstandingSales.reduce(
     (sum, s) => sum + (Number(s.remainingBalance) || 0),
     0
   );
-  const paidToday = isPaymentEvent ? paymentAmount || 0 : 0;
-  const effectiveOutstanding = Math.max(0, totalOutstanding - paidToday);
 
   message += `\n💰 *BALANCE DUE*\n`;
   message += `KSh ${fmt(effectiveOutstanding)}\n`;
