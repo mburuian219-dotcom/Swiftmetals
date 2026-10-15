@@ -22,7 +22,6 @@ import {
 // TYPE DEFINITIONS & INTERFACES
 // ============================================================================
 
-/** Customer data structure */
 export interface Customer {
   id: number;
   name: string;
@@ -36,7 +35,6 @@ export interface Customer {
   createdAt?: string;
 }
 
-/** Trade-in row (one per item received from a customer) */
 interface TradeInRow {
   id: number;
   saleId: number;
@@ -53,7 +51,6 @@ interface TradeInRow {
   notes?: string | null;
 }
 
-/** Outstanding sale with remaining balance */
 interface OutstandingSale {
   id: number;
   date: string;
@@ -67,7 +64,6 @@ interface OutstandingSale {
   tradeins?: TradeInRow[];
 }
 
-/** Individual item in a sale */
 interface SaleItem {
   id: number;
   productId: number;
@@ -80,7 +76,6 @@ interface SaleItem {
   total: number;
 }
 
-/** Payment record structure */
 interface Payment {
   id: number;
   amount: number;
@@ -91,7 +86,6 @@ interface Payment {
   note?: string;
 }
 
-/** How payment is allocated across multiple sales */
 interface PaymentAllocation {
   saleId: number;
   saleDate: string;
@@ -103,7 +97,6 @@ interface PaymentAllocation {
   items?: SaleItem[];
 }
 
-/** Processed sale with payment applied */
 interface ProcessedSale {
   id: number;
   date: string;
@@ -119,7 +112,6 @@ interface ProcessedSale {
   fullyPaid?: boolean;
 }
 
-/** Result of payment processing */
 interface PaymentResult {
   processedSales: { saleId: number; amount: number; fullyPaid: boolean }[];
   failedSales: { saleId: number; reason: string }[];
@@ -150,9 +142,6 @@ const tradeInSaleTotal = (tradeins: any[] | undefined): number => {
   return tradeins.reduce((s, t) => s + tradeInLineTotal(t), 0);
 };
 
-/**
- * Normalize phone number for duplicate checking
- */
 const normalizePhoneNumber = (phone: string): string => {
   if (!phone) return '';
   let cleaned = phone.replace(/\D/g, '');
@@ -169,9 +158,6 @@ const normalizePhoneNumber = (phone: string): string => {
   return cleaned;
 };
 
-/**
- * Generate receipt download/view link
- */
 const generateReceiptLink = (saleId: number): string => {
   const baseUrl = typeof window !== 'undefined' 
     ? window.location.origin 
@@ -180,9 +166,6 @@ const generateReceiptLink = (saleId: number): string => {
   return `${baseUrl}/api/receipt/${saleId}`;
 };
 
-/**
- * Format phone number to Kenya international format
- */
 const formatPhoneToKenyaCode = (phone: string): string => {
   if (!phone) return '';
   let cleaned = phone.replace(/\D/g, '');
@@ -202,15 +185,9 @@ const formatPhoneToKenyaCode = (phone: string): string => {
   return '254' + cleaned;
 };
 
-/**
- * Format currency values (Kenyan Shillings)
- */
 const formatCurrency = (amount: number): string =>
   Number(amount || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-/**
- * Format date for display
- */
 const formatDate = (dateString: string): string => {
   return new Date(dateString).toLocaleDateString("en-US", {
     year: "numeric",
@@ -219,9 +196,6 @@ const formatDate = (dateString: string): string => {
   });
 };
 
-/**
- * Format date with time
- */
 const formatDateTime = (dateString: string): string => {
   return new Date(dateString).toLocaleDateString("en-US", {
     year: "numeric",
@@ -233,13 +207,15 @@ const formatDateTime = (dateString: string): string => {
 };
 
 /**
- * Generate a concise, non-repetitive customer statement.
- * (Account Summary block removed — ends with balance + thank-you.)
+ * Generate a concise customer statement.
  *
- * ⚠️ IMPORTANT: The `outstandingSales` array passed in MUST already
- * reflect the effect of the payment (i.e. `remainingBalance` and
- * `paidAmount` must already be updated). We do NOT re-subtract
- * `paymentAmount` from the balance — that would double-count it.
+ * Rules:
+ *  - Featured sale = MOST RECENT sale by date (always).
+ *  - If a payment just happened, show how much of it landed on the featured
+ *    sale (if at all), and list OTHER sales the payment touched as compact
+ *    "Payment applied here" lines.
+ *  - Incoming `outstandingSales` is assumed to already reflect the payment
+ *    (i.e. `remainingBalance` and `paidAmount` include the new payment).
  */
 const generateCustomerStatement = (
   customer: Customer,
@@ -276,7 +252,7 @@ const generateCustomerStatement = (
   message += `📅 ${dateLong} at ${timeShort}\n`;
   message += `👤 ${customer.name}\n`;
 
-  // ============ PAYMENT RECEIVED ============
+  // ============ PAYMENT RECEIVED (summary line) ============
   const isPaymentEvent =
     !!paymentAmount &&
     paymentAmount > 0 &&
@@ -290,33 +266,43 @@ const generateCustomerStatement = (
     }\n`;
   }
 
-  // ============ IDENTIFY FEATURED SALE ============
+  // ============ PICK FEATURED SALE = MOST RECENT BY DATE ============
   let featuredSaleId: number | null = null;
+  let featuredSale: OutstandingSale | null = null;
 
-  if (isPaymentEvent && paymentAllocations!.length > 0) {
-    featuredSaleId = paymentAllocations![0].saleId;
-  } else if (outstandingSales.length > 0) {
-    const sorted = [...outstandingSales].sort(
+  if (outstandingSales.length > 0) {
+    const sortedByDate = [...outstandingSales].sort(
       (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
     );
-    featuredSaleId = sorted[0].id;
+    featuredSale = sortedByDate[0];
+    featuredSaleId = featuredSale.id;
   }
 
-  const featuredSale = featuredSaleId
-    ? outstandingSales.find((s) => s.id === featuredSaleId) || null
-    : null;
+  // If the payment touched a sale newer than anything in outstandingSales
+  // (unpaid-only list), feature that instead.
+  if (isPaymentEvent && paymentAllocations && paymentAllocations.length > 0) {
+    const newestAlloc = [...paymentAllocations].sort(
+      (a, b) => new Date(b.saleDate).getTime() - new Date(a.saleDate).getTime()
+    )[0];
 
-  const featuredAlloc = isPaymentEvent
-    ? paymentAllocations!.find((a) => a.saleId === featuredSaleId)
+    if (!featuredSale || new Date(newestAlloc.saleDate).getTime() > new Date(featuredSale.date).getTime()) {
+      featuredSaleId = newestAlloc.saleId;
+      featuredSale = outstandingSales.find(s => s.id === featuredSaleId) || null;
+    }
+  }
+
+  const featuredAlloc = isPaymentEvent && featuredSaleId
+    ? paymentAllocations!.find(a => a.saleId === featuredSaleId)
     : undefined;
 
-  // ============ FEATURED SALE (DETAIL) ============
+  // ============ FEATURED SALE (FULL DETAIL) ============
   if (featuredSale) {
-    const isPaymentAppliedToIt = !!featuredAlloc;
+    const wasPaid = !!featuredAlloc;
 
-    message += `\n🧾 *${isPaymentAppliedToIt ? "PAYMENT APPLIED TO" : "RECENT SALE"}*\n`;
+    message += `\n🧾 *${wasPaid ? "LATEST SALE (PAYMENT APPLIED)" : "LATEST SALE"}*\n`;
     message += `Sale #${featuredSale.id} — ${shortDate(featuredSale.date)}\n\n`;
 
+    // Items
     if (featuredSale.saleitem && featuredSale.saleitem.length > 0) {
       featuredSale.saleitem.forEach((item: any) => {
         const name = item.product?.name || item.productName || "Item";
@@ -328,14 +314,12 @@ const generateCustomerStatement = (
 
     message += `Total: KSh ${fmt(featuredSale.amount)}\n`;
 
-    // ✅ FIX #2: `paidAmount` in the incoming array is the CURRENT total
-    // (already includes any payment applied this session). We show
-    // "Previously Paid" = current - today, and "Total Paid" = current.
+    // Paid breakdown — do not double-count the payment
     const paidToday = featuredAlloc?.amount || 0;
     const currentPaidTotal = Number(featuredSale.paidAmount) || 0;
     const paidBeforeToday = Math.max(0, currentPaidTotal - paidToday);
 
-    if (isPaymentAppliedToIt && paidToday > 0) {
+    if (paidToday > 0) {
       if (paidBeforeToday > 0) {
         message += `Previously Paid: KSh ${fmt(paidBeforeToday)}\n`;
       }
@@ -351,7 +335,7 @@ const generateCustomerStatement = (
 
     message += `Balance: KSh ${fmt(featuredBalance)}\n`;
 
-    // Trade-In items on the featured sale
+    // Trade-ins on the featured sale
     if (featuredSale.tradeins && featuredSale.tradeins.length > 0) {
       message += `\n🎁 *Trade-In Items Received*\n`;
       featuredSale.tradeins.forEach((t) => {
@@ -369,38 +353,63 @@ const generateCustomerStatement = (
     message += `\n🔗 Receipt: ${generateReceiptLink(featuredSale.id)}\n`;
   }
 
-  // ============ OTHER OUTSTANDING SALES (COMPACT) ============
-  // ✅ Only include sales that STILL have a positive balance
-  // after the payment has been applied to the incoming array.
-  const otherOutstanding = outstandingSales
-    .filter((s) => s.id !== featuredSaleId)
-    .filter((s) => (Number(s.remainingBalance) || 0) > 0.01)
+  // ============ OTHER SALES THE PAYMENT TOUCHED (COMPACT) ============
+  // Only include sales OTHER than the featured one, that either:
+  //   (a) received part of this payment, OR
+  //   (b) still have a positive balance.
+  const otherAllocMap = new Map<number, PaymentAllocation>();
+  if (isPaymentEvent && paymentAllocations) {
+    paymentAllocations
+      .filter(a => a.saleId !== featuredSaleId)
+      .forEach(a => otherAllocMap.set(a.saleId, a));
+  }
+
+  const otherSales = outstandingSales
+    .filter(s => s.id !== featuredSaleId)
+    .filter(s => {
+      const touchedByPayment = otherAllocMap.has(s.id);
+      const hasBalance = (Number(s.remainingBalance) || 0) > 0.01;
+      return touchedByPayment || hasBalance;
+    })
     .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
-  if (otherOutstanding.length > 0) {
-    message += `\n📋 *OTHER OUTSTANDING SALES*\n`;
-    otherOutstanding.forEach((s) => {
+  if (otherSales.length > 0) {
+    message += `\n📋 *OTHER SALES*\n`;
+
+    otherSales.forEach((s) => {
+      const alloc = otherAllocMap.get(s.id);
+      const balance = Number(s.remainingBalance) || 0;
+
       message += `\nSale #${s.id} — ${shortDate(s.date)}\n`;
-      message += `Balance: KSh ${fmt(s.remainingBalance)}\n`;
+
+      if (alloc) {
+        message += `Payment applied here: KSh ${fmt(alloc.amount)}\n`;
+        message += `Sale total: KSh ${fmt(alloc.originalAmount)}\n`;
+        message += `Balance after payment: KSh ${fmt(alloc.remainingAfter)}\n`;
+        if (alloc.fullyPaid) {
+          message += `Status: ✅ Fully paid\n`;
+        } else {
+          message += `Status: ⏳ Partially paid\n`;
+        }
+      } else {
+        message += `Amount: KSh ${fmt(s.amount)}\n`;
+        message += `Balance: KSh ${fmt(balance)}\n`;
+      }
+
       message += `🔗 Receipt: ${generateReceiptLink(s.id)}\n`;
     });
   }
 
   // ============ CLOSING BALANCE ============
-  // ✅ FIX #1: DO NOT subtract `paidToday` again.
-  // The incoming `outstandingSales` array has already had the payment
-  // applied to each sale's `remainingBalance`. Just sum them.
   const effectiveOutstanding = outstandingSales.reduce(
     (sum, s) => sum + (Number(s.remainingBalance) || 0),
     0
   );
 
-  message += `\n💰 *BALANCE DUE*\n`;
+  message += `\n💰 *TOTAL BALANCE DUE*\n`;
   message += `KSh ${fmt(effectiveOutstanding)}\n`;
 
-  // ============ THANK YOU ============
   message += `\nThank you for your business! 🙏\n`;
-
   if (effectiveOutstanding <= 0.01) {
     message += `✅ Your account is fully paid up.\n`;
   }
@@ -965,14 +974,27 @@ const CreditManagement = ({
       
       setPendingPaymentResult(result);
 
+      // ✅ FIXED: Build post-payment snapshot with safe clamping,
+      // then hand off to generateCustomerStatement which features
+      // the MOST RECENT sale (not the oldest paid one).
       const message = generateCustomerStatement(
         customer,
         outstandingSales.map(sale => {
           const paidSale = paidSalesList.find(ps => ps.id === sale.id);
+          if (!paidSale) return sale;
+
+          const paidThisTime = paidSale.paidThisTime || 0;
+
           return {
             ...sale,
-            paidAmount: paidSale ? sale.paidAmount + (paidSale.paidThisTime || 0) : sale.paidAmount,
-            remainingBalance: paidSale ? sale.remainingBalance - (paidSale.paidThisTime || 0) : sale.remainingBalance
+            paidAmount: Math.min(
+              sale.amount,
+              sale.paidAmount + paidThisTime
+            ),
+            remainingBalance: Math.max(
+              0,
+              sale.remainingBalance - paidThisTime
+            ),
           };
         }),
         amount,
