@@ -45,56 +45,6 @@ type FormData = {
   totalSales: number;
 };
 
-// Helper function to safely get string value from potentially object fields
-const safeString = (value: any): string => {
-  if (!value) return "System";
-  if (typeof value === 'string') return value;
-  if (typeof value === 'object' && value !== null) {
-    // If it's an object with a name property, use that
-    if (value.name && typeof value.name === 'string') return value.name;
-    // If it's an object with an id, try to stringify it
-    if (value.id) return String(value.id);
-    // Otherwise return a string representation
-    return JSON.stringify(value);
-  }
-  return String(value);
-};
-
-// Helper function to get responsible staff for a sale
-// PRIORITY: assignedStaff > createdByStaff > createdBy > "System"
-const getResponsibleStaff = (sale: Sale | any): string => {
-  // Priority 1: Assigned Staff
-  if (sale.assignedStaff) {
-    return safeString(sale.assignedStaff);
-  }
-  // Check if assignedStaff is an object with name
-  if (sale.assignedStaff?.name) {
-    return safeString(sale.assignedStaff.name);
-  }
-  // Priority 2: Created By Staff (if assignedStaff is an object with name)
-  if (sale.createdByStaff?.name) {
-    return safeString(sale.createdByStaff.name);
-  }
-  // Priority 3: Created By
-  if (sale.createdBy) {
-    return safeString(sale.createdBy);
-  }
-  // Priority 4: System fallback
-  return "System";
-};
-
-// Helper function to get responsible staff for a debtor (primary staff)
-const getResponsibleStaffForDebtor = (debtor: Debtor): string => {
-  // Use assignedStaff if available, otherwise fallback to createdBy
-  if (debtor.assignedStaff) {
-    return safeString(debtor.assignedStaff);
-  }
-  if (debtor.createdBy) {
-    return safeString(debtor.createdBy);
-  }
-  return "System";
-};
-
 export default function DebtorsSection() {
   const [debtors, setDebtors] = useState<Debtor[]>([]);
   const [filteredDebtors, setFilteredDebtors] = useState<Debtor[]>([]);
@@ -124,18 +74,19 @@ export default function DebtorsSection() {
     fetchDebtors();
   }, []);
 
-  // Extract unique staff members from debtors and their sales
+  // Extract unique staff members from debtors
   useEffect(() => {
     const staffSet = new Set<string>();
     debtors.forEach(debtor => {
-      // Add staff from debtor level
-      const debtorStaff = getResponsibleStaffForDebtor(debtor);
-      if (debtorStaff) staffSet.add(debtorStaff);
-      
-      // Add staff from each sale
+      // Use assignedStaff if available, otherwise fallback to createdBy
+      const primaryStaff = debtor.assignedStaff || debtor.createdBy;
+      if (primaryStaff) staffSet.add(primaryStaff);
+      if (debtor.lastUpdatedBy) staffSet.add(debtor.lastUpdatedBy);
       debtor.sales.forEach(sale => {
-        const saleStaff = getResponsibleStaff(sale);
+        // Use assignedStaff for sales if available
+        const saleStaff = sale.assignedStaff || sale.createdBy;
         if (saleStaff) staffSet.add(saleStaff);
+        if (sale.updatedBy) staffSet.add(sale.updatedBy);
       });
     });
     setUniqueStaffMembers(Array.from(staffSet).filter(Boolean).sort());
@@ -153,30 +104,28 @@ export default function DebtorsSection() {
         debtor.email.toLowerCase().includes(query) ||
         debtor.phone.includes(query) ||
         debtor.sales.some(sale => 
-          sale.items.toLowerCase().includes(query) ||
-          // Search in responsible staff
-          getResponsibleStaff(sale).toLowerCase().includes(query)
+          sale.items.toLowerCase().includes(query)
         ) ||
         debtor.balance.toString().includes(query) ||
         debtor.totalSales.toString().includes(query) ||
-        // Search in debtor's responsible staff
-        getResponsibleStaffForDebtor(debtor).toLowerCase().includes(query)
+        (debtor.assignedStaff && debtor.assignedStaff.toLowerCase().includes(query)) ||
+        (debtor.createdBy && debtor.createdBy.toLowerCase().includes(query)) ||
+        (debtor.lastUpdatedBy && debtor.lastUpdatedBy.toLowerCase().includes(query))
       );
     }
     
-    // Apply staff filter - check each sale's responsible staff
+    // Apply staff filter - check both assignedStaff and createdBy
     if (staffFilter !== "all") {
-      result = result.filter(debtor => {
-        // Check if debtor's primary staff matches
-        if (getResponsibleStaffForDebtor(debtor) === staffFilter) {
-          return true;
-        }
-        // Check if any sale's responsible staff matches
-        return debtor.sales.some(sale => {
-          const responsibleStaff = getResponsibleStaff(sale);
-          return responsibleStaff === staffFilter;
-        });
-      });
+      result = result.filter(debtor => 
+        debtor.assignedStaff === staffFilter ||
+        debtor.createdBy === staffFilter || 
+        debtor.lastUpdatedBy === staffFilter ||
+        debtor.sales.some(sale => 
+          sale.assignedStaff === staffFilter ||
+          sale.createdBy === staffFilter || 
+          sale.updatedBy === staffFilter
+        )
+      );
     }
     
     // Apply sorting
@@ -228,8 +177,21 @@ export default function DebtorsSection() {
         if ((sale.status === "UNPAID" || sale.status === "PARTIAL") && sale.customer) {
           const customerId = sale.customer.id;
           
-          // Determine the responsible staff for this sale
-          const responsibleStaff = getResponsibleStaff(sale);
+          // Determine the responsible staff - assignedStaff takes priority
+          let responsibleStaff = "System";
+          
+          // Check if assignedStaff exists and has a name
+          if (sale.assignedStaff && sale.assignedStaff.name) {
+            responsibleStaff = sale.assignedStaff.name;
+          } 
+          // Fallback to createdByStaff
+          else if (sale.createdByStaff && sale.createdByStaff.name) {
+            responsibleStaff = sale.createdByStaff.name;
+          }
+          // Fallback to the createdBy string
+          else if (sale.createdBy) {
+            responsibleStaff = sale.createdBy;
+          }
 
           if (!debtorMap.has(customerId)) {
             debtorMap.set(customerId, {
@@ -242,8 +204,9 @@ export default function DebtorsSection() {
               balance: 0,
               sales: [],
               payments: [],
-              lastUpdatedBy: safeString(sale.updatedBy || sale.createdBy || responsibleStaff),
+              lastUpdatedBy: sale.updatedBy || sale.createdBy || responsibleStaff,
               lastUpdatedAt: sale.updatedAt || sale.createdAt,
+              // CHANGE: Use responsibleStaff instead of sale.createdBy
               createdBy: responsibleStaff,
               createdAt: sale.createdAt || sale.customer.createdAt,
               assignedStaff: responsibleStaff,
@@ -255,16 +218,16 @@ export default function DebtorsSection() {
           debtor.paid += sale.totalPaid || 0;
           debtor.balance = debtor.totalSales - debtor.paid;
 
-          // Update debtor's assignedStaff if this sale has a different responsible staff
-          const currentDebtorStaff = getResponsibleStaffForDebtor(debtor);
-          if (responsibleStaff && responsibleStaff !== "System" && 
-              (currentDebtorStaff === "System" || currentDebtorStaff === debtor.createdBy)) {
-            debtor.assignedStaff = responsibleStaff;
+          // Update assignedStaff if this sale has a different responsible staff
+          if (sale.assignedStaff?.name) {
+            debtor.assignedStaff = sale.assignedStaff.name;
+            // ALSO UPDATE createdBy to show assigned staff
+            debtor.createdBy = sale.assignedStaff.name;
           }
 
           const saleUpdatedAt = sale.updatedAt || sale.createdAt;
           if (saleUpdatedAt && (!debtor.lastUpdatedAt || new Date(saleUpdatedAt) > new Date(debtor.lastUpdatedAt))) {
-            debtor.lastUpdatedBy = safeString(sale.updatedBy || sale.createdBy || responsibleStaff);
+            debtor.lastUpdatedBy = sale.updatedBy || sale.createdBy || responsibleStaff;
             debtor.lastUpdatedAt = saleUpdatedAt;
           }
 
@@ -272,23 +235,20 @@ export default function DebtorsSection() {
             ?.map((item: any) => `${item.product?.name || "Item"} x${item.quantity}`)
             .join(", ") || "Items";
 
-          // Create sale object with proper staff attribution
-          const saleObj: Sale = {
+          debtor.sales.push({
             id: sale.id,
             date: sale.date,
             items: itemsStr,
             amount: sale.amount,
             status: sale.status,
-            createdBy: safeString(sale.createdByStaff?.name || sale.createdBy || "System"),
-            updatedBy: safeString(sale.updatedBy),
+            // CHANGE: Prioritize assignedStaff
+            createdBy: sale.assignedStaff?.name || sale.createdByStaff?.name || sale.createdBy || "System",
+            updatedBy: sale.updatedBy,
             createdAt: sale.createdAt,
             updatedAt: sale.updatedAt,
-            assignedStaff: sale.assignedStaff ? safeString(sale.assignedStaff) : 
-                          sale.assignedStaff?.name ? safeString(sale.assignedStaff.name) : undefined,
-            assignedStaffId: sale.assignedStaffId || undefined,
-          };
-
-          debtor.sales.push(saleObj);
+            assignedStaff: sale.assignedStaff?.name || null,
+            assignedStaffId: sale.assignedStaffId || null,
+          });
 
           if (sale.payment && Array.isArray(sale.payment)) {
             sale.payment.forEach((payment: any) => {
@@ -319,7 +279,7 @@ export default function DebtorsSection() {
     }
   };
 
-  // Function to download debtors as CSV - ONE ROW PER SALE with correct staff attribution
+  // Function to download debtors as CSV with staff filter support
   const downloadDebtorsCSV = () => {
     if (filteredDebtors.length === 0) {
       alert("No debtors to download.");
@@ -327,99 +287,69 @@ export default function DebtorsSection() {
     }
 
     try {
-      // CSV Headers - One row per sale
       const headers = [
         "Customer ID",
         "Customer Name",
         "Phone",
         "Email",
-        "Sale ID",
-        "Sale Date",
-        "Items",
-        "Sale Amount (KES)",
-        "Sale Status",
+        "Total Sales (KES)",
         "Amount Paid (KES)",
         "Balance (KES)",
-        "Responsible Staff",
-        "Created By (Staff)",
-        "Assigned Staff",
-        "Sale Created At",
-        "Sale Updated By",
-        "Sale Updated At",
-        "Debtor Primary Staff",
+        "Payment Rate (%)",
+        "Number of Sales",
+        "Last Sale Date",
+        "Sale Status",
+        "Last Payment Date",
+        "Assigned Staff", // CHANGE: Changed from "Created By (Staff)"
+        "Created At",
+        "Responsible Staff (Assigned)",
+        "Last Updated By (Staff)",
+        "Last Updated At",
         "Staff Filter Applied"
       ];
 
-      const rows: string[][] = [];
+      const rows = filteredDebtors.map(debtor => {
+        const lastSale = debtor.sales.length > 0 
+          ? new Date(debtor.sales[debtor.sales.length - 1].date).toLocaleDateString()
+          : "-";
+        
+        const lastPayment = debtor.payments.length > 0
+          ? new Date(debtor.payments[debtor.payments.length - 1].date).toLocaleDateString()
+          : "-";
+        
+        const paymentRate = debtor.totalSales > 0 
+          ? ((debtor.paid / debtor.totalSales) * 100).toFixed(0)
+          : "0";
+        
+        const saleStatus = debtor.balance === debtor.totalSales ? "UNPAID" : "PARTIALLY PAID";
+        
+        const createdAt = debtor.createdAt ? new Date(debtor.createdAt).toLocaleString() : "-";
+        const updatedAt = debtor.lastUpdatedAt ? new Date(debtor.lastUpdatedAt).toLocaleString() : "-";
 
-      filteredDebtors.forEach(debtor => {
-        // Get debtor-level primary staff for reference
-        const debtorPrimaryStaff = debtor.assignedStaff || debtor.createdBy || "System";
+        // Determine the staff to display - assignedStaff overrides createdBy
+        const responsibleStaff = debtor.assignedStaff || debtor.createdBy || "System";
 
-        if (debtor.sales.length === 0) {
-          // If no sales, still include debtor with empty sale info
-          rows.push([
-            debtor.id.toString(),
-            `"${debtor.name.replace(/"/g, '""')}"`,
-            `"${debtor.phone}"`,
-            `"${debtor.email}"`,
-            "-",
-            "-",
-            "-",
-            "0.00",
-            "-",
-            "0.00",
-            "0.00",
-            debtorPrimaryStaff,
-            safeString(debtor.createdBy || "System"),
-            safeString(debtor.assignedStaff || debtor.createdBy || "System"),
-            debtor.createdAt ? new Date(debtor.createdAt).toLocaleString() : "-",
-            safeString(debtor.lastUpdatedBy || "System"),
-            debtor.lastUpdatedAt ? new Date(debtor.lastUpdatedAt).toLocaleString() : "-",
-            debtorPrimaryStaff,
-            staffFilter !== "all" ? staffFilter : "All Staff"
-          ]);
-          return;
-        }
-
-        // Create ONE ROW PER SALE
-        debtor.sales.forEach(sale => {
-          // ✅ CORRECT: Calculate responsible staff from the INDIVIDUAL SALE
-          // This uses the priority: assignedStaff > createdByStaff > createdBy > System
-          const responsibleStaff = getResponsibleStaff(sale);
-          
-          const saleCreatedAt = sale.createdAt ? new Date(sale.createdAt).toLocaleString() : "-";
-          const saleUpdatedAt = sale.updatedAt ? new Date(sale.updatedAt).toLocaleString() : "-";
-          
-          // Determine sale status
-          const saleStatus = sale.status || 
-            (debtor.balance === debtor.totalSales ? "UNPAID" : "PARTIALLY PAID");
-
-          rows.push([
-            debtor.id.toString(),
-            `"${debtor.name.replace(/"/g, '""')}"`,
-            `"${debtor.phone}"`,
-            `"${debtor.email}"`,
-            sale.id.toString(),
-            sale.date ? new Date(sale.date).toLocaleDateString() : "-",
-            `"${sale.items.replace(/"/g, '""')}"`,
-            formatCurrencyForCSV(sale.amount),
-            saleStatus,
-            formatCurrencyForCSV(debtor.paid),
-            formatCurrencyForCSV(debtor.balance),
-            // ✅ CORRECT: Responsible Staff calculated from individual sale
-            responsibleStaff,
-            // Keep Created By for audit (separate from Responsible Staff)
-            safeString(sale.createdBy || "System"),
-            // Show actual Assigned Staff (which may be different from Responsible Staff)
-            safeString(sale.assignedStaff || sale.createdBy || "System"),
-            saleCreatedAt,
-            safeString(sale.updatedBy || "System"),
-            saleUpdatedAt,
-            debtorPrimaryStaff,
-            staffFilter !== "all" ? staffFilter : "All Staff"
-          ]);
-        });
+        return [
+          debtor.id,
+          `"${debtor.name.replace(/"/g, '""')}"`,
+          `"${debtor.phone}"`,
+          `"${debtor.email}"`,
+          formatCurrencyForCSV(debtor.totalSales),
+          formatCurrencyForCSV(debtor.paid),
+          formatCurrencyForCSV(debtor.balance),
+          paymentRate,
+          debtor.sales.length,
+          lastSale,
+          saleStatus,
+          lastPayment,
+          // CHANGE: Use assignedStaff instead of createdBy
+          responsibleStaff, 
+          createdAt,
+          responsibleStaff,
+          debtor.lastUpdatedBy || "System",
+          updatedAt,
+          staffFilter !== "all" ? staffFilter : "All Staff"
+        ];
       });
 
       const csvContent = [
@@ -434,7 +364,7 @@ export default function DebtorsSection() {
       
       const date = new Date().toISOString().split('T')[0];
       const staffSuffix = staffFilter !== "all" ? `_${staffFilter.replace(/\s+/g, '_')}` : "";
-      link.download = `debtors-detailed-report${staffSuffix}_${date}.csv`;
+      link.download = `debtors-report${staffSuffix}_${date}.csv`;
       
       document.body.appendChild(link);
       link.click();
@@ -442,7 +372,7 @@ export default function DebtorsSection() {
       URL.revokeObjectURL(url);
       
       const staffInfo = staffFilter !== "all" ? ` for staff "${staffFilter}"` : "";
-      alert(`Detailed debtors report${staffInfo} downloaded successfully!`);
+      alert(`Debtors report${staffInfo} downloaded successfully!`);
     } catch (error) {
       console.error("Error generating CSV:", error);
       alert("Failed to generate CSV file. Please try again.");
@@ -547,7 +477,6 @@ Sale Details:
 - Date: ${formatDate(sale.date)}
 - Amount Due: KES ${formatCurrency(sale.amount)}
 - Items: ${sale.items}
-- Responsible Staff: ${getResponsibleStaff(sale)}
 
 Outstanding Balance: KES ${formatCurrency(debtor.balance)}
 
@@ -561,7 +490,7 @@ Swiftmetals`;
 
   const generateAccountReminderMessage = (debtor: Debtor): string => {
     const receiptLinks = debtor.sales.map(sale => 
-      `Sale #${sale.id} (${formatDate(sale.date)}) - Responsible: ${getResponsibleStaff(sale)}: ${generateReceiptDownloadLink(sale.id)}`
+      `Sale #${sale.id} (${formatDate(sale.date)}): ${generateReceiptDownloadLink(sale.id)}`
     ).join('\n');
 
     return `Hello ${debtor.name},
@@ -570,7 +499,6 @@ Account Statement Summary:
 Total Purchases: KES ${formatCurrency(debtor.totalSales)}
 Total Paid: KES ${formatCurrency(debtor.paid)}
 Outstanding Balance: KES ${formatCurrency(debtor.balance)}
-Responsible Staff: ${getResponsibleStaffForDebtor(debtor)}
 
 We kindly request that you settle your outstanding balance at your earliest convenience.
 
@@ -748,7 +676,7 @@ Swiftmetals`;
               onClick={downloadDebtorsCSV}
               disabled={filteredDebtors.length === 0}
               className="bg-gradient-to-r from-green-500 to-emerald-500 hover:from-green-600 hover:to-emerald-600 text-white px-4 md:px-6 py-2.5 rounded-lg font-medium transition flex items-center gap-2 shadow-lg hover:shadow-xl text-sm md:text-base w-full sm:w-auto justify-center disabled:opacity-50 disabled:cursor-not-allowed"
-              title={filteredDebtors.length === 0 ? "No debtors to download" : `Download detailed report${staffFilter !== "all" ? ` for ${staffFilter}` : ""}`}
+              title={filteredDebtors.length === 0 ? "No debtors to download" : `Download CSV report${staffFilter !== "all" ? ` for ${staffFilter}` : ""}`}
             >
               <Download className="w-4 h-4 md:w-5 md:h-5" /> 
               Download CSV{staffFilter !== "all" ? " (Filtered)" : ""}
@@ -882,7 +810,7 @@ Swiftmetals`;
                     onClick={() => handleSort('assignedStaff')}
                     className="flex items-center justify-center gap-1 text-xs font-semibold text-gray-700 hover:text-gray-900 group"
                   >
-                    Staff
+                    Assigned Staff
                     <SortIcon sortKey="assignedStaff" />
                   </button>
                 </div>
@@ -948,9 +876,10 @@ Swiftmetals`;
                                 <span className="truncate">{debtor.email}</span>
                               </span>
                             )}
+                            {/* CHANGE: Always show assignedStaff, fallback to createdBy */}
                             <span className="flex items-center gap-1 text-amber-600 font-medium">
                               <UserCheck className="w-3 h-3" />
-                              {getResponsibleStaffForDebtor(debtor)}
+                              {debtor.assignedStaff || debtor.createdBy || "System"}
                             </span>
                           </div>
                         </div>
@@ -972,9 +901,9 @@ Swiftmetals`;
                             </p>
                           </div>
                           <div className="text-left">
-                            <p className="text-xs text-gray-500 mb-1">Staff</p>
+                            <p className="text-xs text-gray-500 mb-1">Assigned Staff</p>
                             <p className="text-xs font-medium text-gray-700 truncate">
-                              {getResponsibleStaffForDebtor(debtor)}
+                              {debtor.assignedStaff || debtor.createdBy || "System"}
                             </p>
                           </div>
                         </div>
@@ -1049,7 +978,7 @@ Swiftmetals`;
                         <div className="bg-amber-50 rounded p-2">
                           <p className="text-xs text-gray-600 mb-1">Staff</p>
                           <p className="text-xs font-bold text-amber-700 truncate">
-                            {getResponsibleStaffForDebtor(debtor)}
+                            {debtor.assignedStaff || debtor.createdBy || "System"}
                           </p>
                         </div>
                       </div>
@@ -1062,16 +991,16 @@ Swiftmetals`;
                         <div className="bg-gray-100 rounded-lg p-2.5 flex flex-col sm:flex-row justify-between gap-2 text-xs">
                           <div className="flex items-center gap-2">
                             <span className="font-medium text-gray-600">Created:</span>
-                            <span className="text-gray-700">{safeString(debtor.createdBy || "System")}</span>
+                            <span className="text-gray-700">{debtor.createdBy || "System"}</span>
                             <span className="text-gray-400">{formatDateTime(debtor.createdAt)}</span>
                           </div>
                           <div className="flex items-center gap-2">
                             <span className="font-medium text-gray-600">Assigned Staff:</span>
-                            <span className="text-amber-700 font-semibold">{getResponsibleStaffForDebtor(debtor)}</span>
+                            <span className="text-amber-700 font-semibold">{debtor.assignedStaff || debtor.createdBy || "System"}</span>
                           </div>
                           <div className="flex items-center gap-2">
                             <span className="font-medium text-gray-600">Last Updated:</span>
-                            <span className="text-gray-700">{safeString(debtor.lastUpdatedBy || "System")}</span>
+                            <span className="text-gray-700">{debtor.lastUpdatedBy || "System"}</span>
                             <span className="text-gray-400">{formatDateTime(debtor.lastUpdatedAt)}</span>
                           </div>
                         </div>
@@ -1116,14 +1045,12 @@ Swiftmetals`;
                                       </div>
                                       <p className="text-xs text-gray-600 mt-0.5 truncate">{sale.items}</p>
                                       <div className="flex flex-wrap gap-3 mt-1 text-[10px] text-gray-400">
+                                        {/* CHANGE: Always show assignedStaff, fallback to createdBy */}
                                         <span className="text-amber-600 font-medium">
-                                          Responsible: {getResponsibleStaff(sale)}
+                                          Assigned: {sale.assignedStaff || sale.createdBy || "System"}
                                         </span>
-                                        {sale.createdBy && sale.createdBy !== getResponsibleStaff(sale) && (
-                                          <span>Created: {safeString(sale.createdBy)}</span>
-                                        )}
-                                        {sale.updatedBy && sale.updatedBy !== sale.createdBy && (
-                                          <span>Updated: {safeString(sale.updatedBy)}</span>
+                                        {sale.updatedBy && sale.updatedBy !== sale.createdBy && sale.updatedBy !== sale.assignedStaff && (
+                                          <span>Updated: {sale.updatedBy}</span>
                                         )}
                                       </div>
                                     </div>
@@ -1204,7 +1131,6 @@ Swiftmetals`;
                                 <li><strong>Single Receipt</strong>: Download individual receipt for each sale</li>
                                 <li><strong>Full Statement</strong>: Download complete account statement with all purchases</li>
                                 <li><strong>Messages</strong>: Include both individual receipt links and full statement link</li>
-                                <li><strong>Responsible Staff</strong>: Each sale shows the assigned staff or creator</li>
                               </ul>
                             </div>
                           </div>
@@ -1255,7 +1181,7 @@ Swiftmetals`;
                   <ul className="mt-1 ml-2">
                     <li>• Single Receipt: Opens receipt API</li>
                     <li>• Full Statement: Opens customer statement API</li>
-                    <li>• CSV Export: Download detailed report with one row per sale</li>
+                    <li>• CSV Export: Download all debtors as spreadsheet with audit trail</li>
                   </ul>
                 </p>
               </div>
@@ -1263,10 +1189,9 @@ Swiftmetals`;
                 <p className="text-sm text-purple-800">
                   <strong>Staff Tracking:</strong>
                   <ul className="mt-1 ml-2">
-                    <li>• <span className="font-semibold">Assigned Staff</span> - The salesperson responsible for the sale (primary)</li>
-                    <li>• <span className="font-semibold">Created By</span> - Who created the sale (fallback when no assigned staff)</li>
-                    <li>• CSV shows one row per sale with correct staff attribution</li>
-                    <li>• Staff filter matches both assigned staff and created by fields</li>
+                    <li>• <span className="font-semibold">Assigned Staff</span> - The salesperson responsible for the sale</li>
+                    <li>• <span className="font-semibold">Created By</span> - Who created the sale (fallback if no assigned staff)</li>
+                    <li>• CSV shows assigned staff, overriding created by when available</li>
                   </ul>
                 </p>
               </div>
